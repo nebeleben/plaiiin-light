@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PlaiiinLight - MQTT</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+.toggle-row{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.toggle{width:44px;height:24px;border-radius:12px;cursor:pointer;border:none;transition:background .2s;position:relative}
+.toggle.on{background:var(--on)}.toggle.off{background:var(--border)}
+.toggle::after{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:transform .2s}
+.toggle.on::after{transform:translateX(20px)}
+.topic{font-family:monospace;font-size:.78rem;color:var(--text-dim);padding:3px 6px;background:var(--input-bg);border-radius:4px;display:inline-block;margin:2px 0}
+.topics-list{margin-top:8px;line-height:2}
+.topics-list .dir{font-size:.7rem;font-weight:500;color:var(--accent);min-width:24px;display:inline-block}
+</style>
+</head>
+<body>
+<div class="nav">
+<a href="/control">Control</a>
+<a href="/stream">Stream</a>
+<a href="/compose">Compose</a>
+<a href="/js">Scripts</a>
+<a href="/config">Config</a>
+<a href="/network">Network</a>
+<a href="/mqtt" class="active">MQTT</a>
+<a href="/ota">OTA</a>
+</div>
+<div class="card">
+<div class="hdr">
+<h1>MQTT</h1>
+<button type="button" class="icon-btn" id="themeBtn" title="Toggle light/dark"></button>
+</div>
+
+<form method="POST" action="/mqtt">
+<h2>Connection</h2>
+<div class="toggle-row">
+<button type="button" class="toggle off" id="mqttToggle"></button>
+<span style="font-size:.9rem" id="mqttLabel">Disabled</span>
+<input type="hidden" name="mqtt_active" id="mqttActiveInput" value="0">
+</div>
+
+<label for="mqtt_host">Broker Host</label>
+<input id="mqtt_host" name="mqtt_host" type="text" placeholder="e.g. 192.168.178.10 or mqtt.local">
+
+<label for="mqtt_port">Broker Port</label>
+<input id="mqtt_port" name="mqtt_port" type="number" min="1" max="65535" placeholder="1883">
+
+<button type="submit" class="submit">Save &amp; Reboot</button>
+</form>
+<p class="info">Device reboots after saving. MQTT connects automatically on startup.</p>
+
+<h2>Topics</h2>
+<p style="font-size:.75rem;color:var(--text-dim);margin-bottom:6px">Node: <strong id="nodeName">-</strong></p>
+<div class="topics-list" id="topicsList"></div>
+
+</div>
+<p class="copyright">&copy; <a href="https://plaiiin.com">plaiiin.com</a></p>
+
+<script>
+var dark=localStorage.getItem('theme')!=='light';
+function applyTheme(){document.body.classList.toggle('light',!dark);document.getElementById('themeBtn').textContent=dark?'\u2600':'\u263E';}
+applyTheme();
+document.getElementById('themeBtn').onclick=function(){dark=!dark;localStorage.setItem('theme',dark?'dark':'light');applyTheme();};
+
+// Toggle
+var active=false;
+var tog=document.getElementById('mqttToggle');
+tog.onclick=function(){
+  active=!active;
+  tog.className='toggle '+(active?'on':'off');
+  document.getElementById('mqttLabel').textContent=active?'Enabled':'Disabled';
+  document.getElementById('mqttActiveInput').value=active?'1':'0';
+};
+
+// Load current config from API + NVS keys via a simple GET endpoint
+fetch('/api/mqtt').then(function(r){return r.json()}).then(function(d){
+  if(d.active){active=true;tog.className='toggle on';document.getElementById('mqttLabel').textContent='Enabled';document.getElementById('mqttActiveInput').value='1';}
+  if(d.host)document.getElementById('mqtt_host').value=d.host;
+  if(d.port)document.getElementById('mqtt_port').value=d.port;
+
+  // Build topics list
+  var node=d.nodeName||'PlaiiinLight';
+  document.getElementById('nodeName').textContent=node;
+  var pre='plaiiinlight/'+node;
+  var topics=[
+    {dir:'IN',topic:pre+'/power/set',desc:'Set power: "1" (on) or "0" (off)'},
+    {dir:'OUT',topic:pre+'/power/get',desc:'Current power state (0 or 1)'},
+    {dir:'IN',topic:pre+'/color/set',desc:'Set HSV color: "h,s,v" (h:0-360, s:0-100, v:0-100)'},
+    {dir:'OUT',topic:pre+'/color/get',desc:'Current HSV color "h,s,v"'},
+    {dir:'IN',topic:pre+'/brightness/set',desc:'Set brightness: 0-255'},
+    {dir:'OUT',topic:pre+'/brightness/get',desc:'Current brightness'},
+    {dir:'OUT',topic:pre+'/status',desc:'LWT: "online" / "offline"'},
+  ];
+  var html='';
+  topics.forEach(function(t){
+    html+='<div><span class="dir">'+t.dir+'</span> <span class="topic">'+t.topic+'</span><br><span style="font-size:.7rem;color:var(--text-dim);margin-left:28px">'+t.desc+'</span></div>';
+  });
+  document.getElementById('topicsList').innerHTML=html;
+}).catch(function(){});
+</script>
+</body>
+</html>

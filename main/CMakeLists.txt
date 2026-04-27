@@ -1,0 +1,42 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "config_store.c"
+        "wifi.c"
+        "captive_portal.c"
+        "http_server.c"
+        "ws_server.c"
+        "led_control.c"
+        "light_api.c"
+        "error_light.c"
+        "ota_update.c"
+        "plaiiin_mqtt.c"
+        "js_storage.c"
+        "js_player.c"
+        "js_api.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        esp_http_server
+        esp_wifi
+        esp_event
+        esp_netif
+        nvs_flash
+        esp_driver_spi
+        driver
+        esp_system
+        esp_partition
+        app_update
+        spiffs
+        mqtt
+        mjs
+    EMBED_TXTFILES
+        "../portal/style.css"
+        "../portal/index.html"
+        "../portal/control.html"
+        "../portal/network.html"
+        "../portal/test.html"
+        "../portal/compose.html"
+        "../portal/ota.html"
+        "../portal/mqtt.html"
+        "../portal/js.html"
+)

@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PlaiiinLight - Scripts</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+.script-list{border:1px solid var(--border);border-radius:8px;padding:6px;margin-bottom:10px;max-height:200px;overflow-y:auto;background:var(--input-bg)}
+.script-row{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:4px;font-size:.88rem}
+.script-row:hover{background:var(--card)}
+.script-row.playing{color:var(--on)}
+.script-row .name{flex:1;cursor:pointer}
+.editor-area{border:1px solid var(--border);border-radius:8px;background:var(--input-bg);margin-bottom:8px}
+.editor-area textarea{width:100%;border:none;background:transparent;color:var(--text);font-family:monospace;font-size:.78rem;padding:8px;resize:vertical;min-height:160px;outline:none;box-sizing:border-box}
+.row-actions{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.row-actions button{padding:6px 10px;border:none;border-radius:6px;font-size:.82rem;font-weight:500;cursor:pointer}
+.small-btn{background:var(--card);color:var(--text-dim);border:1px solid var(--border)!important}
+.play-btn{background:var(--on);color:#fff}
+.stop-btn{background:var(--off);color:#fff}
+.apply-btn{background:var(--accent);color:#fff}
+.limits{display:flex;gap:12px;align-items:center;font-size:.78rem;margin-top:10px}
+.limits input{width:90px}
+.preview-wrap{display:flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:8px}
+.preview-grid{display:inline-grid;gap:1px;border-radius:6px;overflow:hidden;background:#000;padding:2px}
+.preview-grid .px{transition:background .05s}
+.preview-meta{font-size:.7rem;color:var(--text-dim)}
+</style>
+</head>
+<body>
+<div class="nav">
+<a href="/control">Control</a>
+<a href="/stream">Stream</a>
+<a href="/compose">Compose</a>
+<a href="/js" class="active">Scripts</a>
+<a href="/config">Config</a>
+<a href="/network">Network</a>
+<a href="/mqtt">MQTT</a>
+<a href="/ota">OTA</a>
+</div>
+<div class="card" style="max-width:520px">
+<div class="hdr">
+<h1>Scripts</h1>
+<button type="button" class="icon-btn" id="themeBtn" title="Toggle light/dark"></button>
+</div>
+
+<h2>Saved</h2>
+<div class="script-list" id="scriptList"><div style="color:var(--text-dim);padding:6px">Loading...</div></div>
+
+<h2>Editor</h2>
+<input id="nameInput" placeholder="name (letters, digits, _ -)" style="margin-bottom:6px">
+<div class="editor-area">
+<textarea id="srcInput" spellcheck="false" placeholder="function render(frame, w, h) {&#10;  var out = [];&#10;  for (var y = 0; y < h; y++)&#10;    for (var x = 0; x < w; x++)&#10;      out.push([255,0,0]);&#10;  return out;&#10;}"></textarea>
+</div>
+<div class="row-actions">
+<button class="apply-btn" id="btnSave">Save</button>
+<button class="play-btn" id="btnPlay">Play</button>
+<button class="stop-btn" id="btnStop">Stop</button>
+<button class="small-btn" id="btnUpload">Upload file</button>
+<input type="file" id="fileInput" style="display:none" accept=".js,text/javascript">
+</div>
+<div class="msg" id="msg"></div>
+
+<h2>Preview</h2>
+<div class="preview-wrap">
+<div id="previewGrid" class="preview-grid"></div>
+<div class="preview-meta" id="previewMeta">—</div>
+</div>
+<div class="row-actions">
+<button class="play-btn" id="btnPreview">Show</button>
+<button class="stop-btn" id="btnPreviewStop">Stop</button>
+<label style="font-size:.78rem;color:var(--text-dim);display:flex;align-items:center;gap:6px;margin-left:auto">
+  FPS <input id="previewFps" type="number" min="1" max="60" value="10" style="width:60px">
+</label>
+</div>
+<p style="font-size:.68rem;color:var(--text-dim);margin-bottom:6px">Preview runs the editor's JS in your browser — it does not stream to the lamp.</p>
+
+<div class="info-bar"><span id="status"></span></div>
+</div>
+<p class="copyright">&copy; <a href="https://plaiiin.com">plaiiin.com</a></p>
+
+<script>
+var dark=localStorage.getItem('theme')!=='light';
+function applyTheme(){document.body.classList.toggle('light',!dark);document.getElementById('themeBtn').textContent=dark?'\u2600':'\u263E';}
+applyTheme();
+document.getElementById('themeBtn').onclick=function(){dark=!dark;localStorage.setItem('theme',dark?'dark':'light');applyTheme();};
+
+var listEl=document.getElementById('scriptList');
+var msgEl=document.getElementById('msg');
+var nameInput=document.getElementById('nameInput');
+var srcInput=document.getElementById('srcInput');
+var statusEl=document.getElementById('status');
+
+function showMsg(text, ok){
+  msgEl.textContent=text;
+  msgEl.className='msg '+(ok?'ok':'err');
+  setTimeout(function(){msgEl.textContent='';},3000);
+}
+
+function refreshList(){
+  fetch('/api/js').then(function(r){return r.json()}).then(function(d){
+    var scripts=d.scripts||[];
+    var playing=d.playing||null;
+    listEl.innerHTML='';
+    if(scripts.length===0){
+      listEl.innerHTML='<div style="color:var(--text-dim);padding:6px">No scripts yet</div>';
+      statusEl.textContent='0 scripts';
+      return;
+    }
+    scripts.forEach(function(n){
+      var row=document.createElement('div');
+      row.className='script-row'+(playing===n?' playing':'');
+      var name=document.createElement('span');
+      name.className='name';
+      name.textContent=(playing===n?'▶ ':'')+n;
+      name.onclick=function(){loadScript(n);};
+      row.appendChild(name);
+
+      var play=document.createElement('button');
+      play.className='small-btn';
+      play.textContent='Play';
+      play.onclick=function(){playScript(n);};
+      row.appendChild(play);
+
+      var del=document.createElement('button');
+      del.className='small-btn';
+      del.style.color='var(--off)';
+      del.textContent='×';
+      del.onclick=function(){deleteScript(n);};
+      row.appendChild(del);
+
+      listEl.appendChild(row);
+    });
+    statusEl.textContent=scripts.length+' script'+(scripts.length===1?'':'s')+(playing?' — playing '+playing:'');
+  }).catch(function(e){
+    listEl.innerHTML='<div style="color:var(--off);padding:6px">List failed: '+e.message+'</div>';
+  });
+}
+
+function loadScript(name){
+  fetch('/api/js/'+encodeURIComponent(name)).then(function(r){
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.text();
+  }).then(function(src){
+    nameInput.value=name;
+    srcInput.value=src;
+  }).catch(function(e){showMsg('Load failed: '+e.message,false);});
+}
+
+function saveScript(){
+  var name=nameInput.value.trim();
+  var src=srcInput.value;
+  if(!name){showMsg('Name required',false);return;}
+  if(!src){showMsg('Source required',false);return;}
+  fetch('/api/js/'+encodeURIComponent(name),{method:'PUT',headers:{'Content-Type':'text/plain'},body:src})
+    .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})})
+    .then(function(x){
+      if(!x.ok){showMsg(x.j.message||'Save failed',false);return;}
+      showMsg('Saved',true);refreshList();
+    }).catch(function(e){showMsg('Save failed: '+e.message,false);});
+}
+
+function playScript(name){
+  fetch('/api/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({file:name,fps:10})})
+    .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})})
+    .then(function(x){
+      if(!x.ok){showMsg(x.j.message||'Play failed',false);return;}
+      showMsg('Playing '+name,true);refreshList();
+    }).catch(function(e){showMsg('Play failed: '+e.message,false);});
+}
+
+function stopScript(){
+  fetch('/api/stop',{method:'POST'}).then(function(r){return r.json()}).then(function(){
+    showMsg('Stopped',true);refreshList();
+  });
+}
+
+function deleteScript(name){
+  if(!confirm('Delete '+name+'?'))return;
+  fetch('/api/js/'+encodeURIComponent(name),{method:'DELETE'})
+    .then(function(r){return r.json()}).then(function(j){
+      showMsg(j.status==='ok'?'Deleted':(j.message||'Delete failed'), j.status==='ok');
+      refreshList();
+    });
+}
+
+document.getElementById('btnSave').onclick=saveScript;
+document.getElementById('btnPlay').onclick=function(){
+  var name=nameInput.value.trim();
+  if(!name){showMsg('Name required',false);return;}
+  // Save then play
+  saveScript();setTimeout(function(){playScript(name);},300);
+};
+document.getElementById('btnStop').onclick=stopScript;
+
+var fileInput=document.getElementById('fileInput');
+document.getElementById('btnUpload').onclick=function(){fileInput.click();};
+fileInput.onchange=function(){
+  var f=fileInput.files[0];if(!f)return;
+  if(!nameInput.value.trim()){
+    nameInput.value=f.name.replace(/\.js$/,'').replace(/[^A-Za-z0-9_.-]/g,'_');
+  }
+  var r=new FileReader();
+  r.onload=function(){srcInput.value=r.result;};
+  r.readAsText(f);
+};
+
+
+// --- Preview (browser-local, no streaming to lamp) ---
+var gridEl=document.getElementById('previewGrid');
+var metaEl=document.getElementById('previewMeta');
+var fpsInput=document.getElementById('previewFps');
+var previewW=1,previewH=1,previewCells=[];
+var previewTimer=null,previewFrame=0,previewFn=null;
+
+function buildPreviewGrid(w,h){
+  previewW=w;previewH=h;
+  gridEl.innerHTML='';
+  previewCells=[];
+  var total=w*h;
+  var sz=Math.min(Math.floor(360/Math.max(w,h)),32);
+  if(sz<4)sz=4;
+  gridEl.style.gridTemplateColumns='repeat('+w+','+sz+'px)';
+  for(var i=0;i<total;i++){
+    var d=document.createElement('div');
+    d.className='px';
+    d.style.width=sz+'px';d.style.height=sz+'px';
+    d.style.background='#111';
+    gridEl.appendChild(d);
+    previewCells.push(d);
+  }
+  metaEl.textContent=w+'×'+h+' logical';
+}
+
+fetch('/api').then(function(r){return r.json()}).then(function(d){
+  var w=d.logicalW||d.physicalW||d.ledCount||1;
+  var h=d.logicalH||d.physicalH||1;
+  buildPreviewGrid(w,h);
+}).catch(function(){ buildPreviewGrid(8,8); });
+
+function stopPreview(){
+  if(previewTimer){clearTimeout(previewTimer);previewTimer=null;}
+  previewFn=null;
+}
+
+function renderPreviewFrame(){
+  if(!previewFn)return;
+  var pixels;
+  try{pixels=previewFn(previewFrame,previewW,previewH);}
+  catch(e){stopPreview();showMsg('Preview error: '+e.message,false);return;}
+  if(!Array.isArray(pixels)){stopPreview();showMsg('render() must return an array',false);return;}
+  for(var i=0;i<previewCells.length&&i<pixels.length;i++){
+    var p=pixels[i]||[0,0,0];
+    var r=(p[0]|0)&255,g=(p[1]|0)&255,b=(p[2]|0)&255;
+    previewCells[i].style.background='rgb('+r+','+g+','+b+')';
+  }
+  previewFrame++;
+  var fps=parseInt(fpsInput.value)||10;
+  if(fps<1)fps=1;
+  previewTimer=setTimeout(renderPreviewFrame,1000/fps);
+}
+
+document.getElementById('btnPreview').onclick=function(){
+  stopPreview();
+  var src=srcInput.value;
+  if(!src){showMsg('No source to preview',false);return;}
+  try{
+    // Wrap so arrow functions and top-level statements both work: the user
+    // code defines `render`, then we return it.
+    previewFn=new Function(src+'\nreturn render;')();
+    if(typeof previewFn!=='function')throw new Error('render() not found');
+  }catch(e){showMsg('Preview compile error: '+e.message,false);previewFn=null;return;}
+  previewFrame=0;
+  renderPreviewFrame();
+};
+document.getElementById('btnPreviewStop').onclick=stopPreview;
+
+refreshList();
+</script>
+</body>
+</html>

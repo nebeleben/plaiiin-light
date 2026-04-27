@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PlaiiinLight - Compose</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+.chat-box{border:1px solid var(--border);border-radius:8px;height:240px;overflow-y:auto;padding:10px;margin-bottom:10px;background:var(--input-bg)}
+.chat-msg{margin-bottom:8px;font-size:.82rem;line-height:1.4}
+.chat-msg.user{color:var(--accent)}
+.chat-msg.ai{color:var(--text)}
+.chat-msg .role{font-weight:600;font-size:.72rem;text-transform:uppercase;margin-bottom:2px}
+.chat-msg pre{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:6px;margin:4px 0;font-size:.72rem;overflow-x:auto;white-space:pre-wrap}
+.chat-input{display:flex;gap:8px;margin-bottom:10px}
+.chat-input textarea{flex:1;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:.85rem;resize:none;min-height:38px;font-family:inherit}
+.chat-input textarea:focus{outline:none;border-color:var(--accent)}
+.chat-input button{padding:8px 16px;white-space:nowrap}
+.gen-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.gen-controls button{padding:6px 14px;border:none;border-radius:6px;font-size:.82rem;font-weight:500;cursor:pointer;transition:background .2s}
+.thinking{color:var(--accent);font-size:.78rem;font-style:italic}
+</style>
+</head>
+<body>
+<div class="nav">
+<a href="/control">Control</a>
+<a href="/stream">Stream</a>
+<a href="/compose" class="active">Compose</a>
+<a href="/js">Scripts</a>
+<a href="/config">Config</a>
+<a href="/network">Network</a>
+<a href="/mqtt">MQTT</a>
+<a href="/ota">OTA</a>
+</div>
+<div class="card" style="max-width:520px">
+<div class="hdr">
+<h1>AI Compose</h1>
+<button type="button" class="icon-btn" id="themeBtn" title="Toggle light/dark"></button>
+</div>
+
+<div style="text-align:center;margin-bottom:12px">
+<div id="ledPreview" style="display:inline-block"></div>
+<div style="font-size:.7rem;color:var(--text-dim);margin-top:4px" id="gridLabel"></div>
+</div>
+
+<div class="chat-box" id="chatBox"></div>
+<div class="chat-input">
+<textarea id="chatInput" rows="2" placeholder="Describe a light pattern..."></textarea>
+<button class="apply-btn" id="btnSend">Send</button>
+</div>
+<div class="thinking" id="thinkingLabel"></div>
+
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+<span style="font-size:.78rem;color:var(--text-dim);min-width:62px">Brightness</span>
+<input type="range" id="brightnessSlider" min="0" max="255" value="255" style="flex:1;accent-color:var(--accent)">
+<span id="brightnessVal" style="font-size:.85rem;min-width:36px;text-align:right">100%</span>
+</div>
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+<span style="font-size:.78rem;color:var(--text-dim);min-width:62px">FPS</span>
+<input type="range" id="fpsSlider" min="1" max="30" value="10" style="flex:1;accent-color:var(--accent)">
+<span id="fpsVal" style="font-size:.85rem;min-width:36px;text-align:right">10</span>
+</div>
+<div id="rotateRow" style="display:none;align-items:center;gap:12px;margin-bottom:12px">
+<span style="font-size:.78rem;color:var(--text-dim);min-width:62px">Rotate</span>
+<select id="rotateSelect" style="flex:1">
+<option value="0">0&deg; (no rotation)</option>
+<option value="90">90&deg; clockwise</option>
+<option value="180">180&deg;</option>
+<option value="270">270&deg; (90&deg; counter-clockwise)</option>
+</select>
+</div>
+
+<div class="gen-controls" id="playBar" style="display:none">
+<button class="play-btn" id="btnPlay">Play</button>
+<button class="stop-btn" id="btnStop">Stop</button>
+<button class="mode-btn" id="btnStream">Stream to LED</button>
+<button class="apply-btn" id="btnSaveJs" title="Save generator code to device">Save to device</button>
+</div>
+<div class="frame-info" id="frameInfo"></div>
+
+<div class="info-bar"><span id="ledInfo"></span></div>
+</div>
+<p class="copyright">&copy; <a href="https://plaiiin.com">plaiiin.com</a></p>
+
+<script>
+var ledCount=64,gridW=8,gridH=8,isMatrix=true;
+var frames=[],frameIdx=0,playing=false,timer=null,ws=null,streaming=false;
+var fps=10,messages=[],rotation=0;
+var lastJsSource=null;  // raw JS body of the most recent generator response
+
+// Theme
+var dark=localStorage.getItem('theme')!=='light';
+function applyTheme(){document.body.classList.toggle('light',!dark);document.getElementById('themeBtn').textContent=dark?'\u2600':'\u263E';}
+applyTheme();
+document.getElementById('themeBtn').onclick=function(){dark=!dark;localStorage.setItem('theme',dark?'dark':'light');applyTheme();};
+
+// Brightness
+var bSlider=document.getElementById('brightnessSlider');
+var bVal=document.getElementById('brightnessVal');
+var bTimer=null;
+fetch('/api/brightness').then(function(r){return r.json()}).then(function(d){
+  bSlider.value=d.brightness;
+  bVal.textContent=Math.round(d.brightness/2.55)+'%';
+}).catch(function(){});
+bSlider.oninput=function(){
+  bVal.textContent=Math.round(this.value/2.55)+'%';
+  clearTimeout(bTimer);
+  var v=this.value;
+  bTimer=setTimeout(function(){
+    fetch('/api/brightness',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"brightness":'+v+'}'});
+  },100);
+};
+
+// Grid
+function buildGrid(){
+  var el=document.getElementById('ledPreview');el.innerHTML='';
+  var w=isMatrix?gridW:Math.min(ledCount,32);
+  var h=isMatrix?gridH:1;
+  var sz=isMatrix?Math.min(Math.floor(280/Math.max(w,h)),28):8;
+  var g=document.createElement('div');g.className='led-grid';
+  g.style.gridTemplateColumns='repeat('+w+','+sz+'px)';
+  var total=w*h;
+  for(var i=0;i<total;i++){var p=document.createElement('div');p.className='px';p.style.background='#111';p.style.width=sz+'px';p.style.height=sz+'px';g.appendChild(p);}
+  el.appendChild(g);
+  document.getElementById('gridLabel').textContent=isMatrix?gridW+'x'+gridH+' Matrix':'Strip ('+ledCount+')';
+  document.getElementById('rotateRow').style.display=isMatrix?'flex':'none';
+}
+
+// Rotation dropdown — persisted on the device (NVS), fetched on page load.
+var rotateSel=document.getElementById('rotateSelect');
+fetch('/api/rotation').then(function(r){return r.json()}).then(function(d){
+  rotation=parseInt(d.rotation)||0;
+  rotateSel.value=String(rotation);
+  if(frames.length)renderFrame(frameIdx);
+}).catch(function(){ rotateSel.value=String(rotation); });
+rotateSel.onchange=function(){
+  rotation=parseInt(this.value)||0;
+  fetch('/api/rotation',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({rotation:rotation})}).catch(function(){});
+  if(frames.length)renderFrame(frameIdx);
+};
+
+// Given a physical LED index (px,py), return the source image pixel index after applying rotation.
+// Rotation is the physical matrix rotation: to show the image "upright" on a rotated matrix,
+// we pick the source pixel from the inverse rotation.
+function rotatedSourceIdx(physIdx){
+  if(!isMatrix||rotation===0)return physIdx;
+  var px=physIdx%gridW, py=Math.floor(physIdx/gridW);
+  var sx,sy;
+  if(rotation===90){sx=py; sy=gridH-1-px;}
+  else if(rotation===180){sx=gridW-1-px; sy=gridH-1-py;}
+  else if(rotation===270){sx=gridW-1-py; sy=px;}
+  else{sx=px; sy=py;}
+  return sy*gridW+sx;
+}
+
+// Build grid immediately with defaults
+buildGrid();
+
+// Then update from device API — prefer logical dimensions so we author at the
+// *logical* resolution. The device expands logical frames back out to physical
+// LEDs via its pixel-group setting.
+fetch('/api?_='+Date.now()).then(function(r){return r.json()}).then(function(d){
+  ledCount=d.ledCount||64;
+  var pgW=d.pixelGroupW||1, pgH=d.pixelGroupH||1;
+  var lw=d.logicalW||0, lh=d.logicalH||0;
+  var pgLabel=(pgW>1||pgH>1)?' | pxGroup '+pgW+'×'+pgH:'';
+  document.getElementById('ledInfo').textContent=
+    d.ledCount+' LEDs | '+(d.lampType||'?')+' | GPIO '+d.ledPin+pgLabel;
+  if(lw>0&&lh>0){
+    isMatrix=(lh>1)||((d.lampType||'').toLowerCase().indexOf('matrix')!==-1);
+    gridW=lw;gridH=lh;
+  } else {
+    var lt=(d.lampType||'').toLowerCase();
+    if(lt.indexOf('matrix')!==-1){
+      isMatrix=true;
+      var m=lt.match(/(\d+)\s*x\s*(\d+)/);
+      if(m){gridW=parseInt(m[1]);gridH=parseInt(m[2]);}
+      else{gridW=Math.round(Math.sqrt(ledCount));gridH=Math.ceil(ledCount/gridW);}
+    } else {
+      isMatrix=false;gridW=ledCount;gridH=1;
+    }
+  }
+  buildGrid();
+}).catch(function(e){
+  document.getElementById('ledInfo').textContent='API unavailable: '+e.message;
+});
+
+// Mode toggle
+
+// System prompt
+function getSystemPrompt(){
+  var total=isMatrix?gridW*gridH:ledCount;
+  return 'You are a LED light composer for a '+(isMatrix?gridW+'x'+gridH+' pixel LED matrix':ledCount+' pixel LED strip')+' ('+total+' LEDs total).\n\n'+
+  'Respond with ONLY a code block containing either JSON data or JavaScript code. No explanation outside the code block.\n\n'+
+  'FORMAT 1 - Pixel data (for simple patterns or short animations):\n```json\n{"type":"static","pixels":["ff0000","00ff00",...]}\n```\nor:\n```json\n{"type":"animation","fps":10,"frames":[["ff0000","00ff00",...],["aabbcc",...]]}\n```\n'+
+  'Pixels in row-major order (left-to-right, top-to-bottom). Each frame has exactly '+total+' hex colors (6 chars, no #).\n\n'+
+  'FORMAT 2 - Generator code (for complex patterns, gradients, waves, long animations):\n```js\nfunction render(frame, width, height) {\n  var pixels = [];\n  for (var y = 0; y < height; y++)\n    for (var x = 0; x < width; x++)\n      pixels.push([r, g, b]); // 0-255 each\n  return pixels; // array of '+total+' [r,g,b] arrays\n}\n```\n'+
+  'The render function receives frame index (0,1,2,...), width ('+gridW+'), height ('+gridH+'). Return exactly '+total+' [r,g,b] arrays.\n\n'+
+  'Choose the best format: use generator code for gradients, waves, math patterns, long animations. Use pixel data for specific images or short sequences.\n'+
+  'Grid dimensions: '+gridW+' wide, '+gridH+' tall, '+total+' pixels total.';
+}
+
+// AI key (shared storage with /config page)
+var AI_KEY_STORAGE='_plk';
+function loadKey(){var e=localStorage.getItem(AI_KEY_STORAGE);if(!e)return '';try{return atob(e).split('').reverse().join('');}catch(x){return '';}}
+
+// Chat
+function addChatMsg(role,text){
+  var box=document.getElementById('chatBox');
+  var div=document.createElement('div');div.className='chat-msg '+role;
+  var rl=document.createElement('div');rl.className='role';rl.textContent=role;div.appendChild(rl);
+  var parts=text.split(/```(\w*)\n?/);
+  for(var i=0;i<parts.length;i++){
+    if(i%2===0){if(parts[i].trim()){var sp=document.createElement('span');sp.textContent=parts[i];div.appendChild(sp);}}
+    else{var pre=document.createElement('pre');pre.textContent=parts[i+1]||'';div.appendChild(pre);i++;}
+  }
+  box.appendChild(div);box.scrollTop=box.scrollHeight;
+}
+
+// AI call
+async function callAI(userMsg){
+  var key=loadKey();
+  if(!key){addChatMsg('ai','No API key configured. Go to Config page to set your API key.');return null;}
+  var aiProvider=localStorage.getItem('aiProvider')||'claude';
+  var aiModel=(localStorage.getItem('aiModel')||'claude-haiku-4-5-20251001').trim();
+  var defaultBase={claude:'https://api.anthropic.com',openai:'https://api.openai.com',custom:''};
+  var aiBase=(localStorage.getItem('aiBaseUrl')||defaultBase[aiProvider]||'').trim().replace(/\/$/,'');
+  if(!aiBase){addChatMsg('ai','No base URL configured. Go to Config page to set it.');return null;}
+  messages.push({role:'user',content:userMsg});
+  document.getElementById('thinkingLabel').textContent='Thinking...';
+  try{
+    var body,headers,url,respText,sysPrompt=getSystemPrompt();
+    if(aiProvider==='claude'){
+      url=aiBase+'/v1/messages';
+      headers={'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'};
+      body=JSON.stringify({model:aiModel,max_tokens:4096,system:sysPrompt,messages:messages});
+    } else {
+      // openai + custom: OpenAI-compatible /v1/chat/completions
+      url=aiBase+'/v1/chat/completions';
+      headers={'Content-Type':'application/json','Authorization':'Bearer '+key};
+      body=JSON.stringify({model:aiModel,max_tokens:4096,messages:[{role:'system',content:sysPrompt}].concat(messages)});
+    }
+    var resp=await fetch(url,{method:'POST',headers:headers,body:body});
+    if(!resp.ok){var err=await resp.text();throw new Error('API '+resp.status+': '+err.slice(0,200));}
+    var data=await resp.json();
+    respText=aiProvider==='claude'?data.content.map(function(c){return c.text;}).join(''):data.choices[0].message.content;
+    messages.push({role:'assistant',content:respText});
+    document.getElementById('thinkingLabel').textContent='';
+    return respText;
+  }catch(e){
+    document.getElementById('thinkingLabel').textContent='';
+    addChatMsg('ai','Error: '+e.message);return null;
+  }
+}
+
+// Parse response
+function parseResponse(text){
+  frames=[];frameIdx=0;
+  var jsonMatch=text.match(/```json\s*\n?([\s\S]*?)```/);
+  var jsMatch=text.match(/```(?:js|javascript)\s*\n?([\s\S]*?)```/);
+  var total=isMatrix?gridW*gridH:ledCount;
+  if(jsonMatch){
+    try{
+      var obj=JSON.parse(jsonMatch[1]);
+      if(obj.type==='static'&&obj.pixels)frames.push(hexToImg(obj.pixels,total));
+      else if(obj.type==='animation'&&obj.frames){if(obj.fps)fps=obj.fps;for(var i=0;i<obj.frames.length;i++)frames.push(hexToImg(obj.frames[i],total));}
+    }catch(e){addChatMsg('ai','JSON parse error: '+e.message);}
+  } else if(jsMatch){
+    try{
+      var src=jsMatch[1];
+      lastJsSource=src;
+      var renderFn=new Function('return ('+src+')')();
+      for(var f=0;f<300;f++){var px=renderFn(f,gridW,gridH);if(!px||px.length<total)break;frames.push(rgbToImg(px,total));}
+      fps=parseInt(document.getElementById('fpsSlider').value)||10;
+    }catch(e){addChatMsg('ai','Code error: '+e.message);}
+  }
+  if(frames.length>0){
+    document.getElementById('playBar').style.display='flex';
+    document.getElementById('fpsSlider').value=fps;document.getElementById('fpsVal').textContent=fps;
+    renderFrame(0);document.getElementById('frameInfo').textContent=frames.length+' frame'+(frames.length>1?'s':'')+' generated';
+  }
+}
+function hexToImg(arr,total){
+  var w=isMatrix?gridW:total,h=isMatrix?gridH:1;
+  var c=document.createElement('canvas');c.width=w;c.height=h;var ctx=c.getContext('2d');
+  var img=ctx.createImageData(w,h);var d=img.data;
+  for(var i=0;i<total&&i<arr.length;i++){var hex=arr[i].replace('#','');d[i*4]=parseInt(hex.substr(0,2),16)||0;d[i*4+1]=parseInt(hex.substr(2,2),16)||0;d[i*4+2]=parseInt(hex.substr(4,2),16)||0;d[i*4+3]=255;}
+  ctx.putImageData(img,0,0);return ctx.getImageData(0,0,w,h);
+}
+function rgbToImg(arr,total){
+  var w=isMatrix?gridW:total,h=isMatrix?gridH:1;
+  var c=document.createElement('canvas');c.width=w;c.height=h;var ctx=c.getContext('2d');
+  var img=ctx.createImageData(w,h);var d=img.data;
+  for(var i=0;i<total&&i<arr.length;i++){var p=arr[i];d[i*4]=(p[0]||0)&255;d[i*4+1]=(p[1]||0)&255;d[i*4+2]=(p[2]||0)&255;d[i*4+3]=255;}
+  ctx.putImageData(img,0,0);return ctx.getImageData(0,0,w,h);
+}
+
+// Render
+function renderFrame(idx){
+  if(!frames[idx])return;frameIdx=idx;
+  var src=frames[idx],pixels=document.querySelectorAll('#ledPreview .px'),data=src.data;
+  var total=isMatrix?gridW*gridH:ledCount;
+  // Preview: unrotated, 1:1 mapping
+  for(var i=0;i<pixels.length&&i*4<data.length;i++){
+    var r=data[i*4],g=data[i*4+1],b=data[i*4+2];
+    pixels[i].style.background='rgb('+r+','+g+','+b+')';
+  }
+  // Send logical raster to the device (rotation applied source-side). The
+  // firmware expands to physical pixels via its pixel-group setting and
+  // applies serpentine when walking the physical LED chain.
+  if(streaming&&ws&&ws.readyState===1){
+    var rgbFlat=new Uint8Array(total*3);
+    for(var i=0;i<total;i++){
+      var src_i=rotatedSourceIdx(i);
+      var r=data[src_i*4]||0, g=data[src_i*4+1]||0, b=data[src_i*4+2]||0;
+      rgbFlat[i*3]=r;rgbFlat[i*3+1]=g;rgbFlat[i*3+2]=b;
+    }
+    var buf=new Uint8Array(3+total*3);buf[0]=0x01;buf[1]=(total>>8)&0xFF;buf[2]=total&0xFF;
+    buf.set(rgbFlat,3);
+    ws.send(buf.buffer);
+  }
+}
+
+// Send
+async function sendMessage(){
+  var inp=document.getElementById('chatInput'),text=inp.value.trim();if(!text)return;
+  inp.value='';addChatMsg('user',text);
+  var resp=await callAI(text);if(resp){addChatMsg('ai',resp);parseResponse(resp);}
+}
+document.getElementById('btnSend').onclick=sendMessage;
+document.getElementById('chatInput').onkeydown=function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}};
+
+// Streaming helpers
+function ensureStreaming(){
+  if(streaming)return;
+  streaming=true;
+  var btn=document.getElementById('btnStream');
+  btn.textContent='Stop Stream';btn.classList.add('active');
+  fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"mode":"stream"}'});
+  ws=new WebSocket('ws://'+location.host+'/ws');ws.binaryType='arraybuffer';
+}
+function stopStreaming(){
+  if(!streaming)return;
+  streaming=false;
+  var btn=document.getElementById('btnStream');
+  btn.textContent='Stream to LED';btn.classList.remove('active');
+  fetch('/api/power',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"on":false}'});
+  fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"mode":"api"}'});
+  if(ws){ws.close();ws=null;}
+}
+
+// Playback
+function startPlayback(){
+  if(!frames.length)return;
+  ensureStreaming();
+  if(frames.length===1){renderFrame(0);return;}
+  playing=true;document.getElementById('btnPlay').textContent='Pause';tick();
+}
+function tick(){if(!playing)return;frameIdx=(frameIdx+1)%frames.length;renderFrame(frameIdx);document.getElementById('frameInfo').textContent='Frame '+(frameIdx+1)+'/'+frames.length;timer=setTimeout(tick,1000/fps);}
+function stopPlayback(){playing=false;clearTimeout(timer);document.getElementById('btnPlay').textContent='Play';frameIdx=0;if(frames.length)renderFrame(0);}
+document.getElementById('btnPlay').onclick=function(){if(playing){playing=false;clearTimeout(timer);this.textContent='Play';}else startPlayback();};
+document.getElementById('btnStop').onclick=function(){stopPlayback();stopStreaming();};
+document.getElementById('fpsSlider').oninput=function(){fps=parseInt(this.value);document.getElementById('fpsVal').textContent=fps;};
+
+// Manual stream toggle
+document.getElementById('btnStream').onclick=function(){if(streaming)stopStreaming();else ensureStreaming();};
+
+// Save generator JS to device (only works when response was JS-code, not frame data)
+document.getElementById('btnSaveJs').onclick=function(){
+  if(!lastJsSource){alert('No JS generator in the latest response (it was frame data).');return;}
+  var name=prompt('Save as:','sparkle');
+  if(!name)return;
+  name=name.replace(/[^A-Za-z0-9_.-]/g,'_');
+  // Wrap anonymous function into `function render(frame,w,h){...}` so the on-device player finds it.
+  var wrapped='function render(frame, w, h) {\n  var __fn = ('+lastJsSource+');\n  return __fn(frame, w, h);\n}\n';
+  fetch('/api/js/'+encodeURIComponent(name),{method:'PUT',headers:{'Content-Type':'text/plain'},body:wrapped})
+    .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})})
+    .then(function(x){
+      if(!x.ok){alert('Save failed: '+(x.j.message||'unknown'));return;}
+      alert('Saved as "'+name+'". Visit /js to play it.');
+    }).catch(function(e){alert('Save failed: '+e.message);});
+};
+</script>
+</body>
+</html>

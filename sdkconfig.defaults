@@ -1,0 +1,24 @@
+# PlaiiinLightOS baseline. A single universal firmware is built from this file
+# plus version.properties — no profile-specific values are baked in. Hardware
+# presets (lamp_type, led_count, pin, led_type, etc.) are applied during the
+# first-boot onboarding flow, stored in NVS, and persist across OTA.
+CONFIG_IDF_TARGET="esp32"
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_HTTPD_MAX_URI_LEN=512
+CONFIG_HTTPD_WS_SUPPORT=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# Neutral hardware defaults — safe fallback until onboarding runs.
+CONFIG_PLAIIIN_NODE_NAME="PlaiiinLight"
+CONFIG_PLAIIIN_LED_PIN=2
+CONFIG_PLAIIIN_LED_CLK_PIN=-1
+CONFIG_PLAIIIN_LED_COUNT=30
+CONFIG_PLAIIIN_LED_TYPE="ws2812"
+CONFIG_PLAIIIN_LAMP_TYPE="strip"
+CONFIG_PLAIIIN_FORM="bare"
+CONFIG_PLAIIIN_NETWORK_SSID=""
+CONFIG_PLAIIIN_NETWORK_PW=""

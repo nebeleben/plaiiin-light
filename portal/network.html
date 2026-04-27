@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PlaiiinLight - Network</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="nav">
+<a href="/control">Control</a>
+<a href="/stream">Stream</a>
+<a href="/compose">Compose</a>
+<a href="/js">Scripts</a>
+<a href="/config">Config</a>
+<a href="/network" class="active">Network</a>
+<a href="/mqtt">MQTT</a>
+<a href="/ota">OTA</a>
+</div>
+<div class="card">
+<div class="hdr">
+<h1>Network</h1>
+<button type="button" class="icon-btn" id="themeBtn" title="Toggle light/dark"></button>
+</div>
+<form method="POST" action="/network">
+
+<h2>WiFi</h2>
+<label for="ssid">WiFi Network (SSID)</label>
+<input id="ssid" name="ssid" type="text" required>
+<label for="pass">WiFi Password</label>
+<input id="pass" name="pass" type="password">
+
+<button type="submit" class="submit">Save &amp; Reboot</button>
+</form>
+<p class="info">Device will reboot and connect to the configured WiFi network.</p>
+</div>
+<p class="copyright">&copy; <a href="https://plaiiin.com">plaiiin.com</a></p>
+
+<script>
+var dark=localStorage.getItem('theme')!=='light';
+function applyTheme(){document.body.classList.toggle('light',!dark);document.getElementById('themeBtn').textContent=dark?'\u2600':'\u263E';}
+applyTheme();
+document.getElementById('themeBtn').onclick=function(){dark=!dark;localStorage.setItem('theme',dark?'dark':'light');applyTheme();};
+</script>
+</body>
+</html>

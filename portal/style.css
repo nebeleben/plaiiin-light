@@ -1,0 +1,74 @@
+:root{
+  --bg:#131620;--card:#1b1f2e;--border:#2a2f42;--accent:#7c8cf5;--accent-hover:#6570d8;
+  --text:#c8ccd8;--text-dim:#6b7084;--input-bg:#151925;--focus:#7c8cf5;
+  --on:#5dd89a;--off:#e05572;
+}
+.light{
+  --bg:#f0f1f5;--card:#ffffff;--border:#dcdee5;--accent:#5b6abf;--accent-hover:#4a58a8;
+  --text:#3a3d4a;--text-dim:#8b8fa0;--input-bg:#f7f8fa;--focus:#5b6abf;
+  --on:#3cba78;--off:#d04060;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:0 12px 28px;transition:background .3s,color .3s}
+.nav{width:100%;max-width:520px;display:flex;gap:2px;padding:16px 0 12px}
+.nav a{flex:1;text-align:center;padding:8px 0;font-size:.82rem;font-weight:500;color:var(--text-dim);text-decoration:none;border-bottom:2px solid transparent;transition:color .2s,border-color .2s}
+.nav a:hover{color:var(--text)}
+.nav a.active{color:var(--accent);border-bottom-color:var(--accent)}
+.card{background:var(--card);padding:30px;border-radius:12px;width:100%;max-width:520px;box-shadow:0 8px 32px rgba(0,0,0,.25);border:1px solid var(--border);transition:background .3s,border-color .3s,box-shadow .3s}
+.light .card{box-shadow:0 4px 24px rgba(0,0,0,.08)}
+.hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+h1{color:var(--accent);font-size:1.3rem;font-weight:600}
+.icon-btn{background:none;border:1px solid var(--border);border-radius:8px;width:36px;height:36px;cursor:pointer;font-size:1.1rem;display:flex;align-items:center;justify-content:center;transition:border-color .2s,background .2s,color .2s;padding:0;color:var(--text);text-decoration:none}
+.icon-btn:hover{border-color:var(--accent);background:var(--input-bg)}
+h2{color:var(--text-dim);font-size:.82rem;font-weight:500;margin:20px 0 8px;border-bottom:1px solid var(--border);padding-bottom:5px;letter-spacing:.3px;text-transform:uppercase}
+label{display:block;margin-bottom:3px;color:var(--text-dim);font-size:.78rem;font-weight:500}
+input,select{width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:.88rem;margin-bottom:10px;transition:border-color .2s,background .2s}
+input:focus,select:focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 2px rgba(124,140,245,.15)}
+input[readonly]{color:var(--text-dim);cursor:not-allowed;opacity:.7}
+.row{display:flex;gap:10px}.row>div{flex:1}
+.submit{width:100%;padding:11px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-size:.95rem;font-weight:500;cursor:pointer;margin-top:12px;transition:background .2s}
+.submit:hover{background:var(--accent-hover)}
+.info{text-align:center;color:var(--text-dim);font-size:.7rem;margin-top:10px}
+.status{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.status-dot{width:12px;height:12px;border-radius:50%;transition:background .3s}
+.status-dot.on{background:var(--on);box-shadow:0 0 8px var(--on)}
+.status-dot.off{background:var(--off);box-shadow:0 0 8px var(--off)}
+.status-label{font-size:.95rem;font-weight:500}
+.power-row{display:flex;gap:10px;margin-bottom:6px}
+.power-btn{flex:1;padding:12px;border:none;border-radius:8px;font-size:.9rem;font-weight:500;cursor:pointer;transition:background .2s,opacity .2s}
+.power-btn.on-btn{background:var(--on);color:#fff}
+.power-btn.on-btn:hover{opacity:.85}
+.power-btn.off-btn{background:var(--off);color:#fff}
+.power-btn.off-btn:hover{opacity:.85}
+.color-section{margin-top:6px}
+.picker-row{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.color-input{width:56px;height:42px;border:2px solid var(--border);border-radius:8px;cursor:pointer;background:var(--input-bg);padding:2px}
+.color-input::-webkit-color-swatch-wrapper{padding:0}
+.color-input::-webkit-color-swatch{border:none;border-radius:5px}
+.color-hex{font-family:monospace;font-size:.95rem;color:var(--text);background:var(--input-bg);border:1px solid var(--border);border-radius:6px;padding:8px 12px;width:110px;text-align:center}
+.color-hex:focus{outline:none;border-color:var(--accent)}
+.apply-btn{padding:10px 20px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-size:.88rem;font-weight:500;cursor:pointer;transition:background .2s}
+.apply-btn:hover{background:var(--accent-hover)}
+/* Playback / streaming controls — shared across /compose and /stream. */
+.play-btn{background:var(--on);color:#fff;border:none;border-radius:6px;font-size:.82rem;font-weight:500;cursor:pointer;padding:6px 14px;transition:opacity .2s}
+.play-btn:hover{opacity:.85}
+.stop-btn{background:var(--off);color:#fff;border:none;border-radius:6px;font-size:.82rem;font-weight:500;cursor:pointer;padding:6px 14px;transition:opacity .2s}
+.stop-btn:hover{opacity:.85}
+.mode-btn{background:var(--on);color:#fff;border:none;border-radius:6px;font-size:.82rem;font-weight:500;cursor:pointer;padding:6px 14px;transition:opacity .2s,background .2s}
+.mode-btn:hover{opacity:.85}
+/* When a Stream button is active it turns red (click again = stop). */
+.mode-btn.active{background:var(--off)}
+.presets{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.preset{width:36px;height:36px;border-radius:8px;border:2px solid var(--border);cursor:pointer;transition:border-color .2s,transform .15s}
+.preset:hover{border-color:var(--accent);transform:scale(1.1)}
+.info-bar{display:flex;justify-content:space-between;align-items:center;margin-top:20px;padding-top:12px;border-top:1px solid var(--border)}
+.info-bar span{font-size:.75rem;color:var(--text-dim)}
+.info-bar a{color:var(--accent);text-decoration:none;font-size:.8rem}
+.info-bar a:hover{text-decoration:underline}
+.msg{text-align:center;font-size:.8rem;margin-top:8px;min-height:1.2em;transition:color .3s}
+.msg.ok{color:var(--on)}.msg.err{color:var(--off)}
+.led-grid{display:inline-grid;gap:1px;border-radius:6px;overflow:hidden}
+.led-grid .px{transition:background .05s}
+.copyright{text-align:center;padding:16px 0 4px;font-size:.68rem;color:var(--text-dim)}
+.copyright a{color:var(--text-dim);text-decoration:none;transition:color .2s}
+.copyright a:hover{color:var(--accent)}

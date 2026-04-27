@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PlaiiinLight - OTA Update</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+.fw-info{font-size:.8rem;color:var(--text-dim);margin-bottom:14px;line-height:1.6}
+.fw-info span{color:var(--text);font-weight:500}
+.upload-zone{border:2px dashed var(--border);border-radius:10px;padding:28px 16px;text-align:center;cursor:pointer;transition:border-color .2s,background .2s;margin-bottom:14px}
+.upload-zone:hover,.upload-zone.over{border-color:var(--accent);background:rgba(124,140,245,.06)}
+.upload-zone p{color:var(--text-dim);font-size:.85rem;margin:4px 0}
+.upload-zone .hint{font-size:.72rem}
+.file-name{font-size:.82rem;color:var(--text);margin-bottom:12px;word-break:break-all}
+.progress-wrap{background:var(--input-bg);border-radius:8px;overflow:hidden;height:28px;margin-bottom:10px;border:1px solid var(--border);display:none}
+.progress-bar{height:100%;background:var(--accent);transition:width .2s;display:flex;align-items:center;justify-content:center;font-size:.75rem;color:#fff;font-weight:500;min-width:0}
+.ota-status{text-align:center;font-size:.85rem;margin-top:10px;min-height:1.4em}
+.ota-status.ok{color:var(--on)}.ota-status.err{color:var(--off)}.ota-status.busy{color:var(--accent)}
+.warn{font-size:.72rem;color:var(--off);margin-top:8px;padding:8px;border:1px solid rgba(224,85,114,.2);border-radius:6px;background:rgba(224,85,114,.05)}
+</style>
+</head>
+<body>
+<div class="nav">
+<a href="/control">Control</a>
+<a href="/stream">Stream</a>
+<a href="/compose">Compose</a>
+<a href="/js">Scripts</a>
+<a href="/config">Config</a>
+<a href="/network">Network</a>
+<a href="/ota" class="active">OTA</a>
+</div>
+<div class="card">
+<div class="hdr">
+<h1>Firmware Update</h1>
+<button type="button" class="icon-btn" id="themeBtn" title="Toggle light/dark"></button>
+</div>
+
+<h2>Current Firmware</h2>
+<div class="fw-info" id="fwInfo">Loading...</div>
+
+<h2>Upload New Firmware</h2>
+<div class="upload-zone" id="dropZone">
+<p>Drop firmware .bin here</p>
+<p class="hint">or click to browse</p>
+<input type="file" id="fileInput" accept=".bin" style="display:none">
+</div>
+<div class="file-name" id="fileName" style="display:none"></div>
+<div class="progress-wrap" id="progressWrap">
+<div class="progress-bar" id="progressBar" style="width:0%">0%</div>
+</div>
+<button class="submit" id="btnUpload" style="display:none">Upload &amp; Install</button>
+<div class="ota-status" id="otaStatus"></div>
+
+<div class="warn">OTA will overwrite the inactive partition and reboot. WiFi config and settings are preserved.</div>
+</div>
+<p class="copyright">&copy; <a href="https://plaiiin.com">plaiiin.com</a></p>
+
+<script>
+var dark=localStorage.getItem('theme')!=='light';
+function applyTheme(){document.body.classList.toggle('light',!dark);document.getElementById('themeBtn').textContent=dark?'\u2600':'\u263E';}
+applyTheme();
+document.getElementById('themeBtn').onclick=function(){dark=!dark;localStorage.setItem('theme',dark?'dark':'light');applyTheme();};
+
+// Firmware info — pull release versions from /api and build/partition metadata
+// from /api/ota/info, then render a combined block.
+Promise.all([
+  fetch('/api').then(function(r){return r.json()}).catch(function(){return {}}),
+  fetch('/api/ota/info').then(function(r){return r.json()}).catch(function(){return {}})
+]).then(function(arr){
+  var api=arr[0]||{}, ota=arr[1]||{};
+  var el=document.getElementById('fwInfo');
+  var fv=api.firmwareVersion||'?';
+  var av=api.apiVersion||'?';
+  var built=(ota.date||'?')+(ota.time?' '+ota.time:'');
+  var commit=ota.version||'';
+  var partition=ota.partition||'?';
+  var idf=ota.idf||'?';
+  el.innerHTML=
+    'Firmware: <span>'+fv+'</span><br>'+
+    'API: <span>'+av+'</span><br>'+
+    'Build: <span>'+built+(commit?' ('+commit+')':'')+'</span><br>'+
+    'Partition: <span>'+partition+'</span><br>'+
+    'ESP-IDF: <span>'+idf+'</span>';
+}).catch(function(){document.getElementById('fwInfo').textContent='Could not load firmware info';});
+
+// File selection
+var selectedFile=null;
+var dz=document.getElementById('dropZone');
+var fi=document.getElementById('fileInput');
+dz.onclick=function(){fi.click();};
+fi.onchange=function(){if(fi.files[0])selectFile(fi.files[0]);};
+dz.ondragover=function(e){e.preventDefault();dz.classList.add('over');};
+dz.ondragleave=function(){dz.classList.remove('over');};
+dz.ondrop=function(e){e.preventDefault();dz.classList.remove('over');if(e.dataTransfer.files[0])selectFile(e.dataTransfer.files[0]);};
+
+function selectFile(file){
+  if(!file.name.endsWith('.bin')){
+    setStatus('Please select a .bin firmware file','err');return;
+  }
+  selectedFile=file;
+  document.getElementById('fileName').textContent=file.name+' ('+formatSize(file.size)+')';
+  document.getElementById('fileName').style.display='block';
+  document.getElementById('btnUpload').style.display='block';
+  setStatus('','');
+}
+
+function formatSize(bytes){
+  if(bytes<1024)return bytes+' B';
+  if(bytes<1048576)return(bytes/1024).toFixed(1)+' KB';
+  return(bytes/1048576).toFixed(1)+' MB';
+}
+
+function setStatus(text,cls){
+  var el=document.getElementById('otaStatus');
+  el.textContent=text;el.className='ota-status '+(cls||'');
+}
+
+// Upload
+document.getElementById('btnUpload').onclick=function(){
+  if(!selectedFile)return;
+  var btn=this;btn.disabled=true;btn.textContent='Uploading...';
+  var pw=document.getElementById('progressWrap');pw.style.display='block';
+  var pb=document.getElementById('progressBar');
+  setStatus('Uploading firmware...','busy');
+
+  var xhr=new XMLHttpRequest();
+  xhr.open('POST','/api/ota',true);
+  xhr.setRequestHeader('Content-Type','application/octet-stream');
+
+  xhr.upload.onprogress=function(e){
+    if(e.lengthComputable){
+      var pct=Math.round(e.loaded/e.total*100);
+      pb.style.width=pct+'%';pb.textContent=pct+'%';
+      if(pct>=100)setStatus('Writing to flash... please wait','busy');
+    }
+  };
+
+  xhr.onload=function(){
+    if(xhr.status===200){
+      try{var d=JSON.parse(xhr.responseText);
+        setStatus('Update successful! '+formatSize(d.bytes)+' written to '+d.partition+'. Rebooting...','ok');
+        pb.style.width='100%';pb.textContent='Done!';
+        // Poll until device comes back
+        setTimeout(function pollReboot(){
+          fetch('/api').then(function(){location.reload();}).catch(function(){setTimeout(pollReboot,2000);});
+        },3000);
+      }catch(e){setStatus('Unexpected response','err');}
+    } else {
+      try{var err=JSON.parse(xhr.responseText);setStatus('Failed: '+err.error,'err');}
+      catch(e){setStatus('Upload failed (HTTP '+xhr.status+')','err');}
+      btn.disabled=false;btn.textContent='Upload & Install';
+    }
+  };
+
+  xhr.onerror=function(){
+    setStatus('Connection lost. Device may be rebooting...','busy');
+    setTimeout(function pollReboot(){
+      fetch('/api').then(function(){location.reload();}).catch(function(){setTimeout(pollReboot,2000);});
+    },3000);
+  };
+
+  xhr.send(selectedFile);
+};
+</script>
+</body>
+</html>

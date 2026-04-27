@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PlaiiinLight - WS Test</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+.drop-zone{border:2px dashed var(--border);border-radius:10px;padding:32px 16px;text-align:center;cursor:pointer;transition:border-color .2s,background .2s;margin-bottom:16px}
+.drop-zone:hover,.drop-zone.over{border-color:var(--accent);background:rgba(124,140,245,.06)}
+.drop-zone p{color:var(--text-dim);font-size:.85rem;margin:4px 0}
+.drop-zone .hint{font-size:.72rem}
+.previews{display:flex;gap:14px;margin-bottom:16px;align-items:flex-start}
+.preview-box{text-align:center}
+.preview-box canvas{border:1px solid var(--border);border-radius:6px;image-rendering:pixelated;max-width:100%}
+.preview-box .lbl{font-size:.7rem;color:var(--text-dim);margin-top:4px}
+.controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.controls button{padding:8px 16px;border:none;border-radius:6px;font-size:.85rem;font-weight:500;cursor:pointer;transition:background .2s,opacity .2s}
+.play-btn{background:var(--on);color:#fff}.play-btn:hover{opacity:.85}
+.stop-btn{background:var(--off);color:#fff}.stop-btn:hover{opacity:.85}
+.mode-btn{background:var(--on);color:#fff}.mode-btn:hover{opacity:.85}
+.mode-btn.active{background:var(--off)}
+.controls label{font-size:.78rem;color:var(--text-dim)}
+.controls input[type=range]{width:100px;accent-color:var(--accent)}
+.ws-status{font-size:.78rem;padding:4px 10px;border-radius:12px;display:inline-flex;align-items:center;gap:6px}
+.ws-status .dot{width:8px;height:8px;border-radius:50%}
+.frame-info{font-size:.75rem;color:var(--text-dim);margin-top:8px}
+</style>
+</head>
+<body>
+<div class="nav">
+<a href="/control">Control</a>
+<a href="/stream" class="active">Stream</a>
+<a href="/compose">Compose</a>
+<a href="/js">Scripts</a>
+<a href="/config">Config</a>
+<a href="/network">Network</a>
+<a href="/mqtt">MQTT</a>
+<a href="/ota">OTA</a>
+</div>
+<div class="card" style="max-width:520px">
+<div class="hdr">
+<h1>Stream Test</h1>
+<button type="button" class="icon-btn" id="themeBtn" title="Toggle light/dark"></button>
+</div>
+
+<div class="drop-zone" id="dropZone">
+<p>Drop a GIF or image here</p>
+<p class="hint">or click to browse</p>
+<input type="file" id="fileInput" accept="image/*" style="display:none">
+</div>
+
+<div class="previews" id="previews" style="display:none">
+<div class="preview-box">
+<canvas id="srcCanvas" width="120" height="120"></canvas>
+<div class="lbl">Source</div>
+</div>
+<div class="preview-box">
+<div id="ledPreview"></div>
+<div class="lbl" id="gridLabel">LED Preview</div>
+</div>
+</div>
+
+<h2>Brightness</h2>
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+<input type="range" id="brightnessSlider" min="0" max="255" value="255" style="flex:1;accent-color:var(--accent)">
+<span id="brightnessVal" style="font-size:.9rem;min-width:36px;text-align:right">100%</span>
+</div>
+
+<div id="rotateRow" style="display:none;align-items:center;gap:12px;margin-bottom:12px">
+<span style="font-size:.78rem;color:var(--text-dim);min-width:62px">Rotate</span>
+<select id="rotateSelect" style="flex:1">
+<option value="0">0&deg; (no rotation)</option>
+<option value="90">90&deg; clockwise</option>
+<option value="180">180&deg;</option>
+<option value="270">270&deg; (90&deg; counter-clockwise)</option>
+</select>
+</div>
+
+<div class="controls" id="ctrlBar" style="display:none">
+<button class="play-btn" id="btnPlay">Play</button>
+<button class="stop-btn" id="btnStop">Stop</button>
+<button class="mode-btn" id="btnMode">Switch to Stream</button>
+<label>FPS <input type="range" id="fpsSlider" min="1" max="30" value="10"><span id="fpsVal">10</span></label>
+</div>
+
+<div id="wsBar" style="display:none;margin-bottom:10px">
+<span class="ws-status" id="wsStatus"><span class="dot" style="background:var(--off)"></span>Disconnected</span>
+</div>
+
+<div class="frame-info" id="frameInfo"></div>
+
+<div class="info-bar">
+<span id="ledInfo"></span>
+</div>
+</div>
+<p class="copyright">&copy; <a href="https://plaiiin.com">plaiiin.com</a></p>
+
+<script>
+var ledCount=30,gridW=0,gridH=0,isMatrix=false;
+var rotation=0;
+var frames=[],frameIdx=0,playing=false,timer=null,ws=null,streamMode=false;
+var fps=10;
+
+// Theme
+var dark=localStorage.getItem('theme')!=='light';
+function applyTheme(){document.body.classList.toggle('light',!dark);document.getElementById('themeBtn').textContent=dark?'\u2600':'\u263E';}
+applyTheme();
+document.getElementById('themeBtn').onclick=function(){dark=!dark;localStorage.setItem('theme',dark?'dark':'light');applyTheme();};
+
+// Brightness
+var bSlider=document.getElementById('brightnessSlider');
+var bVal=document.getElementById('brightnessVal');
+var bTimer=null;
+fetch('/api/brightness').then(function(r){return r.json()}).then(function(d){
+  bSlider.value=d.brightness;
+  bVal.textContent=Math.round(d.brightness/2.55)+'%';
+}).catch(function(){});
+bSlider.oninput=function(){
+  bVal.textContent=Math.round(this.value/2.55)+'%';
+  clearTimeout(bTimer);
+  var v=this.value;
+  bTimer=setTimeout(function(){
+    fetch('/api/brightness',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"brightness":'+v+'}'});
+  },100);
+};
+
+// Load device info and detect matrix. Prefer the LOGICAL grid so streaming
+// pushes frames at the size the AI renders at — the device expands to the
+// physical LED layout through its pixel-group setting.
+fetch('/api').then(function(r){return r.json()}).then(function(d){
+  ledCount=d.ledCount||30;
+  var pgW=d.pixelGroupW||1, pgH=d.pixelGroupH||1;
+  var lw=d.logicalW||0, lh=d.logicalH||0;
+  var pgLabel=(pgW>1||pgH>1)?' | pxGroup '+pgW+'×'+pgH:'';
+  document.getElementById('ledInfo').textContent=d.ledCount+' LEDs | '+d.lampType+' | GPIO '+d.ledPin+pgLabel;
+  if(lw>0&&lh>0){
+    isMatrix=(lh>1)||((d.lampType||'').toLowerCase().indexOf('matrix')!==-1);
+    gridW=lw;gridH=lh;
+  } else {
+    var lt=(d.lampType||'').toLowerCase();
+    if(lt.indexOf('matrix')!==-1){
+      isMatrix=true;
+      var m=lt.match(/(\d+)\s*x\s*(\d+)/);
+      if(m){gridW=parseInt(m[1]);gridH=parseInt(m[2]);}
+      else{gridW=Math.round(Math.sqrt(ledCount));gridH=Math.ceil(ledCount/gridW);}
+    } else {
+      isMatrix=false;gridW=ledCount;gridH=1;
+    }
+  }
+  document.getElementById('gridLabel').textContent=isMatrix?gridW+'×'+gridH+' logical':'Strip ('+ledCount+')';
+  buildLedGrid();
+}).catch(function(){buildLedGrid();});
+
+function buildLedGrid(){
+  var el=document.getElementById('ledPreview');
+  var w=isMatrix?gridW:Math.min(ledCount,32);
+  var h=isMatrix?gridH:1;
+  var sz=isMatrix?Math.min(Math.floor(200/Math.max(w,h)),28):8;
+  el.innerHTML='';
+  var grid=document.createElement('div');
+  grid.className='led-grid';
+  grid.style.gridTemplateColumns='repeat('+w+','+sz+'px)';
+  for(var i=0;i<w*h;i++){
+    var px=document.createElement('div');
+    px.className='px';px.style.background='#111';px.style.width=sz+'px';px.style.height=sz+'px';
+    grid.appendChild(px);
+  }
+  el.appendChild(grid);
+  document.getElementById('rotateRow').style.display=isMatrix?'flex':'none';
+}
+
+// Rotation — device-side persisted in NVS.
+var rotateSel=document.getElementById('rotateSelect');
+fetch('/api/rotation').then(function(r){return r.json()}).then(function(d){
+  rotation=parseInt(d.rotation)||0;
+  rotateSel.value=String(rotation);
+  if(frames.length)renderFrame(frameIdx);
+}).catch(function(){ rotateSel.value=String(rotation); });
+rotateSel.onchange=function(){
+  rotation=parseInt(this.value)||0;
+  fetch('/api/rotation',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({rotation:rotation})}).catch(function(){});
+  if(frames.length)renderFrame(frameIdx);
+};
+function rotatedSourceIdx(physIdx){
+  if(!isMatrix||rotation===0)return physIdx;
+  var px=physIdx%gridW, py=Math.floor(physIdx/gridW);
+  var sx,sy;
+  if(rotation===90){sx=py; sy=gridH-1-px;}
+  else if(rotation===180){sx=gridW-1-px; sy=gridH-1-py;}
+  else if(rotation===270){sx=gridW-1-py; sy=px;}
+  else{sx=px; sy=py;}
+  return sy*gridW+sx;
+}
+
+// DnD + file select
+var dz=document.getElementById('dropZone');
+var fi=document.getElementById('fileInput');
+dz.onclick=function(){fi.click();};
+fi.onchange=function(){if(fi.files[0])loadFile(fi.files[0]);};
+dz.ondragover=function(e){e.preventDefault();dz.classList.add('over');};
+dz.ondragleave=function(){dz.classList.remove('over');};
+dz.ondrop=function(e){e.preventDefault();dz.classList.remove('over');if(e.dataTransfer.files[0])loadFile(e.dataTransfer.files[0]);};
+
+function loadFile(file){
+  stopPlayback();
+  frames=[];frameIdx=0;
+  if(file.type==='image/gif'){
+    file.arrayBuffer().then(function(buf){decodeGif(new Uint8Array(buf));});
+  } else {
+    var url=URL.createObjectURL(file);
+    var img=new Image();
+    img.onload=function(){
+      var c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;
+      c.getContext('2d').drawImage(img,0,0);
+      frames=[c.getContext('2d').getImageData(0,0,c.width,c.height)];
+      showUI();renderFrame(0);
+      document.getElementById('frameInfo').textContent='1 frame (static image)';
+    };
+    img.src=url;
+  }
+}
+
+// Pure-JS GIF decoder with LZW decompression
+function decodeGif(buf){
+  var p=0;
+  function u8(){return buf[p++];}
+  function u16(){var v=buf[p]|(buf[p+1]<<8);p+=2;return v;}
+  function skip(n){p+=n;}
+
+  // Header
+  var sig=String.fromCharCode(buf[0],buf[1],buf[2],buf[3],buf[4],buf[5]);
+  if(sig!=='GIF87a'&&sig!=='GIF89a'){document.getElementById('frameInfo').textContent='Not a GIF';return;}
+  p=6;
+  var w=u16(),h=u16(),packed=u8(),bgIdx=u8();skip(1);
+  var gctFlag=(packed>>7)&1,gctSize=gctFlag?3*(1<<((packed&7)+1)):0;
+  var gct=gctFlag?buf.slice(p,p+gctSize):null;p+=gctSize;
+
+  var canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;
+  var ctx=canvas.getContext('2d');
+  var prevData=null;
+  var disposalMethod=0,transparentIdx=-1,hasTransparency=false;
+
+  document.getElementById('frameInfo').textContent='Decoding GIF '+w+'x'+h+'...';
+
+  function lzwDecode(minCode,data){
+    var clear=1<<minCode,eoi=clear+1,codeSize=minCode+1;
+    var table=[],i;for(i=0;i<clear;i++)table[i]=[i];
+    table[clear]=[];table[eoi]=[];
+    var nextCode=eoi+1,mask=(1<<codeSize)-1;
+    var bits=0,nBits=0,bp=0,output=[];
+    function readCode(){
+      while(nBits<codeSize){bits|=(data[bp++]||0)<<nBits;nBits+=8;}
+      var code=bits&mask;bits>>=codeSize;nBits-=codeSize;return code;
+    }
+    var code=readCode();// should be clear
+    var old=-1;
+    while(bp<=data.length+2){
+      code=readCode();
+      if(code===eoi)break;
+      if(code===clear){
+        codeSize=minCode+1;mask=(1<<codeSize)-1;
+        table.length=eoi+1;nextCode=eoi+1;old=-1;
+        continue;
+      }
+      var entry;
+      if(code<nextCode){entry=table[code];}
+      else if(code===nextCode&&old>=0){entry=table[old].concat(table[old][0]);}
+      else break;
+      for(i=0;i<entry.length;i++)output.push(entry[i]);
+      if(old>=0&&nextCode<4096){
+        table[nextCode++]=table[old].concat(entry[0]);
+        if(nextCode>mask&&codeSize<12){codeSize++;mask=(1<<codeSize)-1;}
+      }
+      old=code;
+    }
+    return output;
+  }
+
+  function readSubBlocks(){
+    var data=[];
+    while(true){
+      var sz=u8();if(!sz)break;
+      for(var i=0;i<sz;i++)data.push(buf[p++]);
+    }
+    return data;
+  }
+
+  while(p<buf.length){
+    var block=u8();
+    if(block===0x3b)break;// trailer
+    if(block===0x21){// extension
+      var label=u8();
+      if(label===0xf9){// graphic control
+        skip(1);var gpacked=u8();skip(2);
+        disposalMethod=(gpacked>>2)&7;
+        hasTransparency=(gpacked&1)===1;
+        transparentIdx=hasTransparency?u8():0;if(!hasTransparency)u8();
+        u8();// block terminator
+      } else {
+        readSubBlocks();// skip other extensions
+      }
+    } else if(block===0x2c){// image descriptor
+      var ix=u16(),iy=u16(),iw=u16(),ih=u16();
+      var ipacked=u8();
+      var hasLct=(ipacked>>7)&1,interlaced=(ipacked>>6)&1;
+      var lctSize=hasLct?3*(1<<((ipacked&7)+1)):0;
+      var lct=hasLct?buf.slice(p,p+lctSize):null;p+=lctSize;
+      var ct=lct||gct;
+
+      // Handle disposal before drawing new frame
+      if(disposalMethod===2){
+        ctx.clearRect(ix,iy,iw,ih);
+      } else if(disposalMethod===3&&prevData){
+        ctx.putImageData(prevData,0,0);
+      }
+      // Save state if disposal 3 might be needed next
+      prevData=ctx.getImageData(0,0,w,h);
+
+      var minCodeSize=u8();
+      var compData=readSubBlocks();
+      var pixels=lzwDecode(minCodeSize,compData);
+
+      var imgData=ctx.getImageData(ix,iy,iw,ih);
+      var d=imgData.data;
+      for(var yi=0;yi<ih;yi++){
+        var destY=interlaced?deinterlace(yi,ih):yi;
+        for(var xi=0;xi<iw;xi++){
+          var si=yi*iw+xi,pi=pixels[si];
+          if(pi===undefined)continue;
+          if(hasTransparency&&pi===transparentIdx)continue;
+          var di=(destY*iw+xi)*4;
+          d[di]=ct[pi*3];d[di+1]=ct[pi*3+1];d[di+2]=ct[pi*3+2];d[di+3]=255;
+        }
+      }
+      ctx.putImageData(imgData,ix,iy);
+      frames.push(ctx.getImageData(0,0,w,h));
+      disposalMethod=0;hasTransparency=false;transparentIdx=-1;
+    }
+  }
+
+  document.getElementById('frameInfo').textContent=frames.length+' frames loaded';
+  if(frames.length>0){showUI();renderFrame(0);}
+}
+
+function deinterlace(y,h){
+  // GIF interlace pass order
+  var passStart=[0,4,2,1],passStep=[8,8,4,2];
+  var row=0;
+  for(var pass=0;pass<4;pass++){
+    for(var r=passStart[pass];r<h;r+=passStep[pass]){
+      if(row===y)return r;
+      row++;
+    }
+  }
+  return y;
+}
+
+function showUI(){
+  document.getElementById('previews').style.display='flex';
+  document.getElementById('ctrlBar').style.display='flex';
+  document.getElementById('wsBar').style.display='block';
+}
+
+function mapToGrid(imageData){
+  // Resize source image to grid dimensions
+  var c=document.createElement('canvas');
+  var w=isMatrix?gridW:ledCount;
+  var h=isMatrix?gridH:1;
+  c.width=w;c.height=h;
+  var ctx=c.getContext('2d');
+  ctx.imageSmoothingEnabled=true;
+  // Draw source imageData to a temp canvas first
+  var tmp=document.createElement('canvas');
+  tmp.width=imageData.width;tmp.height=imageData.height;
+  tmp.getContext('2d').putImageData(imageData,0,0);
+  // Scale down to grid size
+  ctx.drawImage(tmp,0,0,w,h);
+  return ctx.getImageData(0,0,w,h);
+}
+
+function renderFrame(idx){
+  if(!frames[idx])return;
+  frameIdx=idx;
+  var src=frames[idx];
+
+  // Draw source preview
+  var sc=document.getElementById('srcCanvas');
+  var sctx=sc.getContext('2d');
+  var tmp=document.createElement('canvas');
+  tmp.width=src.width;tmp.height=src.height;
+  tmp.getContext('2d').putImageData(src,0,0);
+  sctx.clearRect(0,0,120,120);
+  sctx.imageSmoothingEnabled=true;
+  var scale=Math.min(120/src.width,120/src.height);
+  var dw=src.width*scale,dh=src.height*scale;
+  sctx.drawImage(tmp,(120-dw)/2,(120-dh)/2,dw,dh);
+
+  // Map to LED grid
+  var mapped=mapToGrid(src);
+  var pixels=document.querySelectorAll('#ledPreview .px');
+  var data=mapped.data;
+  var total=isMatrix?gridW*gridH:ledCount;
+
+  // Preview: unrotated, direct mapping
+  for(var i=0;i<pixels.length&&i*4<data.length;i++){
+    var r=data[i*4],g=data[i*4+1],b=data[i*4+2];
+    pixels[i].style.background='rgb('+r+','+g+','+b+')';
+  }
+
+  // Send via WebSocket if streaming — logical raster, with rotation applied
+  // source-side. The device expands to physical pixels (pixel group) and
+  // handles serpentine LED wiring when mapping logical → physical.
+  if(streamMode&&ws&&ws.readyState===1){
+    var flat=new Uint8Array(total*3);
+    for(var i=0;i<total;i++){
+      var src_i=rotatedSourceIdx(i);
+      var r=data[src_i*4]||0, g=data[src_i*4+1]||0, b=data[src_i*4+2]||0;
+      flat[i*3]=r;flat[i*3+1]=g;flat[i*3+2]=b;
+    }
+    var buf=new Uint8Array(3+total*3);
+    buf[0]=0x01;buf[1]=(total>>8)&0xFF;buf[2]=total&0xFF;
+    buf.set(flat,3);
+    ws.send(buf.buffer);
+  }
+}
+
+function sendPower(on){
+  fetch('/api/power',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({on:on})});
+}
+
+// Playback
+function startPlayback(){
+  if(frames.length===0)return;
+  sendPower(true);
+  if(frames.length===1){
+    // Single frame: just send it
+    renderFrame(0);
+    document.getElementById('frameInfo').textContent='Frame 1/1 (static)';
+    return;
+  }
+  playing=true;
+  document.getElementById('btnPlay').textContent='Pause';
+  tick();
+}
+function tick(){
+  if(!playing)return;
+  frameIdx=(frameIdx+1)%frames.length;
+  renderFrame(frameIdx);
+  document.getElementById('frameInfo').textContent='Frame '+(frameIdx+1)+'/'+frames.length;
+  timer=setTimeout(tick,1000/fps);
+}
+function pausePlayback(){
+  playing=false;
+  clearTimeout(timer);
+  document.getElementById('btnPlay').textContent='Play';
+}
+function stopPlayback(){
+  pausePlayback();
+  sendPower(false);
+  frameIdx=0;
+  if(frames.length)renderFrame(0);
+}
+
+document.getElementById('btnPlay').onclick=function(){playing?pausePlayback():startPlayback();};
+document.getElementById('btnStop').onclick=stopPlayback;
+
+// FPS
+var slider=document.getElementById('fpsSlider');
+slider.oninput=function(){fps=parseInt(this.value);document.getElementById('fpsVal').textContent=fps;};
+
+// WebSocket + mode switch
+function connectWs(){
+  var host=location.host;
+  ws=new WebSocket('ws://'+host+'/ws');
+  ws.binaryType='arraybuffer';
+  ws.onopen=function(){
+    document.getElementById('wsStatus').innerHTML='<span class="dot" style="background:var(--on)"></span>Connected';
+  };
+  ws.onclose=function(){
+    document.getElementById('wsStatus').innerHTML='<span class="dot" style="background:var(--off)"></span>Disconnected';
+    ws=null;
+  };
+  ws.onerror=function(){ws.close();};
+}
+function disconnectWs(){
+  if(ws){ws.close();ws=null;}
+}
+
+document.getElementById('btnMode').onclick=function(){
+  streamMode=!streamMode;
+  this.textContent=streamMode?'Switch to API':'Switch to Stream';
+  this.classList.toggle('active',streamMode);
+  if(streamMode){
+    fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"mode":"stream"}'});
+    connectWs();
+  } else {
+    pausePlayback();
+    sendPower(false);
+    fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"mode":"api"}'});
+    disconnectWs();
+  }
+};
+</script>
+</body>
+</html>

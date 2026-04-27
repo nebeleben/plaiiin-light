@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PlaiiinLight - Config</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+.key-status{font-size:.75rem;padding:3px 8px;border-radius:10px;display:inline-block;margin-bottom:8px}
+.key-status.set{color:var(--on);background:rgba(93,216,154,.1)}
+.key-status.unset{color:var(--off);background:rgba(224,85,114,.1)}
+.key-row{display:flex;gap:6px;align-items:flex-end;margin-bottom:6px}
+.key-row input{flex:1;margin-bottom:0}
+.key-row button{padding:6px 12px;font-size:.78rem;white-space:nowrap;border:1px solid var(--border);border-radius:6px;background:var(--accent);color:#fff;cursor:pointer}
+.limits{display:flex;gap:12px;align-items:center;font-size:.78rem;margin-top:6px;flex-wrap:wrap}
+.limits label{margin-bottom:0}
+.limits input{width:90px;margin-bottom:0}
+.limits input.small{width:60px}
+.limits button{padding:6px 12px;border:none;border-radius:6px;background:var(--card);color:var(--text-dim);border:1px solid var(--border)!important;cursor:pointer}
+</style>
+</head>
+<body>
+<div class="nav">
+<a href="/control">Control</a>
+<a href="/stream">Stream</a>
+<a href="/compose">Compose</a>
+<a href="/js">Scripts</a>
+<a href="/config" class="active">Config</a>
+<a href="/network">Network</a>
+<a href="/mqtt">MQTT</a>
+<a href="/ota">OTA</a>
+</div>
+<div class="card">
+<div class="hdr">
+<h1>Configuration</h1>
+<button type="button" class="icon-btn" id="themeBtn" title="Toggle light/dark"></button>
+</div>
+<form method="POST" action="/config">
+
+<h2>Device</h2>
+<label for="node_name">Node Name</label>
+<input id="node_name" name="node_name" type="text" placeholder="PlaiiinLight-01">
+<label for="vendor_name">Vendor Name</label>
+<input id="vendor_name" name="vendor_name" type="text" placeholder="PlaiiinLight">
+<div class="row">
+<div>
+<label for="firmware_version">Firmware Version</label>
+<input id="firmware_version" type="text" placeholder="1.0.0" readonly>
+</div>
+<div>
+<label for="api_version">API Version</label>
+<input id="api_version" type="text" placeholder="1.0.0" readonly>
+</div>
+</div>
+
+<h2>LED Strip</h2>
+<label for="led_type">LED Type</label>
+<select id="led_type" name="led_type">
+<option value="ws2812">WS2812 / NeoPixel (one-wire, GRB)</option>
+<option value="sk6812">SK6812 RGB (one-wire, GRB)</option>
+<option value="sk6812w">SK6812 RGBW (one-wire, GRBW)</option>
+<option value="sk9822">SK9822 / APA102 (two-wire)</option>
+</select>
+
+<div class="row">
+<div>
+<label for="led_pin">Data GPIO</label>
+<input id="led_pin" name="led_pin" type="number" min="0" max="48" placeholder="2">
+</div>
+<div id="clkWrap" style="display:none">
+<label for="led_clk_pin">Clock GPIO</label>
+<input id="led_clk_pin" name="led_clk_pin" type="number" min="-1" max="48" placeholder="18">
+</div>
+<div>
+<label for="led_count">LED Count</label>
+<input id="led_count" name="led_count" type="number" min="1" max="1024" placeholder="30">
+</div>
+</div>
+
+<label for="lamp_type">Lamp Type</label>
+<input id="lamp_type" name="lamp_type" type="text" placeholder="e.g. strip, matrix8x8, ring">
+
+<label for="lamp_form">Lamp Form</label>
+<input id="lamp_form" name="lamp_form" type="text" placeholder="e.g. bare, tower, display">
+
+<button type="submit" class="submit">Save &amp; Reboot</button>
+</form>
+<p class="info">Device reboots after saving. LED pin/count changes take effect on reboot.</p>
+
+<h2>Guardrails</h2>
+<div class="limits">
+<label>Max brightness</label>
+<input id="maxBright" type="number" min="1" max="255" value="255">
+<label>Max current (mA)</label>
+<input id="maxCurr" type="number" min="0" value="0">
+<button type="button" id="btnLimits">Apply</button>
+</div>
+<p class="info">Applied live. Current is estimated at 20 mA/channel; 0 mA = no cap.</p>
+<div class="msg" id="limitsMsg"></div>
+
+<h2>Pixel Group</h2>
+<div class="limits">
+<label>W × H</label>
+<input id="pgW" type="number" min="1" value="1" class="small">
+<input id="pgH" type="number" min="1" value="1" class="small">
+<button type="button" id="btnGrid">Apply</button>
+</div>
+<p class="info">Combine N×M physical LEDs into one logical pixel (e.g. 2×2 on a 16×16 matrix → 8×8 logical). <span id="gridInfo"></span></p>
+<div class="msg" id="gridMsg"></div>
+
+<!-- AI Settings (stored in browser, used by /compose) -->
+<h2>AI Integration</h2>
+<label>Provider</label>
+<select id="aiProvider">
+<option value="claude">Claude (Anthropic)</option>
+<option value="openai">OpenAI</option>
+<option value="custom">Custom (OpenAI-compatible)</option>
+</select>
+
+<label>Base URL</label>
+<input id="aiBaseUrl" type="text" placeholder="https://api.anthropic.com">
+<p style="font-size:.68rem;color:var(--text-dim);margin-bottom:10px">Auto-filled for Claude/OpenAI. For Custom, use OpenAI-compatible endpoints (Ollama, LM Studio, vLLM, etc.)</p>
+
+<label>API Key</label>
+<div id="keyStatus" class="key-status unset">No key configured</div>
+<div class="key-row">
+<input id="aiKeyInput" type="password" placeholder="Paste your API key here...">
+<button type="button" id="btnSaveKey">Save</button>
+</div>
+<p style="font-size:.68rem;color:var(--text-dim);margin-bottom:10px">Stored in browser only. Used by the Compose page to call the AI API directly.</p>
+<button type="button" id="btnClearKey" style="font-size:.75rem;color:var(--off);background:none;border:1px solid var(--off);border-radius:6px;padding:4px 12px;cursor:pointer;margin-bottom:10px">Clear Key</button>
+
+<label>Model</label>
+<input id="aiModel" type="text" placeholder="claude-haiku-4-5-20251001">
+<p style="font-size:.68rem;color:var(--text-dim)">Claude: claude-haiku-4-5-20251001, claude-sonnet-4-6, claude-opus-4-6<br>OpenAI: gpt-4o-mini, gpt-4o<br>Custom: any model name your endpoint supports</p>
+
+</div>
+<p class="copyright">&copy; <a href="https://plaiiin.com">plaiiin.com</a></p>
+
+<script>
+var dark=localStorage.getItem('theme')!=='light';
+function applyTheme(){document.body.classList.toggle('light',!dark);document.getElementById('themeBtn').textContent=dark?'\u2600':'\u263E';}
+applyTheme();
+document.getElementById('themeBtn').onclick=function(){dark=!dark;localStorage.setItem('theme',dark?'dark':'light');applyTheme();};
+
+// Show/hide the clock pin input based on the selected chip (two-wire only).
+function syncClkVisibility(){
+  var t=document.getElementById('led_type').value;
+  document.getElementById('clkWrap').style.display=(t==='sk9822'||t==='apa102')?'':'none';
+}
+document.getElementById('led_type').onchange=syncClkVisibility;
+
+// Pre-fill device config from API
+fetch('/api').then(function(r){return r.json()}).then(function(d){
+  if(d.nodeName)document.getElementById('node_name').value=d.nodeName;
+  if(d.vendor)document.getElementById('vendor_name').value=d.vendor;
+  if(d.apiVersion)document.getElementById('api_version').value=d.apiVersion;
+  if(d.firmwareVersion)document.getElementById('firmware_version').value=d.firmwareVersion;
+  if(d.ledPin!=null)document.getElementById('led_pin').value=d.ledPin;
+  if(d.ledClkPin!=null)document.getElementById('led_clk_pin').value=d.ledClkPin;
+  if(d.ledCount)document.getElementById('led_count').value=d.ledCount;
+  if(d.ledType){var s=document.getElementById('led_type');for(var i=0;i<s.options.length;i++)if(s.options[i].value===d.ledType)s.selectedIndex=i;}
+  if(d.lampType)document.getElementById('lamp_type').value=d.lampType;
+  if(d.lampForm)document.getElementById('lamp_form').value=d.lampForm;
+  syncClkVisibility();
+}).catch(syncClkVisibility);
+
+// Guardrails (max brightness / current) — live, no reboot.
+var maxBright=document.getElementById('maxBright');
+var maxCurr=document.getElementById('maxCurr');
+var limitsMsg=document.getElementById('limitsMsg');
+function flashMsg(el, text, ok){
+  el.textContent=text;
+  el.className='msg '+(ok?'ok':'err');
+  setTimeout(function(){el.textContent='';},2500);
+}
+fetch('/api/limits').then(function(r){return r.json()}).then(function(d){
+  if(d.maxBrightness!=null)maxBright.value=d.maxBrightness;
+  if(d.maxCurrentMa!=null)maxCurr.value=d.maxCurrentMa;
+}).catch(function(){});
+document.getElementById('btnLimits').onclick=function(){
+  fetch('/api/limits',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      maxBrightness:parseInt(maxBright.value)||255,
+      maxCurrentMa:parseInt(maxCurr.value)||0
+    })})
+    .then(function(r){return r.json()}).then(function(){flashMsg(limitsMsg,'Guardrails applied',true);})
+    .catch(function(e){flashMsg(limitsMsg,'Failed: '+e.message,false);});
+};
+
+// Pixel grouping — independent section.
+var pgW=document.getElementById('pgW');
+var pgH=document.getElementById('pgH');
+var gridMsg=document.getElementById('gridMsg');
+var gridInfo=document.getElementById('gridInfo');
+function refreshGridInfo(d){
+  if(d.physicalW&&d.physicalH&&d.logicalW&&d.logicalH){
+    gridInfo.textContent='Current: '+d.physicalW+'×'+d.physicalH+' physical → '+d.logicalW+'×'+d.logicalH+' logical.';
+  }
+}
+fetch('/api/grid').then(function(r){return r.json()}).then(function(d){
+  if(d.pixelGroupW!=null)pgW.value=d.pixelGroupW;
+  if(d.pixelGroupH!=null)pgH.value=d.pixelGroupH;
+  refreshGridInfo(d);
+}).catch(function(){});
+document.getElementById('btnGrid').onclick=function(){
+  fetch('/api/grid',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      pixelGroupW:parseInt(pgW.value)||1,
+      pixelGroupH:parseInt(pgH.value)||1
+    })})
+    .then(function(r){return r.json()}).then(function(d){
+      flashMsg(gridMsg,'Pixel group applied',true);
+      refreshGridInfo(d);
+    })
+    .catch(function(e){flashMsg(gridMsg,'Failed: '+e.message,false);});
+};
+
+// --- AI key storage (shared with /compose) ---
+var AI_KEY_STORAGE='_plk';
+function storeKey(key){if(!key)return;localStorage.setItem(AI_KEY_STORAGE,btoa(key.split('').reverse().join('')));}
+function hasKey(){return !!localStorage.getItem(AI_KEY_STORAGE);}
+function clearKey(){localStorage.removeItem(AI_KEY_STORAGE);}
+function updateKeyStatus(){
+  var el=document.getElementById('keyStatus');
+  if(hasKey()){el.textContent='Key configured';el.className='key-status set';}
+  else{el.textContent='No key configured';el.className='key-status unset';}
+}
+updateKeyStatus();
+document.getElementById('btnSaveKey').onclick=function(){
+  var val=document.getElementById('aiKeyInput').value.trim();
+  if(val){storeKey(val);document.getElementById('aiKeyInput').value='';updateKeyStatus();}
+};
+document.getElementById('btnClearKey').onclick=function(){clearKey();updateKeyStatus();};
+
+// Provider + model + base URL
+var DEFAULT_BASE_URLS={claude:'https://api.anthropic.com',openai:'https://api.openai.com',custom:''};
+var aiProvider=localStorage.getItem('aiProvider')||'claude';
+var aiModel=localStorage.getItem('aiModel')||'claude-haiku-4-5-20251001';
+var aiBaseUrl=localStorage.getItem('aiBaseUrl')||DEFAULT_BASE_URLS[aiProvider]||'';
+document.getElementById('aiProvider').value=aiProvider;
+document.getElementById('aiModel').value=aiModel;
+document.getElementById('aiBaseUrl').value=aiBaseUrl;
+
+document.getElementById('aiProvider').onchange=function(){
+  var prev=aiProvider;
+  aiProvider=this.value;
+  localStorage.setItem('aiProvider',aiProvider);
+  // Auto-fill base URL when switching provider if current value matches the previous default
+  var urlField=document.getElementById('aiBaseUrl');
+  var current=urlField.value.trim();
+  if(!current||current===DEFAULT_BASE_URLS[prev]){
+    urlField.value=DEFAULT_BASE_URLS[aiProvider]||'';
+    localStorage.setItem('aiBaseUrl',urlField.value);
+  }
+};
+document.getElementById('aiModel').oninput=function(){localStorage.setItem('aiModel',this.value.trim());};
+document.getElementById('aiBaseUrl').oninput=function(){localStorage.setItem('aiBaseUrl',this.value.trim());};
+</script>
+</body>
+</html>

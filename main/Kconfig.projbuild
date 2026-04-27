@@ -1,0 +1,99 @@
+menu "PlaiiinLightOS Configuration"
+
+    config PLAIIIN_NODE_NAME
+        string "Node name"
+        default "PlaiiinLight-01"
+        help
+            Unique name for this lamp node.
+
+    config PLAIIIN_VENDOR_NAME
+        string "Vendor name"
+        default "PlaiiinLight"
+
+    config PLAIIIN_FIRMWARE_VERSION
+        string "Firmware version (dot-separated)"
+        default "1.0.0"
+        help
+            Bumped per release, read by /api. Normally overridden at build
+            time from ../version.properties — don't edit by hand.
+
+    config PLAIIIN_API_VERSION
+        string "API version (dot-separated)"
+        default "1.0.0"
+        help
+            Reported by /api. Overridden at build time from version.properties.
+
+    menu "LED Strip"
+        config PLAIIIN_LED_PIN
+            int "LED data GPIO pin"
+            default 2
+            help
+                GPIO pin connected to the LED strip data line.
+
+        config PLAIIIN_LED_CLK_PIN
+            int "LED clock GPIO pin (two-wire chips only, e.g. SK9822)"
+            default -1
+            help
+                GPIO pin for the clock line on two-wire LEDs like SK9822.
+                Leave -1 for one-wire chips (WS2812/SK6812).
+
+        config PLAIIIN_LED_COUNT
+            int "Number of LEDs"
+            default 30
+            range 1 1024
+
+        config PLAIIIN_LED_TYPE
+            string "LED type"
+            default "ws2812"
+            help
+                LED driver identifier. Supported:
+                  "ws2812"   — one-wire WS2812/WS2812B/NeoPixel (GRB, 3 bytes/LED)
+                  "sk6812"   — one-wire SK6812 RGB (GRB, 3 bytes/LED)
+                  "sk6812w"  — one-wire SK6812 RGBW (GRBW, 4 bytes/LED)
+                  "sk9822"   — two-wire (data+clock, BGR+brightness)
+
+        config PLAIIIN_LAMP_TYPE
+            string "Lamp type"
+            default "strip"
+            help
+                Form factor identifier reported over HTTP. Examples:
+                "strip", "matrix8x8", "matrix16x16".
+
+        config PLAIIIN_FORM
+            string "Lamp enclosure"
+            default "bare"
+            help
+                Physical enclosure label. Examples: "bare", "tower", "display".
+    endmenu
+
+    menu "WiFi"
+        config PLAIIIN_NETWORK_SSID
+            string "Default STA SSID"
+            default ""
+            help
+                Pre-configured WiFi network the device should try to join on
+                first boot. Leave empty to force captive-portal provisioning.
+
+        config PLAIIIN_NETWORK_PW
+            string "Default STA password"
+            default ""
+            help
+                Password for the pre-configured network. Leave empty for open.
+
+        config PLAIIIN_WIFI_AP_SSID_PREFIX
+            string "SoftAP SSID prefix"
+            default "PlaiiinLight"
+            help
+                Prefix for the SoftAP SSID. MAC suffix is appended.
+
+        config PLAIIIN_WIFI_AP_PASSWORD
+            string "SoftAP password (empty = open)"
+            default ""
+
+        config PLAIIIN_HTTP_PORT
+            int "HTTP server port"
+            default 80
+            range 1 65535
+    endmenu
+
+endmenu
