@@ -39,4 +39,5 @@ idf_component_register(
         "../portal/ota.html"
         "../portal/mqtt.html"
         "../portal/js.html"
+        "../portal/api.html"
 )

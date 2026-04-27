@@ -61,3 +61,22 @@ int  led_control_get_logical_h(void);
 /** Render a logical buffer onto the physical strip honouring pixel grouping.
  *  Expects logical_w * logical_h pixels. */
 esp_err_t led_control_set_logical(const led_color_t *colors, int logical_w, int logical_h);
+
+/** Panel orientation knobs — applied in led_control_set_logical().
+ *  rotation: 0/90/180/270 — visual rotation of the source image.
+ *  origin:   0=TL, 1=TR, 2=BL, 3=BR — corner where the physical chain begins.
+ *  serpentine: 1 = chain zig-zags between rows/cols, 0 = each row/col restarts from origin edge.
+ *  serp_axis: 0 = chain advances along X within a row, 1 = along Y within a column.
+ */
+typedef enum {
+    LED_ORIGIN_TL = 0,
+    LED_ORIGIN_TR = 1,
+    LED_ORIGIN_BL = 2,
+    LED_ORIGIN_BR = 3,
+} led_origin_t;
+
+void led_control_set_orientation(int rotation, int origin, bool serpentine, int serp_axis);
+int  led_control_get_rotation(void);
+int  led_control_get_origin(void);
+bool led_control_get_serpentine(void);
+int  led_control_get_serp_axis(void);

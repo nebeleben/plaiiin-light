@@ -31,6 +31,7 @@
 <a href="/network">Network</a>
 <a href="/mqtt">MQTT</a>
 <a href="/ota">OTA</a>
+<a href="/api">API</a>
 </div>
 <div class="card" style="max-width:520px">
 <div class="hdr">
@@ -60,16 +61,6 @@
 <input type="range" id="fpsSlider" min="1" max="30" value="10" style="flex:1;accent-color:var(--accent)">
 <span id="fpsVal" style="font-size:.85rem;min-width:36px;text-align:right">10</span>
 </div>
-<div id="rotateRow" style="display:none;align-items:center;gap:12px;margin-bottom:12px">
-<span style="font-size:.78rem;color:var(--text-dim);min-width:62px">Rotate</span>
-<select id="rotateSelect" style="flex:1">
-<option value="0">0&deg; (no rotation)</option>
-<option value="90">90&deg; clockwise</option>
-<option value="180">180&deg;</option>
-<option value="270">270&deg; (90&deg; counter-clockwise)</option>
-</select>
-</div>
-
 <div class="gen-controls" id="playBar" style="display:none">
 <button class="play-btn" id="btnPlay">Play</button>
 <button class="stop-btn" id="btnStop">Stop</button>
@@ -85,7 +76,7 @@
 <script>
 var ledCount=64,gridW=8,gridH=8,isMatrix=true;
 var frames=[],frameIdx=0,playing=false,timer=null,ws=null,streaming=false;
-var fps=10,messages=[],rotation=0;
+var fps=10,messages=[];
 var lastJsSource=null;  // raw JS body of the most recent generator response
 
 // Theme
@@ -123,35 +114,6 @@ function buildGrid(){
   for(var i=0;i<total;i++){var p=document.createElement('div');p.className='px';p.style.background='#111';p.style.width=sz+'px';p.style.height=sz+'px';g.appendChild(p);}
   el.appendChild(g);
   document.getElementById('gridLabel').textContent=isMatrix?gridW+'x'+gridH+' Matrix':'Strip ('+ledCount+')';
-  document.getElementById('rotateRow').style.display=isMatrix?'flex':'none';
-}
-
-// Rotation dropdown — persisted on the device (NVS), fetched on page load.
-var rotateSel=document.getElementById('rotateSelect');
-fetch('/api/rotation').then(function(r){return r.json()}).then(function(d){
-  rotation=parseInt(d.rotation)||0;
-  rotateSel.value=String(rotation);
-  if(frames.length)renderFrame(frameIdx);
-}).catch(function(){ rotateSel.value=String(rotation); });
-rotateSel.onchange=function(){
-  rotation=parseInt(this.value)||0;
-  fetch('/api/rotation',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({rotation:rotation})}).catch(function(){});
-  if(frames.length)renderFrame(frameIdx);
-};
-
-// Given a physical LED index (px,py), return the source image pixel index after applying rotation.
-// Rotation is the physical matrix rotation: to show the image "upright" on a rotated matrix,
-// we pick the source pixel from the inverse rotation.
-function rotatedSourceIdx(physIdx){
-  if(!isMatrix||rotation===0)return physIdx;
-  var px=physIdx%gridW, py=Math.floor(physIdx/gridW);
-  var sx,sy;
-  if(rotation===90){sx=py; sy=gridH-1-px;}
-  else if(rotation===180){sx=gridW-1-px; sy=gridH-1-py;}
-  else if(rotation===270){sx=gridW-1-py; sy=px;}
-  else{sx=px; sy=py;}
-  return sy*gridW+sx;
 }
 
 // Build grid immediately with defaults
@@ -306,14 +268,12 @@ function renderFrame(idx){
     var r=data[i*4],g=data[i*4+1],b=data[i*4+2];
     pixels[i].style.background='rgb('+r+','+g+','+b+')';
   }
-  // Send logical raster to the device (rotation applied source-side). The
-  // firmware expands to physical pixels via its pixel-group setting and
-  // applies serpentine when walking the physical LED chain.
+  // Send the *logical* raster as-is. The device applies pixel grouping,
+  // serpentine wiring, origin and rotation when walking the LED chain.
   if(streaming&&ws&&ws.readyState===1){
     var rgbFlat=new Uint8Array(total*3);
     for(var i=0;i<total;i++){
-      var src_i=rotatedSourceIdx(i);
-      var r=data[src_i*4]||0, g=data[src_i*4+1]||0, b=data[src_i*4+2]||0;
+      var r=data[i*4]||0, g=data[i*4+1]||0, b=data[i*4+2]||0;
       rgbFlat[i*3]=r;rgbFlat[i*3+1]=g;rgbFlat[i*3+2]=b;
     }
     var buf=new Uint8Array(3+total*3);buf[0]=0x01;buf[1]=(total>>8)&0xFF;buf[2]=total&0xFF;

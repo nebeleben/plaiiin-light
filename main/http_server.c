@@ -6,6 +6,7 @@
 #include "plaiiin_mqtt.h"
 #include "config_store.h"
 #include "led_control.h"
+#include "js_storage.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -15,9 +16,34 @@
 
 static const char *TAG = "http_server";
 
+// Forward declarations for the embedded /api docs page so the content-negotiating
+// /api handler below can fall through to the HTML page. The full block of
+// extern declarations for the other portal pages lives further down.
+extern const uint8_t api_html_start[] asm("_binary_api_html_start");
+extern const uint8_t api_html_end[]   asm("_binary_api_html_end");
+
+// GET /api - browsers (Accept: text/html) get the docs page; everything else
+// gets the JSON device-info payload below.
+static esp_err_t api_html_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
+    httpd_resp_send(req, (const char *)api_html_start, api_html_end - api_html_start);
+    return ESP_OK;
+}
+
 // GET /api - device info (reads NVS with Kconfig fallback)
 static esp_err_t api_info_handler(httpd_req_t *req)
 {
+    // Content-negotiate: a browser hitting /api as a page wants HTML; CLI/JS
+    // clients sending Accept: application/json (or no Accept) get JSON.
+    char accept[128] = {0};
+    if (httpd_req_get_hdr_value_str(req, "Accept", accept, sizeof(accept) - 1) == ESP_OK) {
+        if (strstr(accept, "text/html") && !strstr(accept, "application/json")) {
+            return api_html_handler(req);
+        }
+    }
+
     char node_name[64], vendor[64], api_ver[32];
     char lamp_type[32], lamp_form[32];
 
@@ -30,8 +56,10 @@ static esp_err_t api_info_handler(httpd_req_t *req)
 
     int32_t led_pin = config_get_i32_or(CONFIG_KEY_LED_PIN, CONFIG_PLAIIIN_LED_PIN);
     int32_t led_clk_pin = config_get_i32_or(CONFIG_KEY_LED_CLK_PIN, CONFIG_PLAIIIN_LED_CLK_PIN);
-    int32_t rotation = config_get_i32_or(CONFIG_KEY_ROTATION, 0);
-    if (rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270) rotation = 0;
+    int rotation       = led_control_get_rotation();
+    int origin         = led_control_get_origin();
+    bool serpentine    = led_control_get_serpentine();
+    int serp_axis      = led_control_get_serp_axis();
     int led_count = led_control_get_count();
 
     char led_type_str[16] = {0};
@@ -53,13 +81,34 @@ static esp_err_t api_info_handler(httpd_req_t *req)
         "\"physicalW\":%d,\"physicalH\":%d,"
         "\"logicalW\":%d,\"logicalH\":%d,"
         "\"pixelGroupW\":%d,\"pixelGroupH\":%d,"
-        "\"rotation\":%ld}",
+        "\"rotation\":%d,\"origin\":%d,\"serpentine\":%s,\"serpentineAxis\":%d}",
         vendor, api_ver, CONFIG_PLAIIIN_FIRMWARE_VERSION,
         node_name, (long)led_pin, (long)led_clk_pin, led_count,
         led_type_str, lamp_type, lamp_form,
         phys_w, phys_h, logical_w, logical_h, px_group_w, px_group_h,
-        (long)rotation);
+        rotation, origin, serpentine ? "true" : "false", serp_axis);
 
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    return ESP_OK;
+}
+
+// GET /api/storage -> {"total":N,"used":N,"free":N,"files":N}
+static esp_err_t storage_info_handler(httpd_req_t *req)
+{
+    size_t total = 0, used = 0, files = 0;
+    esp_err_t err = js_storage_info(&total, &used, &files);
+    if (err != ESP_OK) {
+        // SPIFFS not mounted (older flash without storage partition).
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"total\":0,\"used\":0,\"free\":0,\"files\":0}");
+        return ESP_OK;
+    }
+    size_t free_b = (used > total) ? 0 : (total - used);
+    char json[128];
+    snprintf(json, sizeof(json),
+        "{\"total\":%u,\"used\":%u,\"free\":%u,\"files\":%u}",
+        (unsigned)total, (unsigned)used, (unsigned)free_b, (unsigned)files);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, json);
     return ESP_OK;
@@ -78,6 +127,7 @@ extern const uint8_t mqtt_html_start[] asm("_binary_mqtt_html_start");
 extern const uint8_t mqtt_html_end[]   asm("_binary_mqtt_html_end");
 extern const uint8_t js_html_start[] asm("_binary_js_html_start");
 extern const uint8_t js_html_end[]   asm("_binary_js_html_end");
+// api_html_{start,end} forward-declared near the top of the file.
 
 static void send_html(httpd_req_t *req, const uint8_t *start, const uint8_t *end)
 {
@@ -210,6 +260,13 @@ httpd_handle_t http_server_start(void)
         .handler = api_info_handler
     };
     httpd_register_uri_handler(server, &api_info);
+
+    httpd_uri_t storage_info = {
+        .uri = "/api/storage",
+        .method = HTTP_GET,
+        .handler = storage_info_handler
+    };
+    httpd_register_uri_handler(server, &storage_info);
 
     httpd_uri_t control_page = {
         .uri = "/control",

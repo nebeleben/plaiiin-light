@@ -16,3 +16,6 @@ esp_err_t js_storage_read(const char *name, char **out, size_t *len_out);
 esp_err_t js_storage_write(const char *name, const char *source, size_t len);
 
 esp_err_t js_storage_remove(const char *name);
+
+/** Returns SPIFFS usage. file_count counts only *.js entries in the root. */
+esp_err_t js_storage_info(size_t *total, size_t *used, size_t *file_count);

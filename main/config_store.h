@@ -27,6 +27,17 @@
 #define CONFIG_KEY_PX_GROUP_W    "px_group_w"
 #define CONFIG_KEY_PX_GROUP_H    "px_group_h"
 #define CONFIG_KEY_ROTATION      "rotation"
+// Origin corner of the *physical* LED chain on a matrix panel.
+// 0=TL, 1=TR, 2=BL, 3=BR. Default 0 (top-left).
+#define CONFIG_KEY_ORIGIN        "origin"
+// Whether wiring zig-zags between rows/cols (1) or all rows/cols start
+// from the same edge (0). Default 1 — common for WS2812 matrices.
+#define CONFIG_KEY_SERPENTINE    "serpentine"
+// Primary axis the chain runs along on a matrix panel.
+// 0 = horizontal (chain advances along X within a row, then steps in Y),
+// 1 = vertical   (chain advances along Y within a column, then steps in X).
+// Default 0.
+#define CONFIG_KEY_SERP_AXIS     "serp_axis"
 
 esp_err_t config_store_init(void);
 esp_err_t config_store_get_str(const char *key, char *out, size_t max_len);

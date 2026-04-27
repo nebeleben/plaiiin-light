@@ -244,36 +244,71 @@ static esp_err_t grid_set_handler(httpd_req_t *req)
     return grid_get_handler(req);
 }
 
-// GET /api/rotation -> {"rotation":0|90|180|270}
-static esp_err_t rotation_get_handler(httpd_req_t *req)
+// GET /api/orientation -> {"rotation":N,"origin":N,"serpentine":bool,"serpentineAxis":N}
+static esp_err_t orientation_get_handler(httpd_req_t *req)
 {
-    int32_t r = config_get_i32_or(CONFIG_KEY_ROTATION, 0);
-    if (r != 0 && r != 90 && r != 180 && r != 270) r = 0;
-    char resp[32];
-    snprintf(resp, sizeof(resp), "{\"rotation\":%ld}", (long)r);
+    char resp[128];
+    snprintf(resp, sizeof(resp),
+             "{\"rotation\":%d,\"origin\":%d,\"serpentine\":%s,\"serpentineAxis\":%d}",
+             led_control_get_rotation(),
+             led_control_get_origin(),
+             led_control_get_serpentine() ? "true" : "false",
+             led_control_get_serp_axis());
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, resp);
     return ESP_OK;
 }
 
-// POST /api/rotation {"rotation":N}  — applied client-side only; server just persists.
-static esp_err_t rotation_set_handler(httpd_req_t *req)
+// POST /api/orientation  body: any subset of {rotation,origin,serpentine,serpentineAxis}.
+// rotation: 0|90|180|270  origin: 0..3 (TL/TR/BL/BR)  serpentineAxis: 0|1
+static esp_err_t orientation_set_handler(httpd_req_t *req)
 {
-    char buf[64] = {0};
+    char buf[160] = {0};
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
         return ESP_FAIL;
     }
-    char *p = strstr(buf, "rotation");
-    int r = -1;
-    if (p) { p = strchr(p, ':'); if (p) r = atoi(p + 1); }
-    if (r != 0 && r != 90 && r != 180 && r != 270) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "rotation must be 0, 90, 180 or 270");
-        return ESP_FAIL;
+    int rotation  = led_control_get_rotation();
+    int origin    = led_control_get_origin();
+    bool serp     = led_control_get_serpentine();
+    int serp_axis = led_control_get_serp_axis();
+    char *p;
+    if ((p = strstr(buf, "rotation")) != NULL && (p = strchr(p, ':')) != NULL) {
+        int r = atoi(p + 1);
+        if (r != 0 && r != 90 && r != 180 && r != 270) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "rotation must be 0/90/180/270");
+            return ESP_FAIL;
+        }
+        rotation = r;
     }
-    config_store_set_i32(CONFIG_KEY_ROTATION, (int32_t)r);
-    return rotation_get_handler(req);
+    if ((p = strstr(buf, "origin")) != NULL && (p = strchr(p, ':')) != NULL) {
+        int o = atoi(p + 1);
+        if (o < 0 || o > 3) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "origin must be 0..3");
+            return ESP_FAIL;
+        }
+        origin = o;
+    }
+    // Match "serpentine" first; "serpentineAxis" is matched separately to avoid
+    // "serpentine" picking up the value of "serpentineAxis".
+    if ((p = strstr(buf, "serpentineAxis")) != NULL && (p = strchr(p, ':')) != NULL) {
+        int a = atoi(p + 1);
+        if (a != 0 && a != 1) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "serpentineAxis must be 0 or 1");
+            return ESP_FAIL;
+        }
+        serp_axis = a;
+    }
+    if ((p = strstr(buf, "\"serpentine\"")) != NULL && (p = strchr(p, ':')) != NULL) {
+        // Accept true/false or 0/1.
+        while (*++p == ' ') ;
+        if (!strncmp(p, "true", 4))       serp = true;
+        else if (!strncmp(p, "false", 5)) serp = false;
+        else                              serp = atoi(p) != 0;
+    }
+    led_control_set_orientation(rotation, origin, serp, serp_axis);
+    return orientation_get_handler(req);
 }
 
 // GET /api/state -> {"on":true,"color":[r,g,b],"mode":"api"|"stream","brightness":255}
@@ -361,19 +396,19 @@ esp_err_t light_api_register(httpd_handle_t server)
     };
     httpd_register_uri_handler(server, &grid_set);
 
-    httpd_uri_t rotation_get = {
-        .uri = "/api/rotation",
+    httpd_uri_t orientation_get = {
+        .uri = "/api/orientation",
         .method = HTTP_GET,
-        .handler = rotation_get_handler
+        .handler = orientation_get_handler
     };
-    httpd_register_uri_handler(server, &rotation_get);
+    httpd_register_uri_handler(server, &orientation_get);
 
-    httpd_uri_t rotation_set = {
-        .uri = "/api/rotation",
+    httpd_uri_t orientation_set = {
+        .uri = "/api/orientation",
         .method = HTTP_POST,
-        .handler = rotation_set_handler
+        .handler = orientation_set_handler
     };
-    httpd_register_uri_handler(server, &rotation_set);
+    httpd_register_uri_handler(server, &orientation_set);
 
     return ESP_OK;
 }

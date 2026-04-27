@@ -128,6 +128,32 @@ esp_err_t js_storage_write(const char *name, const char *source, size_t len)
     return ESP_OK;
 }
 
+esp_err_t js_storage_info(size_t *total, size_t *used, size_t *file_count)
+{
+    if (total)      *total = 0;
+    if (used)       *used = 0;
+    if (file_count) *file_count = 0;
+    size_t t = 0, u = 0;
+    esp_err_t err = esp_spiffs_info(FS_LABEL, &t, &u);
+    if (err != ESP_OK) return err;
+    if (total) *total = t;
+    if (used)  *used = u;
+    if (file_count) {
+        DIR *d = opendir(BASE_PATH);
+        if (d) {
+            struct dirent *entry;
+            size_t count = 0;
+            while ((entry = readdir(d)) != NULL) {
+                size_t len = strlen(entry->d_name);
+                if (len >= 4 && strcmp(entry->d_name + len - 3, ".js") == 0) count++;
+            }
+            closedir(d);
+            *file_count = count;
+        }
+    }
+    return ESP_OK;
+}
+
 esp_err_t js_storage_remove(const char *name)
 {
     if (!name_is_valid(name)) return ESP_ERR_INVALID_ARG;

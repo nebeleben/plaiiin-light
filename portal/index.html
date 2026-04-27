@@ -29,6 +29,7 @@
 <a href="/network">Network</a>
 <a href="/mqtt">MQTT</a>
 <a href="/ota">OTA</a>
+<a href="/api">API</a>
 </div>
 <div class="card">
 <div class="hdr">
@@ -52,6 +53,7 @@
 <input id="api_version" type="text" placeholder="1.0.0" readonly>
 </div>
 </div>
+<p class="info" id="storageInfo" style="margin-top:6px">Storage: …</p>
 
 <h2>LED Strip</h2>
 <label for="led_type">LED Type</label>
@@ -108,6 +110,33 @@
 <p class="info">Combine N×M physical LEDs into one logical pixel (e.g. 2×2 on a 16×16 matrix → 8×8 logical). <span id="gridInfo"></span></p>
 <div class="msg" id="gridMsg"></div>
 
+<h2>Orientation</h2>
+<div class="limits" id="orientRow">
+<label>Rotation</label>
+<select id="orRot">
+<option value="0">0°</option>
+<option value="90">90° CW</option>
+<option value="180">180°</option>
+<option value="270">270° CW</option>
+</select>
+<label>Origin</label>
+<select id="orOrigin">
+<option value="0">Top-left</option>
+<option value="1">Top-right</option>
+<option value="2">Bottom-left</option>
+<option value="3">Bottom-right</option>
+</select>
+<label>Chain axis</label>
+<select id="orAxis">
+<option value="0">Horizontal (rows)</option>
+<option value="1">Vertical (columns)</option>
+</select>
+<label><input type="checkbox" id="orSerp" style="vertical-align:middle"> Serpentine</label>
+<button type="button" id="btnOrient">Apply</button>
+</div>
+<p class="info">Describes how the matrix is wired and mounted. Rotation visually rotates the source image; origin is the corner where the chain begins; chain axis + serpentine describe the wiring path. Strips ignore these.</p>
+<div class="msg" id="orientMsg"></div>
+
 <!-- AI Settings (stored in browser, used by /compose) -->
 <h2>AI Integration</h2>
 <label>Provider</label>
@@ -149,6 +178,21 @@ function syncClkVisibility(){
   document.getElementById('clkWrap').style.display=(t==='sk9822'||t==='apa102')?'':'none';
 }
 document.getElementById('led_type').onchange=syncClkVisibility;
+
+// Storage usage (DEVICE block).
+function fmtBytes(n){
+  if(n<1024)return n+' B';
+  if(n<1024*1024)return (n/1024).toFixed(1)+' KB';
+  return (n/1024/1024).toFixed(2)+' MB';
+}
+fetch('/api/storage').then(function(r){return r.json()}).then(function(d){
+  var pct = d.total>0 ? Math.round(d.used*100/d.total) : 0;
+  document.getElementById('storageInfo').textContent =
+    'Storage: '+fmtBytes(d.used)+' / '+fmtBytes(d.total)+' used ('+pct+'%) · '+
+    fmtBytes(d.free)+' free · '+d.files+' file'+(d.files===1?'':'s');
+}).catch(function(){
+  document.getElementById('storageInfo').textContent='Storage: unavailable';
+});
 
 // Pre-fill device config from API
 fetch('/api').then(function(r){return r.json()}).then(function(d){
@@ -214,6 +258,30 @@ document.getElementById('btnGrid').onclick=function(){
       refreshGridInfo(d);
     })
     .catch(function(e){flashMsg(gridMsg,'Failed: '+e.message,false);});
+};
+
+// Orientation — rotation + origin + serpentine wiring (live, no reboot).
+var orRot=document.getElementById('orRot');
+var orOrigin=document.getElementById('orOrigin');
+var orAxis=document.getElementById('orAxis');
+var orSerp=document.getElementById('orSerp');
+var orientMsg=document.getElementById('orientMsg');
+fetch('/api/orientation').then(function(r){return r.json()}).then(function(d){
+  if(d.rotation!=null)orRot.value=String(d.rotation);
+  if(d.origin!=null)orOrigin.value=String(d.origin);
+  if(d.serpentineAxis!=null)orAxis.value=String(d.serpentineAxis);
+  if(d.serpentine!=null)orSerp.checked=!!d.serpentine;
+}).catch(function(){});
+document.getElementById('btnOrient').onclick=function(){
+  fetch('/api/orientation',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      rotation:parseInt(orRot.value)||0,
+      origin:parseInt(orOrigin.value)||0,
+      serpentineAxis:parseInt(orAxis.value)||0,
+      serpentine:orSerp.checked
+    })})
+    .then(function(r){return r.json()}).then(function(){flashMsg(orientMsg,'Orientation applied',true);})
+    .catch(function(e){flashMsg(orientMsg,'Failed: '+e.message,false);});
 };
 
 // --- AI key storage (shared with /compose) ---

@@ -38,6 +38,10 @@ static int s_phys_w = 0;
 static int s_phys_h = 0;
 static int s_px_group_w = 1;
 static int s_px_group_h = 1;
+static int  s_rotation = 0;       // 0 / 90 / 180 / 270
+static int  s_origin   = 0;       // 0 TL, 1 TR, 2 BL, 3 BR
+static bool s_serpentine = true;
+static int  s_serp_axis  = 0;     // 0 horizontal, 1 vertical
 
 #define LED_CHANNEL_MA_AT_255  20  // WS2812 per-channel peak at 255
 
@@ -263,6 +267,14 @@ esp_err_t led_control_init(int gpio_pin, int clk_pin, int led_count, const char 
     if (s_px_group_w < 1) s_px_group_w = 1;
     if (s_px_group_h < 1) s_px_group_h = 1;
 
+    s_rotation   = (int)config_get_i32_or(CONFIG_KEY_ROTATION, 0);
+    if (s_rotation != 0 && s_rotation != 90 && s_rotation != 180 && s_rotation != 270) s_rotation = 0;
+    s_origin     = (int)config_get_i32_or(CONFIG_KEY_ORIGIN, 0);
+    if (s_origin < 0 || s_origin > 3) s_origin = 0;
+    s_serpentine = config_get_i32_or(CONFIG_KEY_SERPENTINE, 1) != 0;
+    s_serp_axis  = (int)config_get_i32_or(CONFIG_KEY_SERP_AXIS, 0);
+    if (s_serp_axis != 0 && s_serp_axis != 1) s_serp_axis = 0;
+
     s_frame_buffer = (led_color_t *)calloc(led_count, sizeof(led_color_t));
     if (!s_frame_buffer) {
         ESP_LOGE(TAG, "Failed to allocate frame buffer");
@@ -481,6 +493,38 @@ int led_control_get_logical_h(void)
     return s_phys_h / (s_px_group_h > 0 ? s_px_group_h : 1);
 }
 
+// Map a chain index `chain_i` (the i-th LED on the wire) into its panel coordinates
+// (px,py) on a phys_w × phys_h grid given origin corner + serpentine wiring + axis.
+// (px,py) are in *panel* (post-rotation) space — i.e. how the source image looks
+// when oriented for the viewer.
+static inline void chain_to_panel(int chain_i, int phys_w, int phys_h,
+                                  int origin, bool serpentine, int serp_axis,
+                                  int *out_px, int *out_py)
+{
+    int x, y;
+    if (serp_axis == 0) {
+        // Chain advances along X within a row, then steps in Y.
+        int row = chain_i / phys_w;
+        int col = chain_i - row * phys_w;
+        // For serpentine wiring, every odd row reverses direction.
+        if (serpentine && (row & 1)) col = phys_w - 1 - col;
+        x = col;
+        y = row;
+    } else {
+        // Chain advances along Y within a column, then steps in X.
+        int col = chain_i / phys_h;
+        int row = chain_i - col * phys_h;
+        if (serpentine && (col & 1)) row = phys_h - 1 - row;
+        x = col;
+        y = row;
+    }
+    // Origin corner: TL is the unflipped baseline.
+    if (origin == LED_ORIGIN_TR || origin == LED_ORIGIN_BR) x = phys_w - 1 - x;
+    if (origin == LED_ORIGIN_BL || origin == LED_ORIGIN_BR) y = phys_h - 1 - y;
+    *out_px = x;
+    *out_py = y;
+}
+
 esp_err_t led_control_set_logical(const led_color_t *colors, int logical_w, int logical_h)
 {
     if (!colors || logical_w <= 0 || logical_h <= 0) return ESP_ERR_INVALID_ARG;
@@ -494,25 +538,67 @@ esp_err_t led_control_set_logical(const led_color_t *colors, int logical_w, int 
     led_color_t *frame = (led_color_t *)calloc(total, sizeof(led_color_t));
     if (!frame) return ESP_ERR_NO_MEM;
 
-    // phys_idx runs along the physical LED chain. On matrix panels the LEDs
-    // are typically wired in a serpentine pattern, so for odd rows the first
-    // LED on the chain corresponds to the right edge of the logical grid.
-    bool serpentine = phys_h > 1;
-    for (int py = 0; py < phys_h; py++) {
-        int ly = py / gh;
+    // For non-matrix panels (single row strips), the orientation transform
+    // collapses to identity and the chain is just the source order.
+    bool is_matrix = (phys_h > 1);
+    int rotation = is_matrix ? s_rotation : 0;
+    int origin   = is_matrix ? s_origin   : 0;
+    bool serp    = is_matrix ? s_serpentine : false;
+    int serp_axis = is_matrix ? s_serp_axis : 0;
+
+    // Panel-space dimensions are the same as physical dimensions; the
+    // rotation only affects how we sample the *source* image.
+    for (int chain_i = 0; chain_i < s_led_count && chain_i < total; chain_i++) {
+        int px, py;
+        chain_to_panel(chain_i, phys_w, phys_h, origin, serp, serp_axis, &px, &py);
+
+        // Rotation: physical panel is mounted rotated by `rotation` degrees
+        // CW relative to the source image. To display the image upright on a
+        // panel rotated by R, sample the source from inverse rotation.
+        int sx, sy, src_w, src_h;
+        if (rotation == 0)        { sx = px;            sy = py;            src_w = phys_w; src_h = phys_h; }
+        else if (rotation == 90)  { sx = py;            sy = phys_w - 1 - px; src_w = phys_h; src_h = phys_w; }
+        else if (rotation == 180) { sx = phys_w - 1 - px; sy = phys_h - 1 - py; src_w = phys_w; src_h = phys_h; }
+        else /* 270 */            { sx = phys_h - 1 - py; sy = px;            src_w = phys_h; src_h = phys_w; }
+
+        // Source image lives in logical space — fold pixel grouping in.
+        int lx = sx / gw;
+        int ly = sy / gh;
+        if (lx >= logical_w) lx = logical_w - 1;
         if (ly >= logical_h) ly = logical_h - 1;
-        for (int px = 0; px < phys_w; px++) {
-            // Map the logical-space X according to serpentine wiring so that
-            // consecutive LEDs on the chain read the right logical column.
-            int phys_col = (serpentine && (py % 2 == 1)) ? (phys_w - 1 - px) : px;
-            int lx = phys_col / gw;
-            if (lx >= logical_w) lx = logical_w - 1;
-            int phys_idx = py * phys_w + px;
-            int log_idx = ly * logical_w + lx;
-            if (phys_idx < total) frame[phys_idx] = colors[log_idx];
-        }
+        // (src_w/src_h are kept above for clarity and future bounds checks.)
+        (void)src_w; (void)src_h;
+
+        frame[chain_i] = colors[ly * logical_w + lx];
     }
+
     esp_err_t err = led_control_set_all(frame, total);
     free(frame);
     return err;
 }
+
+void led_control_set_orientation(int rotation, int origin, bool serpentine, int serp_axis)
+{
+    if (rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270) rotation = 0;
+    if (origin < 0 || origin > 3) origin = 0;
+    if (serp_axis != 0 && serp_axis != 1) serp_axis = 0;
+    s_rotation   = rotation;
+    s_origin     = origin;
+    s_serpentine = serpentine;
+    s_serp_axis  = serp_axis;
+    config_store_set_i32(CONFIG_KEY_ROTATION,   rotation);
+    config_store_set_i32(CONFIG_KEY_ORIGIN,     origin);
+    config_store_set_i32(CONFIG_KEY_SERPENTINE, serpentine ? 1 : 0);
+    config_store_set_i32(CONFIG_KEY_SERP_AXIS,  serp_axis);
+    ESP_LOGI(TAG, "Orientation: rot=%d origin=%d serp=%d axis=%d",
+             rotation, origin, serpentine ? 1 : 0, serp_axis);
+    // Re-render the current frame so the change shows up immediately.
+    if (s_power_on && backend_ready()) {
+        apply_frame_buffer();
+    }
+}
+
+int  led_control_get_rotation(void)  { return s_rotation; }
+int  led_control_get_origin(void)    { return s_origin; }
+bool led_control_get_serpentine(void){ return s_serpentine; }
+int  led_control_get_serp_axis(void) { return s_serp_axis; }

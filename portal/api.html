@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PlaiiinLight - API</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+.endpoint-table{width:100%;border-collapse:collapse;font-size:.82rem;margin-bottom:18px}
+.endpoint-table th,.endpoint-table td{padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top;text-align:left}
+.endpoint-table th{font-weight:600;color:var(--text-dim);font-size:.72rem;text-transform:uppercase;letter-spacing:.05em}
+.endpoint-table td.method{font-family:monospace;font-size:.72rem;color:var(--accent);width:60px}
+.endpoint-table td.path{font-family:monospace;font-size:.78rem;width:30%}
+.endpoint-table td.body{font-family:monospace;font-size:.72rem;color:var(--text-dim);white-space:pre-wrap}
+.endpoint-table td.desc{color:var(--text);}
+.endpoint-table tr:last-child td{border-bottom:none}
+h2{margin-top:22px}
+.note{font-size:.72rem;color:var(--text-dim);margin-bottom:12px}
+.ws-table td.bytes{font-family:monospace;width:90px;color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="nav">
+<a href="/control">Control</a>
+<a href="/stream">Stream</a>
+<a href="/compose">Compose</a>
+<a href="/js">Scripts</a>
+<a href="/config">Config</a>
+<a href="/network">Network</a>
+<a href="/mqtt">MQTT</a>
+<a href="/ota">OTA</a>
+<a href="/api" class="active">API</a>
+</div>
+<div class="card">
+<div class="hdr">
+<h1>API Reference</h1>
+<button type="button" class="icon-btn" id="themeBtn" title="Toggle light/dark"></button>
+</div>
+<p class="note">Endpoints exposed by this device. Live device info: <a id="apiLink" href="/api">/api</a></p>
+
+<h2>Device Info</h2>
+<table class="endpoint-table">
+<tr><th>Method</th><th>Path</th><th>Body / Response</th><th>Description</th></tr>
+<tr><td class="method">GET</td><td class="path">/api</td><td class="body">{vendor, apiVersion, firmwareVersion, nodeName, ledPin, ledClkPin, ledCount, ledType, lampType, lampForm, physicalW/H, logicalW/H, pixelGroupW/H, rotation, origin, serpentine, serpentineAxis}</td><td class="desc">All device metadata.</td></tr>
+<tr><td class="method">GET</td><td class="path">/api/state</td><td class="body">{on, color:[r,g,b], mode, brightness}</td><td class="desc">Current lamp state.</td></tr>
+<tr><td class="method">GET</td><td class="path">/api/storage</td><td class="body">{total, used, free, files}</td><td class="desc">SPIFFS storage usage in bytes + script file count.</td></tr>
+</table>
+
+<h2>Lamp Control</h2>
+<table class="endpoint-table">
+<tr><th>Method</th><th>Path</th><th>Body / Response</th><th>Description</th></tr>
+<tr><td class="method">POST</td><td class="path">/api/power</td><td class="body">{"on": true|false}</td><td class="desc">Turn LEDs on/off.</td></tr>
+<tr><td class="method">POST</td><td class="path">/api/color</td><td class="body">{"colors": [[r,g,b], ...]}</td><td class="desc">Set LED colors. Values clamped 0–255.</td></tr>
+<tr><td class="method">GET</td><td class="path">/api/brightness</td><td class="body">{brightness:0..255}</td><td class="desc">Current brightness.</td></tr>
+<tr><td class="method">POST</td><td class="path">/api/brightness</td><td class="body">{"brightness": 0..255}</td><td class="desc">Set brightness; saved to NVS.</td></tr>
+<tr><td class="method">POST</td><td class="path">/api/mode</td><td class="body">{"mode": "stream"|"api"}</td><td class="desc">Switch between API and WebSocket streaming mode.</td></tr>
+</table>
+
+<h2>Layout &amp; Orientation</h2>
+<table class="endpoint-table">
+<tr><th>Method</th><th>Path</th><th>Body / Response</th><th>Description</th></tr>
+<tr><td class="method">GET</td><td class="path">/api/grid</td><td class="body">{pixelGroupW/H, physicalW/H, logicalW/H}</td><td class="desc">Current grid &amp; pixel grouping.</td></tr>
+<tr><td class="method">POST</td><td class="path">/api/grid</td><td class="body">{"pixelGroupW": N, "pixelGroupH": N}</td><td class="desc">Set pixel grouping (NVS).</td></tr>
+<tr><td class="method">GET</td><td class="path">/api/orientation</td><td class="body">{rotation, origin, serpentine, serpentineAxis}</td><td class="desc">Panel orientation.</td></tr>
+<tr><td class="method">POST</td><td class="path">/api/orientation</td><td class="body">{"rotation":0|90|180|270, "origin":0..3, "serpentine":bool, "serpentineAxis":0|1}</td><td class="desc">Apply rotation, origin corner, and serpentine wiring (NVS).</td></tr>
+<tr><td class="method">GET</td><td class="path">/api/limits</td><td class="body">{maxBrightness, maxCurrentMa}</td><td class="desc">Hardware guardrails.</td></tr>
+<tr><td class="method">POST</td><td class="path">/api/limits</td><td class="body">{"maxBrightness":N, "maxCurrentMa":N}</td><td class="desc">Update guardrails (NVS).</td></tr>
+</table>
+
+<h2>Scripts</h2>
+<table class="endpoint-table">
+<tr><th>Method</th><th>Path</th><th>Body / Response</th><th>Description</th></tr>
+<tr><td class="method">GET</td><td class="path">/api/js</td><td class="body">{scripts:[...], playing:&lt;name&gt;|null}</td><td class="desc">List scripts and currently playing one.</td></tr>
+<tr><td class="method">GET</td><td class="path">/api/js/{name}</td><td class="body">raw JS source</td><td class="desc">Read a single script.</td></tr>
+<tr><td class="method">PUT</td><td class="path">/api/js/{name}</td><td class="body">JS source body</td><td class="desc">Save script. Validated + eval'd once before write.</td></tr>
+<tr><td class="method">DELETE</td><td class="path">/api/js/{name}</td><td class="body">—</td><td class="desc">Delete a script.</td></tr>
+<tr><td class="method">POST</td><td class="path">/api/play</td><td class="body">{"file":"&lt;name&gt;","fps":N}</td><td class="desc">Run a script at the given FPS.</td></tr>
+<tr><td class="method">POST</td><td class="path">/api/stop</td><td class="body">—</td><td class="desc">Stop JS playback.</td></tr>
+</table>
+
+<h2>OTA &amp; Config</h2>
+<table class="endpoint-table">
+<tr><th>Method</th><th>Path</th><th>Body / Response</th><th>Description</th></tr>
+<tr><td class="method">POST</td><td class="path">/api/ota</td><td class="body">application/octet-stream — firmware binary</td><td class="desc">Upload a new firmware image.</td></tr>
+<tr><td class="method">GET</td><td class="path">/api/ota/info</td><td class="body">{version, buildDate, partition, idfVersion}</td><td class="desc">Current firmware info.</td></tr>
+<tr><td class="method">GET</td><td class="path">/api/mqtt</td><td class="body">{active, host, port, nodeName}</td><td class="desc">MQTT settings.</td></tr>
+<tr><td class="method">POST</td><td class="path">/mqtt</td><td class="body">form-encoded mqtt_active/host/port</td><td class="desc">Save MQTT config + reboot.</td></tr>
+<tr><td class="method">POST</td><td class="path">/config</td><td class="body">form-encoded device/LED config</td><td class="desc">Save device config + reboot.</td></tr>
+<tr><td class="method">POST</td><td class="path">/network</td><td class="body">form-encoded WiFi creds</td><td class="desc">Save WiFi config + reboot.</td></tr>
+</table>
+
+<h2>WebSocket Streaming</h2>
+<p class="note">Connect to <code>ws://&lt;ip&gt;/ws</code> for continuous LED streaming. Frames are sent as binary messages.</p>
+<table class="endpoint-table ws-table">
+<tr><th>Bytes</th><th>Field</th><th>Description</th></tr>
+<tr><td class="bytes">[0]</td><td class="body">command</td><td class="desc">0x01 color frame, 0x02 power, 0x03 clear.</td></tr>
+<tr><td class="bytes">[1..2]</td><td class="body">led count (uint16 BE)</td><td class="desc">0x01 only.</td></tr>
+<tr><td class="bytes">[3..]</td><td class="body">RGB bytes</td><td class="desc">0x01 only — 3 bytes per LED (R,G,B). Logical raster; device handles pixel grouping + rotation + serpentine.</td></tr>
+<tr><td class="bytes">[0x02,b]</td><td class="body">power</td><td class="desc">b=0 off, b=1 on.</td></tr>
+<tr><td class="bytes">[0x03]</td><td class="body">clear</td><td class="desc">All LEDs off.</td></tr>
+</table>
+
+</div>
+<p class="copyright">&copy; <a href="https://plaiiin.com">plaiiin.com</a></p>
+
+<script>
+var dark=localStorage.getItem('theme')!=='light';
+function applyTheme(){document.body.classList.toggle('light',!dark);document.getElementById('themeBtn').textContent=dark?'☀':'☾';}
+applyTheme();
+document.getElementById('themeBtn').onclick=function(){dark=!dark;localStorage.setItem('theme',dark?'dark':'light');applyTheme();};
+</script>
+</body>
+</html>

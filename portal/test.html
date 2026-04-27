@@ -37,6 +37,7 @@
 <a href="/network">Network</a>
 <a href="/mqtt">MQTT</a>
 <a href="/ota">OTA</a>
+<a href="/api">API</a>
 </div>
 <div class="card" style="max-width:520px">
 <div class="hdr">
@@ -67,16 +68,6 @@
 <span id="brightnessVal" style="font-size:.9rem;min-width:36px;text-align:right">100%</span>
 </div>
 
-<div id="rotateRow" style="display:none;align-items:center;gap:12px;margin-bottom:12px">
-<span style="font-size:.78rem;color:var(--text-dim);min-width:62px">Rotate</span>
-<select id="rotateSelect" style="flex:1">
-<option value="0">0&deg; (no rotation)</option>
-<option value="90">90&deg; clockwise</option>
-<option value="180">180&deg;</option>
-<option value="270">270&deg; (90&deg; counter-clockwise)</option>
-</select>
-</div>
-
 <div class="controls" id="ctrlBar" style="display:none">
 <button class="play-btn" id="btnPlay">Play</button>
 <button class="stop-btn" id="btnStop">Stop</button>
@@ -98,7 +89,6 @@
 
 <script>
 var ledCount=30,gridW=0,gridH=0,isMatrix=false;
-var rotation=0;
 var frames=[],frameIdx=0,playing=false,timer=null,ws=null,streamMode=false;
 var fps=10;
 
@@ -167,31 +157,6 @@ function buildLedGrid(){
     grid.appendChild(px);
   }
   el.appendChild(grid);
-  document.getElementById('rotateRow').style.display=isMatrix?'flex':'none';
-}
-
-// Rotation — device-side persisted in NVS.
-var rotateSel=document.getElementById('rotateSelect');
-fetch('/api/rotation').then(function(r){return r.json()}).then(function(d){
-  rotation=parseInt(d.rotation)||0;
-  rotateSel.value=String(rotation);
-  if(frames.length)renderFrame(frameIdx);
-}).catch(function(){ rotateSel.value=String(rotation); });
-rotateSel.onchange=function(){
-  rotation=parseInt(this.value)||0;
-  fetch('/api/rotation',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({rotation:rotation})}).catch(function(){});
-  if(frames.length)renderFrame(frameIdx);
-};
-function rotatedSourceIdx(physIdx){
-  if(!isMatrix||rotation===0)return physIdx;
-  var px=physIdx%gridW, py=Math.floor(physIdx/gridW);
-  var sx,sy;
-  if(rotation===90){sx=py; sy=gridH-1-px;}
-  else if(rotation===180){sx=gridW-1-px; sy=gridH-1-py;}
-  else if(rotation===270){sx=gridW-1-py; sy=px;}
-  else{sx=px; sy=py;}
-  return sy*gridW+sx;
 }
 
 // DnD + file select
@@ -409,14 +374,12 @@ function renderFrame(idx){
     pixels[i].style.background='rgb('+r+','+g+','+b+')';
   }
 
-  // Send via WebSocket if streaming — logical raster, with rotation applied
-  // source-side. The device expands to physical pixels (pixel group) and
-  // handles serpentine LED wiring when mapping logical → physical.
+  // Send via WebSocket if streaming — push the logical raster as-is.
+  // The device handles pixel grouping, serpentine wiring, origin and rotation.
   if(streamMode&&ws&&ws.readyState===1){
     var flat=new Uint8Array(total*3);
     for(var i=0;i<total;i++){
-      var src_i=rotatedSourceIdx(i);
-      var r=data[src_i*4]||0, g=data[src_i*4+1]||0, b=data[src_i*4+2]||0;
+      var r=data[i*4]||0, g=data[i*4+1]||0, b=data[i*4+2]||0;
       flat[i*3]=r;flat[i*3+1]=g;flat[i*3+2]=b;
     }
     var buf=new Uint8Array(3+total*3);
