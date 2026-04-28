@@ -7,6 +7,7 @@
 #include "js_player.h"
 #include "js_storage.h"
 #include "js_api.h"
+#include "mdns_service.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -132,6 +133,10 @@ void app_main(void)
         if (wifi_is_connected()) {
             ESP_LOGI(TAG, "WiFi connected!");
             error_light_clear();
+            // mDNS responder — needs a network interface, so it's started after WiFi.
+            if (mdns_service_start() != ESP_OK) {
+                ESP_LOGW(TAG, "mDNS start failed — discovery from app will use fallback scan");
+            }
             // 8. Start MQTT if configured
             mqtt_client_start();
         } else {

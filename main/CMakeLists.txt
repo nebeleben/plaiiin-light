@@ -14,6 +14,7 @@ idf_component_register(
         "js_storage.c"
         "js_player.c"
         "js_api.c"
+        "mdns_service.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_http_server
