@@ -26,3 +26,6 @@ typedef enum {
 
 esp_err_t ws_server_register(httpd_handle_t server);
 lamp_mode_t ws_server_get_mode(void);
+/** Set the volatile streaming-mode flag. Used by /api/mode in light_api.c
+ *  to flip into stream when a Mac/web client wants to push frames. */
+void ws_server_set_mode(lamp_mode_t mode);

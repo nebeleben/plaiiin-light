@@ -85,6 +85,15 @@
 <label for="lamp_form">Lamp Form</label>
 <input id="lamp_form" name="lamp_form" type="text" placeholder="e.g. bare, tower, display">
 
+<h3 style="margin-top:18px;font-size:.9rem;text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim)">Buttons</h3>
+<p class="info" style="margin:0 0 8px">GPIO numbers for hardware buttons. Use <code>-1</code> for pins that aren't wired. Long-press the on/off button 10 s for a WiFi reset, 15 s for a full reset.</p>
+<label for="btn_pwr_pin">On/Off button GPIO</label>
+<input id="btn_pwr_pin" name="btn_pwr_pin" type="number" min="-1" max="48" placeholder="-1">
+<label for="btn_next_pin">Next-script GPIO</label>
+<input id="btn_next_pin" name="btn_next_pin" type="number" min="-1" max="48" placeholder="-1">
+<label for="btn_prev_pin">Previous-script GPIO</label>
+<input id="btn_prev_pin" name="btn_prev_pin" type="number" min="-1" max="48" placeholder="-1">
+
 <button type="submit" class="submit">Save &amp; Reboot</button>
 </form>
 <p class="info">Device reboots after saving. LED pin/count changes take effect on reboot.</p>
@@ -206,6 +215,9 @@ fetch('/api').then(function(r){return r.json()}).then(function(d){
   if(d.ledType){var s=document.getElementById('led_type');for(var i=0;i<s.options.length;i++)if(s.options[i].value===d.ledType)s.selectedIndex=i;}
   if(d.lampType)document.getElementById('lamp_type').value=d.lampType;
   if(d.lampForm)document.getElementById('lamp_form').value=d.lampForm;
+  if(d.buttonPwrPin!=null)document.getElementById('btn_pwr_pin').value=d.buttonPwrPin;
+  if(d.buttonNextPin!=null)document.getElementById('btn_next_pin').value=d.buttonNextPin;
+  if(d.buttonPrevPin!=null)document.getElementById('btn_prev_pin').value=d.buttonPrevPin;
   syncClkVisibility();
 }).catch(syncClkVisibility);
 
@@ -284,22 +296,29 @@ document.getElementById('btnOrient').onclick=function(){
     .catch(function(e){flashMsg(orientMsg,'Failed: '+e.message,false);});
 };
 
-// --- AI key storage (shared with /compose) ---
-var AI_KEY_STORAGE='_plk';
-function storeKey(key){if(!key)return;localStorage.setItem(AI_KEY_STORAGE,btoa(key.split('').reverse().join('')));}
-function hasKey(){return !!localStorage.getItem(AI_KEY_STORAGE);}
-function clearKey(){localStorage.removeItem(AI_KEY_STORAGE);}
+// AI key — device-side via /api/ai/key. NVS-backed, wiped by factory reset.
+var _hasKey=false;
 function updateKeyStatus(){
   var el=document.getElementById('keyStatus');
-  if(hasKey()){el.textContent='Key configured';el.className='key-status set';}
+  if(_hasKey){el.textContent='Key configured (on device)';el.className='key-status set';}
   else{el.textContent='No key configured';el.className='key-status unset';}
 }
-updateKeyStatus();
-document.getElementById('btnSaveKey').onclick=function(){
+async function refreshKeyStatus(){
+  try{var r=await fetch('/api/ai/key',{cache:'no-store'});var j=r.ok?await r.json():{hasKey:false};_hasKey=!!j.hasKey;}
+  catch(e){_hasKey=false;}
+  updateKeyStatus();
+}
+refreshKeyStatus();
+document.getElementById('btnSaveKey').onclick=async function(){
   var val=document.getElementById('aiKeyInput').value.trim();
-  if(val){storeKey(val);document.getElementById('aiKeyInput').value='';updateKeyStatus();}
+  if(!val)return;
+  try{await fetch('/api/ai/key',{method:'PUT',body:val});document.getElementById('aiKeyInput').value='';refreshKeyStatus();}
+  catch(e){alert('Save failed: '+e.message);}
 };
-document.getElementById('btnClearKey').onclick=function(){clearKey();updateKeyStatus();};
+document.getElementById('btnClearKey').onclick=async function(){
+  try{await fetch('/api/ai/key',{method:'DELETE'});refreshKeyStatus();}
+  catch(e){alert('Clear failed: '+e.message);}
+};
 
 // Provider + model + base URL
 var DEFAULT_BASE_URLS={claude:'https://api.anthropic.com',openai:'https://api.openai.com',custom:''};

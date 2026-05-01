@@ -38,6 +38,42 @@
 // 1 = vertical   (chain advances along Y within a column, then steps in X).
 // Default 0.
 #define CONFIG_KEY_SERP_AXIS     "serp_axis"
+// Persistent lamp mode. "api" (default — direct color via /api/color) or
+// "js" (plays the script named in CONFIG_KEY_CURRENT_JS in a loop). The
+// websocket "stream" mode is volatile and not stored here.
+#define CONFIG_KEY_LAMP_MODE     "lamp_mode"
+// Last-played JS script name (no .js suffix). Picked back up on boot when
+// lamp_mode == "js" and reused by /api/play/next|prev.
+#define CONFIG_KEY_CURRENT_JS    "current_js"
+// Latest base color set via /api/color, packed as 0x00RRGGBB. Passed as the
+// 4th arg to render() so JS animations can tint themselves to whatever HA
+// (or any other client) most recently asked for.
+#define CONFIG_KEY_BASE_COLOR    "base_color"
+// Hardware buttons (Phase 8). Each is a GPIO number; -1 disables. The driver
+// inits an iot_button per pin only when the value is >= 0, so leaving these
+// at -1 has zero runtime cost on devices without buttons wired.
+#define CONFIG_KEY_BTN_PWR_PIN   "btn_pwr_pin"
+#define CONFIG_KEY_BTN_NEXT_PIN  "btn_next_pin"
+#define CONFIG_KEY_BTN_PREV_PIN  "btn_prev_pin"
+// AI provider API key for the on-device /compose page. Lives in NVS so a
+// factory reset can wipe it. The /api/ai/key endpoint never returns the
+// raw key on read — only a has-key boolean — so a snooper can't pull it
+// off a device just because it sits on the same network.
+#define CONFIG_KEY_AI_API_KEY    "ai_api_key"
+// Phase 9 — pairing. `pair_mode` is "unpaired" (default; everything works
+// like before) or "paired" (HTTP requests need Authorization: Bearer
+// <token>, BLE writes need an encrypted/bonded link). `pair_token` is a
+// 32-byte secret rendered as URL-safe base64. Wiped by factory_reset_full.
+#define CONFIG_KEY_PAIR_MODE     "pair_mode"
+#define CONFIG_KEY_PAIR_TOKEN    "pair_token"
+// Bluetooth lifecycle policy:
+//   "auto"   — BT advertises only when WiFi is unconfigured or fails to
+//              associate within ~15s after boot. Once WiFi is up, BT shuts
+//              down to free RAM and reduce surface area.
+//   "always" — BT advertises whenever the device is on.
+//   "never"  — BT stack is not initialized at all.
+// Default "auto".
+#define CONFIG_KEY_BT_ENABLED    "bt_enabled"
 
 esp_err_t config_store_init(void);
 esp_err_t config_store_get_str(const char *key, char *out, size_t max_len);

@@ -1,6 +1,8 @@
 #include "captive_portal.h"
 #include "config_store.h"
 #include "wifi.h"
+#include "pairing.h"
+#include "http_server.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -74,19 +76,13 @@ static char *recv_body(httpd_req_t *req)
 
 static esp_err_t config_page_get_handler(httpd_req_t *req)
 {
-    httpd_resp_set_type(req, "text/html");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
-    httpd_resp_send(req, (const char *)index_html_start,
-                    index_html_end - index_html_start);
+    portal_send_html(req, index_html_start, index_html_end, NULL);
     return ESP_OK;
 }
 
 static esp_err_t network_page_get_handler(httpd_req_t *req)
 {
-    httpd_resp_set_type(req, "text/html");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
-    httpd_resp_send(req, (const char *)network_html_start,
-                    network_html_end - network_html_start);
+    portal_send_html(req, network_html_start, network_html_end, NULL);
     return ESP_OK;
 }
 
@@ -94,6 +90,7 @@ static esp_err_t network_page_get_handler(httpd_req_t *req)
 
 static esp_err_t config_save_handler(httpd_req_t *req)
 {
+    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
     char *buf = recv_body(req);
     if (!buf) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad request");
@@ -108,8 +105,11 @@ static esp_err_t config_save_handler(httpd_req_t *req)
     save_str_if_set(buf, "led_type", CONFIG_KEY_LED_TYPE);
     save_str_if_set(buf, "lamp_type", CONFIG_KEY_LAMP_TYPE);
     save_str_if_set(buf, "lamp_form", CONFIG_KEY_LAMP_FORM);
+    save_i32_if_set(buf, "btn_pwr_pin",  CONFIG_KEY_BTN_PWR_PIN);
+    save_i32_if_set(buf, "btn_next_pin", CONFIG_KEY_BTN_NEXT_PIN);
+    save_i32_if_set(buf, "btn_prev_pin", CONFIG_KEY_BTN_PREV_PIN);
 
-    ESP_LOGI(TAG, "Config saved (device + LED)");
+    ESP_LOGI(TAG, "Config saved (device + LED + buttons)");
     free(buf);
 
     httpd_resp_set_type(req, "text/html");
@@ -124,6 +124,7 @@ static esp_err_t config_save_handler(httpd_req_t *req)
 
 static esp_err_t network_save_handler(httpd_req_t *req)
 {
+    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
     char *buf = recv_body(req);
     if (!buf) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad request");

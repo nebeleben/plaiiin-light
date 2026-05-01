@@ -1,0 +1,632 @@
+#include "bt_service.h"
+#include "config_store.h"
+#include "wifi.h"
+#include "light_api.h"
+#include "js_api.h"
+#include "js_player.h"
+#include "led_control.h"
+#include "ws_server.h"
+#include "pairing.h"
+
+#include "esp_log.h"
+#include "esp_mac.h"
+#include "esp_wifi.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "nvs_flash.h"
+
+#include "host/ble_hs.h"
+#include "host/ble_uuid.h"
+#include "host/util/util.h"
+#include "nimble/ble.h"
+#include "nimble/nimble_port.h"
+#include "nimble/nimble_port_freertos.h"
+#include "services/gap/ble_svc_gap.h"
+#include "services/gatt/ble_svc_gatt.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static const char *TAG = "bt_service";
+
+#define UPLOAD_MAX_BYTES (48 * 1024)
+
+// --- UUIDs ------------------------------------------------------------------
+//
+// Random base 4D9B71C0-1F8E-4A1F-9B8C-3D2E1A0E5C0?. Last byte distinguishes
+// service vs. each characteristic so a sniffer trace is human-readable.
+
+#define DEF_UUID(name, last) \
+    static const ble_uuid128_t name = BLE_UUID128_INIT( \
+        0x00 + (last), 0x5C, 0x0E, 0x1A, 0x2E, 0x3D, 0x8C, 0x9B, \
+        0x1F, 0x4A, 0x8E, 0x1F, 0xC0, 0x71, 0x9B, 0x4D)
+
+DEF_UUID(svc_uuid,            0x00);
+DEF_UUID(chr_device_info,     0x01);
+DEF_UUID(chr_wifi_scan,       0x02);
+DEF_UUID(chr_wifi_config,     0x03);
+DEF_UUID(chr_wifi_status,     0x04);
+DEF_UUID(chr_power,           0x05);
+DEF_UUID(chr_color,           0x06);
+DEF_UUID(chr_mode,            0x07);
+DEF_UUID(chr_current_script,  0x08);
+DEF_UUID(chr_play_next,       0x09);
+DEF_UUID(chr_play_prev,       0x0A);
+DEF_UUID(chr_upload_meta,     0x0B);
+DEF_UUID(chr_upload_data,     0x0C);
+DEF_UUID(chr_upload_status,   0x0D);
+DEF_UUID(chr_pair_token,      0x0E);
+
+// --- State ------------------------------------------------------------------
+
+static bool s_running = false;
+static uint8_t s_own_addr_type = 0;
+static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+static uint16_t s_h_wifi_scan = 0;
+static uint16_t s_h_wifi_status = 0;
+static uint16_t s_h_upload_status = 0;
+static uint16_t s_h_current = 0;
+
+// Active upload state. One concurrent upload — BLE bandwidth + RAM make
+// concurrent transfers a non-goal.
+typedef struct {
+    bool   active;
+    char   name[64];
+    size_t total;
+    size_t received;
+    char  *buf;
+    char   last_status[320];
+} upload_state_t;
+static upload_state_t s_up = {0};
+
+// --- Utilities --------------------------------------------------------------
+
+static int read_u8(struct os_mbuf *om, uint8_t *out)
+{
+    return ble_hs_mbuf_to_flat(om, out, 1, NULL);
+}
+
+static int copy_mbuf_str(struct os_mbuf *om, char *out, size_t max)
+{
+    uint16_t n = OS_MBUF_PKTLEN(om);
+    if (n >= max) n = max - 1;
+    int rc = ble_hs_mbuf_to_flat(om, out, n, NULL);
+    if (rc != 0) return rc;
+    out[n] = 0;
+    return 0;
+}
+
+static int respond(struct os_mbuf *om, const void *data, size_t len)
+{
+    int rc = os_mbuf_append(om, data, len);
+    return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
+static int respond_str(struct os_mbuf *om, const char *s)
+{
+    return respond(om, s, strlen(s));
+}
+
+// Notify a single connected peer that a R/Notify characteristic changed.
+// Safe to call before any subscriber attaches — the central will read
+// the next time it polls. We set + notify.
+static void notify_str(uint16_t handle, const char *s)
+{
+    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) return;
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(s, strlen(s));
+    if (!om) return;
+    int rc = ble_gattc_notify_custom(s_conn_handle, handle, om);
+    if (rc != 0) ESP_LOGW(TAG, "notify h=%u rc=%d", handle, rc);
+}
+
+// --- Pull simple JSON value (string between quotes after "key": ) -----------
+//
+// The Mac app sends very small JSON (≤ MTU), so we don't pull in cJSON just
+// for this. Same scanner pattern as the HTTP handlers.
+static bool extract_json_str(const char *src, const char *key, char *out, size_t out_len)
+{
+    char needle[64];
+    snprintf(needle, sizeof(needle), "\"%s\"", key);
+    const char *p = strstr(src, needle);
+    if (!p) return false;
+    p = strchr(p, ':'); if (!p) return false;
+    p = strchr(p, '"'); if (!p) return false;
+    p++;
+    const char *end = strchr(p, '"');
+    if (!end) return false;
+    size_t n = end - p;
+    if (n >= out_len) n = out_len - 1;
+    memcpy(out, p, n);
+    out[n] = 0;
+    return true;
+}
+
+static bool extract_json_int(const char *src, const char *key, int *out)
+{
+    char needle[64];
+    snprintf(needle, sizeof(needle), "\"%s\"", key);
+    const char *p = strstr(src, needle);
+    if (!p) return false;
+    p = strchr(p, ':'); if (!p) return false;
+    *out = atoi(p + 1);
+    return true;
+}
+
+// --- WiFi scan (BLE-triggered) ---------------------------------------------
+
+static void wifi_scan_task(void *arg)
+{
+    (void)arg;
+    wifi_scan_config_t cfg = {0};
+    esp_err_t err = esp_wifi_scan_start(&cfg, true);   // blocking
+    if (err != ESP_OK) {
+        notify_str(s_h_wifi_scan, "{\"status\":\"error\"}");
+        vTaskDelete(NULL);
+        return;
+    }
+    uint16_t count = 0;
+    esp_wifi_scan_get_ap_num(&count);
+    if (count > 16) count = 16;   // cap — keep payload BLE-friendly
+    wifi_ap_record_t *records = calloc(count, sizeof(wifi_ap_record_t));
+    if (!records) { vTaskDelete(NULL); return; }
+    esp_wifi_scan_get_ap_records(&count, records);
+
+    char buf[800];
+    int off = 0;
+    off += snprintf(buf + off, sizeof(buf) - off, "{\"networks\":[");
+    for (int i = 0; i < count && off < (int)sizeof(buf) - 64; i++) {
+        off += snprintf(buf + off, sizeof(buf) - off,
+                        "%s{\"ssid\":\"%s\",\"rssi\":%d,\"sec\":%d}",
+                        i ? "," : "", records[i].ssid, records[i].rssi,
+                        (int)records[i].authmode);
+    }
+    off += snprintf(buf + off, sizeof(buf) - off, "]}");
+    free(records);
+    notify_str(s_h_wifi_scan, buf);
+    vTaskDelete(NULL);
+}
+
+// --- Characteristic access callbacks ---------------------------------------
+
+static int access_device_info(uint16_t conn, uint16_t attr,
+                              struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    char node[64], vendor[64], api_ver[32], lamp_form[32], lamp_type[32], fw[32];
+    config_get_str_or(CONFIG_KEY_NODE_NAME, node, sizeof(node), CONFIG_PLAIIIN_NODE_NAME);
+    config_get_str_or(CONFIG_KEY_VENDOR_NAME, vendor, sizeof(vendor), CONFIG_PLAIIIN_VENDOR_NAME);
+    config_get_str_or(CONFIG_KEY_API_VERSION, api_ver, sizeof(api_ver), CONFIG_PLAIIIN_API_VERSION);
+    config_get_str_or(CONFIG_KEY_LAMP_FORM, lamp_form, sizeof(lamp_form), CONFIG_PLAIIIN_FORM);
+    config_get_str_or(CONFIG_KEY_LAMP_TYPE, lamp_type, sizeof(lamp_type), CONFIG_PLAIIIN_LAMP_TYPE);
+    snprintf(fw, sizeof(fw), "%s", CONFIG_PLAIIIN_FIRMWARE_VERSION);
+
+    char body[320];
+    snprintf(body, sizeof(body),
+             "{\"node\":\"%s\",\"vendor\":\"%s\",\"api\":\"%s\",\"fw\":\"%s\","
+             "\"lampForm\":\"%s\",\"lampType\":\"%s\"}",
+             node, vendor, api_ver, fw, lamp_form, lamp_type);
+    return respond_str(ctxt->om, body);
+}
+
+static int access_wifi_scan(uint16_t conn, uint16_t attr,
+                            struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        // Kick off scan on a small dedicated task (esp_wifi_scan_start is blocking).
+        xTaskCreate(wifi_scan_task, "ble_wifi_scan", 4096, NULL, 5, NULL);
+        return 0;
+    }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        return respond_str(ctxt->om, "{\"status\":\"idle\"}");
+    }
+    return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+}
+
+static int access_wifi_config(uint16_t conn, uint16_t attr,
+                              struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    char buf[160];
+    if (copy_mbuf_str(ctxt->om, buf, sizeof(buf)) != 0) return BLE_ATT_ERR_UNLIKELY;
+    char ssid[64] = {0}, psk[64] = {0};
+    if (!extract_json_str(buf, "ssid", ssid, sizeof(ssid))) return BLE_ATT_ERR_INVALID_PDU;
+    extract_json_str(buf, "psk", psk, sizeof(psk));   // psk optional (open networks)
+    config_store_set_str(CONFIG_KEY_WIFI_SSID, ssid);
+    config_store_set_str(CONFIG_KEY_WIFI_PASS, psk);
+    notify_str(s_h_wifi_status, "{\"state\":\"saved\",\"hint\":\"reboot to apply\"}");
+    ESP_LOGI(TAG, "BLE wrote WiFi creds for ssid=%s", ssid);
+    return 0;
+}
+
+static int access_wifi_status(uint16_t conn, uint16_t attr,
+                              struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    bool conn_ok = wifi_is_connected();
+    char body[96];
+    snprintf(body, sizeof(body), "{\"state\":\"%s\"}", conn_ok ? "connected" : "idle");
+    return respond_str(ctxt->om, body);
+}
+
+static int access_power(uint16_t conn, uint16_t attr,
+                        struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        uint8_t v = 0;
+        if (read_u8(ctxt->om, &v) != 0) return BLE_ATT_ERR_INVALID_PDU;
+        light_api_apply_power(v != 0);
+        return 0;
+    }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        uint8_t v = led_control_is_on() ? 1 : 0;
+        return respond(ctxt->om, &v, 1);
+    }
+    return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+}
+
+static int access_color(uint16_t conn, uint16_t attr,
+                        struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        uint8_t rgb[3] = {0};
+        uint16_t got = 0;
+        if (ble_hs_mbuf_to_flat(ctxt->om, rgb, sizeof(rgb), &got) != 0 || got != 3) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        light_api_apply_color_solid(rgb[0], rgb[1], rgb[2]);
+        return 0;
+    }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        uint8_t r, g, b;
+        js_player_get_base_color(&r, &g, &b);
+        uint8_t rgb[3] = {r, g, b};
+        return respond(ctxt->om, rgb, 3);
+    }
+    return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+}
+
+static int access_mode(uint16_t conn, uint16_t attr,
+                       struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        char m[16] = {0};
+        if (copy_mbuf_str(ctxt->om, m, sizeof(m)) != 0) return BLE_ATT_ERR_UNLIKELY;
+        if (light_api_apply_mode(m) != 0) return BLE_ATT_ERR_INVALID_PDU;
+        return 0;
+    }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        char persistent[16] = {0};
+        config_get_str_or(CONFIG_KEY_LAMP_MODE, persistent, sizeof(persistent), "api");
+        const char *eff = (ws_server_get_mode() == LAMP_MODE_STREAM) ? "stream" : persistent;
+        return respond_str(ctxt->om, eff);
+    }
+    return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+}
+
+static int access_current(uint16_t conn, uint16_t attr,
+                          struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        // Write a script name → load + play it.
+        char name[64] = {0};
+        if (copy_mbuf_str(ctxt->om, name, sizeof(name)) != 0) return BLE_ATT_ERR_UNLIKELY;
+        if (js_api_play(name, 10) != ESP_OK) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        notify_str(s_h_current, name);
+        return 0;
+    }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        const char *cur = js_player_current_name();
+        return respond_str(ctxt->om, cur ? cur : "");
+    }
+    return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+}
+
+static int access_play_step(uint16_t conn, uint16_t attr,
+                            struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    int direction = (int)(intptr_t)arg;
+    char chosen[64] = {0};
+    esp_err_t err = (direction > 0)
+                    ? js_api_play_next(chosen, sizeof(chosen))
+                    : js_api_play_prev(chosen, sizeof(chosen));
+    if (err != ESP_OK) return BLE_ATT_ERR_UNLIKELY;
+    notify_str(s_h_current, chosen);
+    return 0;
+}
+
+// --- Chunked script upload --------------------------------------------------
+//
+// Protocol (one transfer at a time):
+//   1. Mac writes JSON {"name":"X","total":N} to upload_meta. Resets state,
+//      allocates buffer.
+//   2. Mac writes raw bytes to upload_data, in MTU-sized chunks. Each write
+//      appends to the buffer in order. (Order is guaranteed by ATT.)
+//   3. When received==total, server validates + commits to SPIFFS, then
+//      notifies upload_status with {"state":"done"|"error",...}.
+//   At any time the Mac can read upload_status to see {"state":"in_progress",
+//   "received":R,"total":T}.
+
+static void upload_reset(void)
+{
+    if (s_up.buf) free(s_up.buf);
+    memset(&s_up, 0, sizeof(s_up));
+}
+
+static void upload_finalise(void)
+{
+    char err[160] = {0};
+    int ok = js_api_write_script(s_up.name, s_up.buf, s_up.received, err, sizeof(err));
+    if (ok) {
+        snprintf(s_up.last_status, sizeof(s_up.last_status),
+                 "{\"state\":\"done\",\"name\":\"%s\"}", s_up.name);
+    } else {
+        snprintf(s_up.last_status, sizeof(s_up.last_status),
+                 "{\"state\":\"error\",\"name\":\"%s\",\"error\":\"%s\"}",
+                 s_up.name, err);
+    }
+    notify_str(s_h_upload_status, s_up.last_status);
+    upload_reset();
+}
+
+static int access_upload_meta(uint16_t conn, uint16_t attr,
+                              struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    char buf[160] = {0};
+    if (copy_mbuf_str(ctxt->om, buf, sizeof(buf)) != 0) return BLE_ATT_ERR_UNLIKELY;
+    char name[64] = {0};
+    int total = 0;
+    if (!extract_json_str(buf, "name", name, sizeof(name))) return BLE_ATT_ERR_INVALID_PDU;
+    if (!extract_json_int(buf, "total", &total) || total <= 0 || total > UPLOAD_MAX_BYTES) {
+        return BLE_ATT_ERR_INVALID_PDU;
+    }
+    upload_reset();
+    s_up.buf = malloc(total);
+    if (!s_up.buf) return BLE_ATT_ERR_INSUFFICIENT_RES;
+    s_up.active = true;
+    s_up.total = (size_t)total;
+    s_up.received = 0;
+    snprintf(s_up.name, sizeof(s_up.name), "%s", name);
+    snprintf(s_up.last_status, sizeof(s_up.last_status),
+             "{\"state\":\"ready\",\"name\":\"%s\",\"total\":%d}", name, total);
+    notify_str(s_h_upload_status, s_up.last_status);
+    return 0;
+}
+
+static int access_upload_data(uint16_t conn, uint16_t attr,
+                              struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    if (!s_up.active) return BLE_ATT_ERR_UNLIKELY;
+    uint16_t n = OS_MBUF_PKTLEN(ctxt->om);
+    if (s_up.received + n > s_up.total) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    int rc = ble_hs_mbuf_to_flat(ctxt->om, s_up.buf + s_up.received, n, NULL);
+    if (rc != 0) return BLE_ATT_ERR_UNLIKELY;
+    s_up.received += n;
+    if (s_up.received == s_up.total) {
+        upload_finalise();
+    } else {
+        snprintf(s_up.last_status, sizeof(s_up.last_status),
+                 "{\"state\":\"in_progress\",\"received\":%u,\"total\":%u}",
+                 (unsigned)s_up.received, (unsigned)s_up.total);
+    }
+    return 0;
+}
+
+static int access_upload_status(uint16_t conn, uint16_t attr,
+                                struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    if (s_up.last_status[0]) return respond_str(ctxt->om, s_up.last_status);
+    return respond_str(ctxt->om, "{\"state\":\"idle\"}");
+}
+
+// Bonded peers can read pair_token to learn the shared HTTP secret without
+// the user having to copy it out of a separate UI. Available only in paired
+// mode AND only over an encrypted link (BLE_GATT_CHR_F_READ_ENC flag below).
+static int access_pair_token(uint16_t conn, uint16_t attr,
+                             struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    char tok[64] = {0};
+    if (pairing_get_token(tok, sizeof(tok)) != ESP_OK) return respond_str(ctxt->om, "");
+    return respond_str(ctxt->om, tok);
+}
+
+// --- Service definition -----------------------------------------------------
+
+// Built at start time so we can stamp on the WRITE_ENC / READ_ENC bits when
+// the device is in paired mode (forces NimBLE to require a bonded link
+// before allowing the operation). The pair_token characteristic is only
+// added in paired mode — exposes nothing in unpaired mode and avoids
+// leaking the existence of the secret over a passive scan.
+static struct ble_gatt_chr_def s_chrs[16];
+static struct ble_gatt_svc_def s_svcs[2];
+
+static void build_service_def(bool paired)
+{
+    // Common flag stamp: writable chars get WRITE_ENC, readable secrets
+    // (current_script, pair_token) get READ_ENC. Public reads (device_info,
+    // wifi_status state) stay unencrypted so the Mac can browse before bonding.
+    uint16_t W  = BLE_GATT_CHR_F_WRITE  | (paired ? BLE_GATT_CHR_F_WRITE_ENC : 0);
+    uint16_t R  = BLE_GATT_CHR_F_READ;
+    uint16_t RE = BLE_GATT_CHR_F_READ   | (paired ? BLE_GATT_CHR_F_READ_ENC  : 0);
+    uint16_t N  = BLE_GATT_CHR_F_NOTIFY;
+
+    int i = 0;
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_device_info.u,    .access_cb = access_device_info,    .flags = R };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_wifi_scan.u,      .access_cb = access_wifi_scan,      .flags = R | W | N, .val_handle = &s_h_wifi_scan };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_wifi_config.u,    .access_cb = access_wifi_config,    .flags = W };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_wifi_status.u,    .access_cb = access_wifi_status,    .flags = R | N, .val_handle = &s_h_wifi_status };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_power.u,          .access_cb = access_power,          .flags = R | W };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_color.u,          .access_cb = access_color,          .flags = R | W };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_mode.u,           .access_cb = access_mode,           .flags = R | W };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_current_script.u, .access_cb = access_current,        .flags = RE | W | N, .val_handle = &s_h_current };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_play_next.u,      .access_cb = access_play_step,      .arg = (void *)(intptr_t)+1, .flags = W };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_play_prev.u,      .access_cb = access_play_step,      .arg = (void *)(intptr_t)-1, .flags = W };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_upload_meta.u,    .access_cb = access_upload_meta,    .flags = W };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_upload_data.u,    .access_cb = access_upload_data,    .flags = W };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_upload_status.u,  .access_cb = access_upload_status,  .flags = R | N, .val_handle = &s_h_upload_status };
+    if (paired) {
+        s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_pair_token.u, .access_cb = access_pair_token,     .flags = RE };
+    }
+    s_chrs[i] = (struct ble_gatt_chr_def){ 0 };
+
+    s_svcs[0] = (struct ble_gatt_svc_def){
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = &svc_uuid.u,
+        .characteristics = s_chrs,
+    };
+    s_svcs[1] = (struct ble_gatt_svc_def){ 0 };
+}
+
+// --- Advertising + GAP ------------------------------------------------------
+
+static int gap_event(struct ble_gap_event *event, void *arg);
+
+static void advertise(void)
+{
+    struct ble_hs_adv_fields fields = {0};
+    fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+    fields.tx_pwr_lvl_is_present = 1;
+    fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
+
+    char node[32];
+    config_get_str_or(CONFIG_KEY_NODE_NAME, node, sizeof(node), "PlaiiinLight");
+    fields.name = (uint8_t *)node;
+    fields.name_len = strlen(node);
+    fields.name_is_complete = 1;
+
+    fields.uuids128 = (ble_uuid128_t *)&svc_uuid;
+    fields.num_uuids128 = 1;
+    fields.uuids128_is_complete = 1;
+
+    int rc = ble_gap_adv_set_fields(&fields);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "adv_set_fields rc=%d", rc);
+        return;
+    }
+    struct ble_gap_adv_params params = {0};
+    params.conn_mode = BLE_GAP_CONN_MODE_UND;
+    params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+    rc = ble_gap_adv_start(s_own_addr_type, NULL, BLE_HS_FOREVER, &params, gap_event, NULL);
+    if (rc != 0) ESP_LOGE(TAG, "adv_start rc=%d", rc);
+    else        ESP_LOGI(TAG, "BLE advertising as %s", node);
+}
+
+static int gap_event(struct ble_gap_event *event, void *arg)
+{
+    switch (event->type) {
+    case BLE_GAP_EVENT_LINK_ESTAB:
+    case BLE_GAP_EVENT_CONNECT:
+        if (event->connect.status == 0) {
+            s_conn_handle = event->connect.conn_handle;
+            ESP_LOGI(TAG, "BLE connected handle=%d", s_conn_handle);
+        } else {
+            advertise();
+        }
+        return 0;
+    case BLE_GAP_EVENT_DISCONNECT:
+        ESP_LOGI(TAG, "BLE disconnected reason=%d", event->disconnect.reason);
+        s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+        upload_reset();
+        advertise();
+        return 0;
+    case BLE_GAP_EVENT_MTU:
+        ESP_LOGI(TAG, "BLE MTU=%d", event->mtu.value);
+        return 0;
+    case BLE_GAP_EVENT_ADV_COMPLETE:
+        advertise();
+        return 0;
+    }
+    return 0;
+}
+
+static void on_sync(void)
+{
+    int rc = ble_hs_util_ensure_addr(0);
+    if (rc) ESP_LOGE(TAG, "ensure_addr rc=%d", rc);
+    rc = ble_hs_id_infer_auto(0, &s_own_addr_type);
+    if (rc) { ESP_LOGE(TAG, "infer_auto rc=%d", rc); return; }
+    advertise();
+}
+
+static void on_reset(int reason) { ESP_LOGW(TAG, "BLE reset reason=%d", reason); }
+
+static void host_task(void *param)
+{
+    nimble_port_run();
+    nimble_port_freertos_deinit();
+}
+
+esp_err_t bt_service_start(void)
+{
+    if (s_running) return ESP_OK;
+
+    char policy[16] = {0};
+    config_get_str_or(CONFIG_KEY_BT_ENABLED, policy, sizeof(policy), "auto");
+    if (strcmp(policy, "never") == 0) {
+        ESP_LOGI(TAG, "BT disabled by policy=never");
+        return ESP_OK;
+    }
+
+    esp_err_t err = nimble_port_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "nimble_port_init err=%s", esp_err_to_name(err));
+        return err;
+    }
+    ble_hs_cfg.sync_cb = on_sync;
+    ble_hs_cfg.reset_cb = on_reset;
+
+    // Phase 9 — Just Works bonding when paired. NoInputNoOutput cap means
+    // the host (macOS) will NOT prompt for a passkey; it auto-bonds. Future
+    // upgrade to LE Secure Connections + passkey can flip these capabilities
+    // without changing the rest of the surface.
+    bool paired = pairing_is_paired();
+    ble_hs_cfg.sm_io_cap = 3;          // BLE_HS_IO_NO_INPUT_OUTPUT
+    ble_hs_cfg.sm_bonding = paired ? 1 : 0;
+    ble_hs_cfg.sm_mitm = 0;            // no MITM protection (Just Works)
+    ble_hs_cfg.sm_sc = 1;              // LE Secure Connections — cheap, modern
+    ble_hs_cfg.sm_our_key_dist = 1;    // ENC_KEY
+    ble_hs_cfg.sm_their_key_dist = 1;  // ENC_KEY
+
+    ble_svc_gap_init();
+    ble_svc_gatt_init();
+
+    build_service_def(paired);
+    int rc = ble_gatts_count_cfg(s_svcs);
+    if (rc != 0) { ESP_LOGE(TAG, "count_cfg rc=%d", rc); return ESP_FAIL; }
+    rc = ble_gatts_add_svcs(s_svcs);
+    if (rc != 0) { ESP_LOGE(TAG, "add_svcs rc=%d", rc); return ESP_FAIL; }
+
+    char node[32];
+    config_get_str_or(CONFIG_KEY_NODE_NAME, node, sizeof(node), "PlaiiinLight");
+    ble_svc_gap_device_name_set(node);
+
+    nimble_port_freertos_init(host_task);
+    s_running = true;
+    ESP_LOGI(TAG, "BT service started (policy=%s)", policy);
+    return ESP_OK;
+}
+
+void bt_service_notify_wifi_connected(void)
+{
+    if (!s_running) return;
+    char policy[16] = {0};
+    config_get_str_or(CONFIG_KEY_BT_ENABLED, policy, sizeof(policy), "auto");
+    if (strcmp(policy, "auto") != 0) return;
+    // Tear down to free RAM. NimBLE doesn't have a clean port_deinit on all
+    // IDF versions; on those that don't, stop advertising and let it idle.
+    ESP_LOGI(TAG, "WiFi up — stopping BLE advertising (auto policy)");
+    ble_gap_adv_stop();
+    if (s_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
+        ble_gap_terminate(s_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    }
+}
+
+bool bt_service_is_running(void)
+{
+    return s_running;
+}

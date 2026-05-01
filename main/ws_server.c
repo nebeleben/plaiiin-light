@@ -1,5 +1,6 @@
 #include "ws_server.h"
 #include "led_control.h"
+#include "pairing.h"
 #include "esp_log.h"
 #include <string.h>
 #include <stdlib.h>
@@ -80,7 +81,9 @@ static void handle_ws_binary(uint8_t *data, size_t len)
 static esp_err_t ws_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
-        // WebSocket handshake
+        // WebSocket handshake — auth happens here (only chance to set HTTP
+        // status before the upgrade), token comes via ?token= query.
+        if (pairing_ws_check(req) != ESP_OK) return ESP_FAIL;
         ESP_LOGI(TAG, "WebSocket client connected");
         return ESP_OK;
     }
@@ -107,29 +110,8 @@ static esp_err_t ws_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// POST /api/mode  {"mode":"stream"} or {"mode":"api"}
-static esp_err_t mode_handler(httpd_req_t *req)
-{
-    char buf[64] = {0};
-    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
-    if (ret <= 0) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
-        return ESP_FAIL;
-    }
-
-    if (strstr(buf, "stream")) {
-        s_mode = LAMP_MODE_STREAM;
-        ESP_LOGI(TAG, "Switched to STREAM mode");
-    } else {
-        s_mode = LAMP_MODE_API;
-        ESP_LOGI(TAG, "Switched to API mode");
-    }
-
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, s_mode == LAMP_MODE_STREAM
-        ? "{\"mode\":\"stream\"}" : "{\"mode\":\"api\"}");
-    return ESP_OK;
-}
+// /api/mode now lives in light_api.c (it spans api / js / stream).
+// ws_server only owns the volatile flag flipped by /api/mode "stream".
 
 esp_err_t ws_server_register(httpd_handle_t server)
 {
@@ -140,18 +122,15 @@ esp_err_t ws_server_register(httpd_handle_t server)
         .is_websocket = true
     };
     httpd_register_uri_handler(server, &ws_uri);
-
-    httpd_uri_t mode_uri = {
-        .uri = "/api/mode",
-        .method = HTTP_POST,
-        .handler = mode_handler
-    };
-    httpd_register_uri_handler(server, &mode_uri);
-
     return ESP_OK;
 }
 
 lamp_mode_t ws_server_get_mode(void)
 {
     return s_mode;
+}
+
+void ws_server_set_mode(lamp_mode_t mode)
+{
+    s_mode = mode;
 }

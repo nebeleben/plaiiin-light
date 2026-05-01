@@ -96,4 +96,61 @@ menu "PlaiiinLightOS Configuration"
             range 1 65535
     endmenu
 
+    menu "Pixel grouping (logical pixels)"
+        config PLAIIIN_PX_GROUP_W
+            int "Pixel-group width"
+            default 1
+            range 1 32
+            help
+                Combine N×M physical LEDs into one logical pixel.
+                Default 1×1 means each LED is its own logical pixel.
+
+        config PLAIIIN_PX_GROUP_H
+            int "Pixel-group height"
+            default 1
+            range 1 32
+    endmenu
+
+    menu "Orientation"
+        config PLAIIIN_ROTATION
+            int "Rotation (degrees, multiples of 90)"
+            default 0
+            range 0 270
+
+        config PLAIIIN_ORIGIN
+            int "Origin corner (0=TL, 1=TR, 2=BL, 3=BR)"
+            default 0
+            range 0 3
+
+        config PLAIIIN_SERPENTINE
+            bool "Wiring zig-zags between rows/columns"
+            default y
+
+        config PLAIIIN_SERP_AXIS
+            int "Chain axis (0=horizontal, 1=vertical)"
+            default 0
+            range 0 1
+    endmenu
+
+    menu "Buttons (touch / momentary)"
+        config PLAIIIN_BTN_PWR_PIN
+            int "On/Off button GPIO (-1 = none)"
+            default -1
+            help
+                Active-low momentary or capacitive-touch button. Single
+                tap toggles power; long-press 10 s triggers factory reset.
+
+        config PLAIIIN_BTN_NEXT_PIN
+            int "Next-script button GPIO (-1 = none)"
+            default -1
+            help
+                Single tap calls /api/play/next when the lamp is in js mode.
+
+        config PLAIIIN_BTN_PREV_PIN
+            int "Previous-script button GPIO (-1 = none)"
+            default -1
+            help
+                Single tap calls /api/play/prev when the lamp is in js mode.
+    endmenu
+
 endmenu

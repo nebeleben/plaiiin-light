@@ -15,6 +15,11 @@ idf_component_register(
         "js_player.c"
         "js_api.c"
         "mdns_service.c"
+        "bt_service.c"
+        "buttons.c"
+        "factory_reset.c"
+        "ai_key_api.c"
+        "pairing.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_http_server
@@ -24,12 +29,15 @@ idf_component_register(
         nvs_flash
         esp_driver_spi
         driver
+        esp_driver_gpio
         esp_system
         esp_partition
         app_update
         spiffs
         mqtt
         mjs
+        bt
+        button
     EMBED_TXTFILES
         "../portal/style.css"
         "../portal/index.html"
@@ -41,4 +49,5 @@ idf_component_register(
         "../portal/mqtt.html"
         "../portal/js.html"
         "../portal/api.html"
+        "../portal/noop.js"
 )

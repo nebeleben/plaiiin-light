@@ -7,6 +7,7 @@
 #include "config_store.h"
 #include "led_control.h"
 #include "js_storage.h"
+#include "pairing.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -26,9 +27,7 @@ extern const uint8_t api_html_end[]   asm("_binary_api_html_end");
 // gets the JSON device-info payload below.
 static esp_err_t api_html_handler(httpd_req_t *req)
 {
-    httpd_resp_set_type(req, "text/html");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
-    httpd_resp_send(req, (const char *)api_html_start, api_html_end - api_html_start);
+    portal_send_html(req, api_html_start, api_html_end, NULL);
     return ESP_OK;
 }
 
@@ -71,8 +70,11 @@ static esp_err_t api_info_handler(httpd_req_t *req)
     int logical_h = led_control_get_logical_h();
     int px_group_w = led_control_get_pixel_group_w();
     int px_group_h = led_control_get_pixel_group_h();
+    int32_t btn_pwr  = config_get_i32_or(CONFIG_KEY_BTN_PWR_PIN,  CONFIG_PLAIIIN_BTN_PWR_PIN);
+    int32_t btn_next = config_get_i32_or(CONFIG_KEY_BTN_NEXT_PIN, CONFIG_PLAIIIN_BTN_NEXT_PIN);
+    int32_t btn_prev = config_get_i32_or(CONFIG_KEY_BTN_PREV_PIN, CONFIG_PLAIIIN_BTN_PREV_PIN);
 
-    char json[800];
+    char json[900];
     snprintf(json, sizeof(json),
         "{\"vendor\":\"%s\",\"apiVersion\":\"%s\",\"firmwareVersion\":\"%s\","
         "\"nodeName\":\"%s\","
@@ -81,12 +83,14 @@ static esp_err_t api_info_handler(httpd_req_t *req)
         "\"physicalW\":%d,\"physicalH\":%d,"
         "\"logicalW\":%d,\"logicalH\":%d,"
         "\"pixelGroupW\":%d,\"pixelGroupH\":%d,"
-        "\"rotation\":%d,\"origin\":%d,\"serpentine\":%s,\"serpentineAxis\":%d}",
+        "\"rotation\":%d,\"origin\":%d,\"serpentine\":%s,\"serpentineAxis\":%d,"
+        "\"buttonPwrPin\":%ld,\"buttonNextPin\":%ld,\"buttonPrevPin\":%ld}",
         vendor, api_ver, CONFIG_PLAIIIN_FIRMWARE_VERSION,
         node_name, (long)led_pin, (long)led_clk_pin, led_count,
         led_type_str, lamp_type, lamp_form,
         phys_w, phys_h, logical_w, logical_h, px_group_w, px_group_h,
-        rotation, origin, serpentine ? "true" : "false", serp_axis);
+        rotation, origin, serpentine ? "true" : "false", serp_axis,
+        (long)btn_pwr, (long)btn_next, (long)btn_prev);
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, json);
@@ -96,6 +100,7 @@ static esp_err_t api_info_handler(httpd_req_t *req)
 // GET /api/storage -> {"total":N,"used":N,"free":N,"files":N}
 static esp_err_t storage_info_handler(httpd_req_t *req)
 {
+    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
     size_t total = 0, used = 0, files = 0;
     esp_err_t err = js_storage_info(&total, &used, &files);
     if (err != ESP_OK) {
@@ -129,11 +134,162 @@ extern const uint8_t js_html_start[] asm("_binary_js_html_start");
 extern const uint8_t js_html_end[]   asm("_binary_js_html_end");
 // api_html_{start,end} forward-declared near the top of the file.
 
-static void send_html(httpd_req_t *req, const uint8_t *start, const uint8_t *end)
+// Inject up to N <meta> tags before the </head> of an embedded portal page.
+// Used to seed the page with the pairing token (when the request was
+// authenticated) and the AI key (compose.html only). Anything missing falls
+// back to no injection — the page still loads and shows its own "no key" UI.
+//
+// `extra_meta` is NUL-terminated HTML to splice in immediately before
+// </head>. Pass NULL/"" to skip injection entirely.
+static void send_html_with_meta(httpd_req_t *req, const uint8_t *start, const uint8_t *end,
+                                const char *extra_meta)
 {
     httpd_resp_set_type(req, "text/html");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
-    httpd_resp_send(req, (const char *)start, end - start);
+    if (!extra_meta || !*extra_meta) {
+        httpd_resp_send(req, (const char *)start, end - start);
+        return;
+    }
+    // Find </head> in the static page. Static pages all carry one near the
+    // top, so memmem stays cheap.
+    size_t total = end - start;
+    const char *needle = "</head>";
+    size_t nlen = strlen(needle);
+    const uint8_t *hit = NULL;
+    for (size_t i = 0; i + nlen <= total; i++) {
+        if (memcmp(start + i, needle, nlen) == 0) { hit = start + i; break; }
+    }
+    if (!hit) {
+        // No </head> — page is too minimal for meta injection. Just send raw.
+        httpd_resp_send(req, (const char *)start, total);
+        return;
+    }
+    httpd_resp_send_chunk(req, (const char *)start, hit - start);
+    httpd_resp_send_chunk(req, extra_meta, strlen(extra_meta));
+    httpd_resp_send_chunk(req, (const char *)hit, end - hit);
+    httpd_resp_send_chunk(req, NULL, 0);   // terminate chunked response
+}
+
+// Build the per-page <meta> block. Always includes plk-paired so the page
+// JS knows whether to require Authorization on its fetches. Includes
+// plk-token only when the *request itself* was authenticated (so an
+// un-paired browser visiting a paired device can't just load /compose to
+// scrape the token). compose.html (page_id="compose") additionally gets
+// plk-aikey when present in NVS — replaces the network-exposed /api/ai/key.
+static void build_meta_block(httpd_req_t *req, const char *page_id,
+                             char *out, size_t out_len)
+{
+    bool paired = pairing_is_paired();
+    bool authed = false;
+    if (paired) {
+        // pairing_http_check sends a 401 on failure; here we just want a
+        // boolean. Recheck the header ourselves.
+        char hdr[128] = {0};
+        if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr) - 1) == ESP_OK
+            && strncmp(hdr, "Bearer ", 7) == 0
+            && pairing_check(hdr + 7)) {
+            authed = true;
+        }
+    }
+    int off = 0;
+    off += snprintf(out + off, out_len - off,
+                    "<meta name=\"plk-paired\" content=\"%s\">",
+                    paired ? "true" : "false");
+    if (paired && authed) {
+        char tok[64] = {0};
+        if (pairing_get_token(tok, sizeof(tok)) == ESP_OK && tok[0]) {
+            off += snprintf(out + off, out_len - off,
+                            "<meta name=\"plk-token\" content=\"%s\">", tok);
+        }
+    }
+    if (page_id && strcmp(page_id, "compose") == 0) {
+        char key[256] = {0};
+        if (config_store_get_str(CONFIG_KEY_AI_API_KEY, key, sizeof(key)) == ESP_OK && key[0]) {
+            off += snprintf(out + off, out_len - off,
+                            "<meta name=\"plk-aikey\" content=\"%s\">", key);
+        }
+    }
+    // Shared inline bootstrapper. Reads ?t= or <meta plk-token>, persists in
+    // localStorage, and wraps fetch() to add Authorization on /api/ calls.
+    // ~700 bytes; small enough to inline on every page (and keeps everything
+    // self-contained — no extra HTTP round-trip for an external auth.js).
+    static const char auth_js[] =
+        "<script>(function(){"
+        "var m=function(n){var e=document.querySelector('meta[name=\"'+n+'\"]');return e?e.content:'';};"
+        "var paired=m('plk-paired')==='true';"
+        "var u=new URL(location.href);var qt=u.searchParams.get('t');"
+        "if(qt){localStorage.setItem('plk_token',qt);u.searchParams.delete('t');history.replaceState({},'',u.toString());}"
+        "var mt=m('plk-token');if(mt)localStorage.setItem('plk_token',mt);"
+        "var of=window.fetch;window.fetch=function(i,it){it=it||{};"
+        "var url=typeof i==='string'?i:(i&&i.url);"
+        "var isApi=paired&&url&&url.indexOf('/api/')===0;"
+        "if(isApi){"
+        "var t=localStorage.getItem('plk_token');"
+        "if(t){if(it.headers instanceof Headers){it.headers.set('Authorization','Bearer '+t);}"
+        "else{it.headers=Object.assign({},it.headers||{},{'Authorization':'Bearer '+t});}}}"
+        // 401 from a paired /api/* call → the stored token was stale (the
+        // user re-paired in the macOS app, factory-reset the lamp, etc.).
+        // Drop it from localStorage and re-render the banner so the user
+        // gets the bootstrap CTA immediately rather than seeing buttons
+        // silently do nothing.
+        "var pr=of(i,it);"
+        "if(isApi){pr.then(function(r){"
+        "if(r&&r.status===401){localStorage.removeItem('plk_token');plkBanner();}"
+        "return r;}).catch(function(){});}"
+        "return pr;};"
+        "window.plkWSPath=function(p){var t=localStorage.getItem('plk_token');"
+        "return paired&&t?p+(p.indexOf('?')<0?'?':'&')+'token='+encodeURIComponent(t):p;};"
+        "window.plkAIKey=function(){return m('plk-aikey');};"
+        // Friendlier failure mode when the device is paired but this browser
+        // has no token: prepend a banner with a one-liner explaining how to
+        // bootstrap. Without it the user just sees on/off do nothing because
+        // every /api/* call silently 401s.
+        "function plkBanner(){"
+        "if(!paired||localStorage.getItem('plk_token'))return;"
+        "if(document.getElementById('plk-banner'))return;"
+        "var b=document.createElement('div');b.id='plk-banner';"
+        "b.style.cssText='position:sticky;top:0;z-index:9999;padding:10px 14px;background:#b85c00;color:#fff;font:14px/1.4 -apple-system,system-ui,sans-serif;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.3);';"
+        "b.innerHTML='\\u26a0 This lamp is paired. Open <b>Show pair-browser QR</b> in the macOS app and scan, or paste the URL into this browser, to grant access.';"
+        "document.body.insertBefore(b,document.body.firstChild);}"
+        "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',plkBanner);else plkBanner();"
+        "})();</script>";
+    off += snprintf(out + off, out_len - off, "%s", auth_js);
+}
+
+static void send_html(httpd_req_t *req, const uint8_t *start, const uint8_t *end)
+{
+    // Inline auth.js shim alone is ~880 bytes; with plk-token + plk-aikey
+    // metas we need real headroom or snprintf will silently truncate
+    // mid-<script>, leaving the page with an unterminated tag that swallows
+    // everything until the next </script> in the body. Pages that didn't
+    // depend on inline body JS (e.g. /mqtt) still rendered; ones that did
+    // (compose, control, stream, scripts) showed a "black page".
+    char meta[2048] = {0};
+    build_meta_block(req, NULL, meta, sizeof(meta));
+    send_html_with_meta(req, start, end, meta);
+}
+
+static void send_html_for(httpd_req_t *req, const uint8_t *start, const uint8_t *end,
+                          const char *page_id)
+{
+    // Inline auth.js shim alone is ~880 bytes; with plk-token + plk-aikey
+    // metas we need real headroom or snprintf will silently truncate
+    // mid-<script>, leaving the page with an unterminated tag that swallows
+    // everything until the next </script> in the body. Pages that didn't
+    // depend on inline body JS (e.g. /mqtt) still rendered; ones that did
+    // (compose, control, stream, scripts) showed a "black page".
+    char meta[2048] = {0};
+    build_meta_block(req, page_id, meta, sizeof(meta));
+    send_html_with_meta(req, start, end, meta);
+}
+
+// Public hook for page handlers in other compilation units (captive_portal,
+// ota_update) — delegates to send_html_for so the meta + auth.js injection
+// (Phase 9 banner + bearer-token plumbing) only lives in one place.
+void portal_send_html(httpd_req_t *req, const uint8_t *start, const uint8_t *end,
+                      const char *page_id)
+{
+    send_html_for(req, start, end, page_id);
 }
 
 static esp_err_t style_css_handler(httpd_req_t *req)
@@ -146,13 +302,14 @@ static esp_err_t style_css_handler(httpd_req_t *req)
 
 static esp_err_t control_page_handler(httpd_req_t *req) { send_html(req, control_html_start, control_html_end); return ESP_OK; }
 static esp_err_t test_page_handler(httpd_req_t *req) { send_html(req, test_html_start, test_html_end); return ESP_OK; }
-static esp_err_t compose_page_handler(httpd_req_t *req) { send_html(req, compose_html_start, compose_html_end); return ESP_OK; }
+static esp_err_t compose_page_handler(httpd_req_t *req) { send_html_for(req, compose_html_start, compose_html_end, "compose"); return ESP_OK; }
 static esp_err_t mqtt_page_handler(httpd_req_t *req) { send_html(req, mqtt_html_start, mqtt_html_end); return ESP_OK; }
 static esp_err_t js_page_handler(httpd_req_t *req) { send_html(req, js_html_start, js_html_end); return ESP_OK; }
 
 // GET /api/mqtt - MQTT config
 static esp_err_t mqtt_api_get_handler(httpd_req_t *req)
 {
+    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
     char host[128] = {0};
     char node[64] = {0};
     config_get_str_or(CONFIG_KEY_MQTT_HOST, host, sizeof(host), "");
@@ -173,6 +330,7 @@ static esp_err_t mqtt_api_get_handler(httpd_req_t *req)
 // POST /mqtt - save MQTT config
 static esp_err_t mqtt_save_handler(httpd_req_t *req)
 {
+    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
     int content_len = req->content_len;
     if (content_len <= 0 || content_len > 512) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad request");
@@ -235,7 +393,10 @@ httpd_handle_t http_server_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = CONFIG_PLAIIIN_HTTP_PORT;
-    config.max_uri_handlers = 40;
+    // Sized with headroom: every page + REST endpoint costs one slot, so this
+    // grows whenever we add an /api/* route. Hitting the cap causes silent
+    // failures in late registrations (e.g. /api/stop returning 404).
+    config.max_uri_handlers = 64;
     config.uri_match_fn = httpd_uri_match_wildcard;
     // JS validation runs mjs_exec on the request thread — needs more stack than default 4 KB.
     config.stack_size = 16 * 1024;

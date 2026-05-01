@@ -8,6 +8,10 @@
 #include "js_storage.h"
 #include "js_api.h"
 #include "mdns_service.h"
+#include "bt_service.h"
+#include "buttons.h"
+#include "ai_key_api.h"
+#include "pairing.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -21,6 +25,7 @@ void app_main(void)
 {
     // 1. Init NVS config store (must be first)
     ESP_ERROR_CHECK(config_store_init());
+    pairing_init();   // reads pair_mode + caches; safe before WiFi/HTTP.
 
     // 1b. Seed NVS from Kconfig for keys that are still unset. This freezes
     // the values reported by /api into NVS, so subsequent OTAs (which only
@@ -48,6 +53,27 @@ void app_main(void)
             config_store_set_i32(CONFIG_KEY_LED_CLK_PIN, CONFIG_PLAIIIN_LED_CLK_PIN);
         if (config_store_get_i32(CONFIG_KEY_LED_COUNT, &tmp) != ESP_OK)
             config_store_set_i32(CONFIG_KEY_LED_COUNT, CONFIG_PLAIIIN_LED_COUNT);
+        // Phase 8 — buttons (each pin -1 means "not wired")
+        if (config_store_get_i32(CONFIG_KEY_BTN_PWR_PIN,  &tmp) != ESP_OK)
+            config_store_set_i32(CONFIG_KEY_BTN_PWR_PIN,  CONFIG_PLAIIIN_BTN_PWR_PIN);
+        if (config_store_get_i32(CONFIG_KEY_BTN_NEXT_PIN, &tmp) != ESP_OK)
+            config_store_set_i32(CONFIG_KEY_BTN_NEXT_PIN, CONFIG_PLAIIIN_BTN_NEXT_PIN);
+        if (config_store_get_i32(CONFIG_KEY_BTN_PREV_PIN, &tmp) != ESP_OK)
+            config_store_set_i32(CONFIG_KEY_BTN_PREV_PIN, CONFIG_PLAIIIN_BTN_PREV_PIN);
+        // Pixel grouping + orientation. Seed-only (Kconfig defaults never
+        // stomp values the user may have tweaked at runtime via /api).
+        if (config_store_get_i32(CONFIG_KEY_PX_GROUP_W, &tmp) != ESP_OK)
+            config_store_set_i32(CONFIG_KEY_PX_GROUP_W, CONFIG_PLAIIIN_PX_GROUP_W);
+        if (config_store_get_i32(CONFIG_KEY_PX_GROUP_H, &tmp) != ESP_OK)
+            config_store_set_i32(CONFIG_KEY_PX_GROUP_H, CONFIG_PLAIIIN_PX_GROUP_H);
+        if (config_store_get_i32(CONFIG_KEY_ROTATION,   &tmp) != ESP_OK)
+            config_store_set_i32(CONFIG_KEY_ROTATION,   CONFIG_PLAIIIN_ROTATION);
+        if (config_store_get_i32(CONFIG_KEY_ORIGIN,     &tmp) != ESP_OK)
+            config_store_set_i32(CONFIG_KEY_ORIGIN,     CONFIG_PLAIIIN_ORIGIN);
+        if (config_store_get_i32(CONFIG_KEY_SERPENTINE, &tmp) != ESP_OK)
+            config_store_set_i32(CONFIG_KEY_SERPENTINE, CONFIG_PLAIIIN_SERPENTINE);
+        if (config_store_get_i32(CONFIG_KEY_SERP_AXIS,  &tmp) != ESP_OK)
+            config_store_set_i32(CONFIG_KEY_SERP_AXIS,  CONFIG_PLAIIIN_SERP_AXIS);
     }
 
     // 1c. Same for factory WiFi creds (only if the build carries them and NVS
@@ -107,11 +133,72 @@ void app_main(void)
         error_light_set(ERROR_LIGHT_AP_MODE);
     }
 
+    // 5b. Bring up BLE. Lifecycle policy is read from NVS:
+    //     "auto"   → starts now, gets torn down once WiFi associates;
+    //     "always" → stays up;
+    //     "never"  → no-op.
+    // Defaults to "auto", which is what onboarding expects (lamp is reachable
+    // over BLE during the WiFi-creds handoff).
+    if (bt_service_start() != ESP_OK) {
+        ESP_LOGW(TAG, "BT init failed — onboarding falls back to AP captive portal");
+    }
+
     // 6. Init JS storage + player
     if (js_storage_init() != ESP_OK) {
         ESP_LOGW(TAG, "JS storage init failed — /api/js endpoints disabled");
     }
     js_player_init();
+
+    // 6a. Install the embedded noop.js if missing. noop just paints baseColor —
+    // gives the lamp a sensible "smart bulb" behavior in js mode out of the box.
+    {
+        extern const uint8_t noop_js_start[] asm("_binary_noop_js_start");
+        extern const uint8_t noop_js_end[]   asm("_binary_noop_js_end");
+        if (!js_storage_exists("noop")) {
+            esp_err_t werr = js_storage_write("noop",
+                                              (const char *)noop_js_start,
+                                              noop_js_end - noop_js_start);
+            if (werr == ESP_OK) {
+                ESP_LOGI(TAG, "Installed default noop.js");
+            } else {
+                ESP_LOGW(TAG, "Could not install noop.js: %s", esp_err_to_name(werr));
+            }
+        }
+    }
+
+    // 6b. Restore base color from NVS (packed 0x00RRGGBB) so JS scripts see
+    // whatever color HA last set, even after a reboot.
+    {
+        int32_t packed = config_get_i32_or(CONFIG_KEY_BASE_COLOR, -1);
+        if (packed >= 0) {
+            js_player_set_base_color((uint8_t)((packed >> 16) & 0xFF),
+                                     (uint8_t)((packed >> 8)  & 0xFF),
+                                     (uint8_t)( packed        & 0xFF));
+        }
+    }
+
+    // 6c. If the persisted mode is "js" and a script is selected, resume it.
+    {
+        char mode[16] = {0};
+        config_get_str_or(CONFIG_KEY_LAMP_MODE, mode, sizeof(mode), "api");
+        if (strcmp(mode, "js") == 0) {
+            char name[64] = {0};
+            config_get_str_or(CONFIG_KEY_CURRENT_JS, name, sizeof(name), "");
+            if (!name[0]) {
+                // Fall back to noop so the lamp does *something* in js mode.
+                snprintf(name, sizeof(name), "noop");
+                config_store_set_str(CONFIG_KEY_CURRENT_JS, name);
+            }
+            char *src = NULL; size_t len = 0;
+            if (js_storage_read(name, &src, &len) == ESP_OK) {
+                if (js_player_start(src, 10) == ESP_OK) {
+                    js_player_set_current_name(name);
+                    ESP_LOGI(TAG, "Resumed js mode with %s", name);
+                }
+                free(src);
+            }
+        }
+    }
 
     // 7. Start HTTP server (registers JS API inside)
     httpd_handle_t server = http_server_start();
@@ -120,7 +207,11 @@ void app_main(void)
         error_light_set(ERROR_LIGHT_CONFIG_ERROR);
     } else {
         js_api_register(server);
+        ai_key_api_register(server);
     }
+
+    // 7b. Hardware buttons (no-op when no pins configured).
+    buttons_init();
 
     // 7. Wait for WiFi connection (if in STA mode)
     if (wifi_get_mode() == PLAIIIN_WIFI_STA) {
@@ -139,6 +230,8 @@ void app_main(void)
             }
             // 8. Start MQTT if configured
             mqtt_client_start();
+            // BT in "auto" mode hands off to WiFi once we're online.
+            bt_service_notify_wifi_connected();
         } else {
             ESP_LOGW(TAG, "WiFi connection timeout");
             error_light_set(ERROR_LIGHT_NO_WIFI);

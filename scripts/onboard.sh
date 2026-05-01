@@ -36,15 +36,26 @@ if [[ "$PROFILE" == */* ]]; then
     FAMILY="${PROFILE%%/*}"
     DEVICE="${PROFILE##*/}"
     DEFAULTS="$PROJECT_DIR/profiles/$FAMILY/$DEVICE.defaults"
+    WIFI_LOCAL="$PROJECT_DIR/profiles/$FAMILY/$DEVICE.wifi.local"
 else
     DEFAULTS="$PROJECT_DIR/profiles/$PROFILE/sdkconfig.defaults"
+    WIFI_LOCAL=""
 fi
 [ -f "$DEFAULTS" ] || { echo "missing $DEFAULTS" >&2; exit 1; }
 
 # Strip CONFIG_PLAIIIN_FOO="bar" → FOO=bar for easy lookup.
+# WiFi creds prefer .wifi.local (gitignored) over the committed .defaults so
+# secrets don't end up in the repo. The local file is optional.
 get() {
     local key="$1"
-    awk -F= -v k="CONFIG_PLAIIIN_$key" '$1==k{sub(/^"/,"",$2);sub(/"$/,"",$2);print $2;exit}' "$DEFAULTS"
+    local v=""
+    if [ -n "$WIFI_LOCAL" ] && [ -f "$WIFI_LOCAL" ]; then
+        v=$(awk -F= -v k="CONFIG_PLAIIIN_$key" '$1==k{sub(/^"/,"",$2);sub(/"$/,"",$2);print $2;exit}' "$WIFI_LOCAL")
+    fi
+    if [ -z "$v" ]; then
+        v=$(awk -F= -v k="CONFIG_PLAIIIN_$key" '$1==k{sub(/^"/,"",$2);sub(/"$/,"",$2);print $2;exit}' "$DEFAULTS")
+    fi
+    printf '%s' "$v"
 }
 
 NODE_NAME="$(get NODE_NAME)"
@@ -54,6 +65,15 @@ LED_COUNT="$(get LED_COUNT)"
 LED_TYPE="$(get LED_TYPE)"
 LAMP_TYPE="$(get LAMP_TYPE)"
 FORM="$(get FORM)"
+PX_GROUP_W="$(get PX_GROUP_W)"
+PX_GROUP_H="$(get PX_GROUP_H)"
+ROTATION="$(get ROTATION)"
+ORIGIN="$(get ORIGIN)"
+SERPENTINE="$(get SERPENTINE)"
+SERP_AXIS="$(get SERP_AXIS)"
+BTN_PWR_PIN="$(get BTN_PWR_PIN)"
+BTN_NEXT_PIN="$(get BTN_NEXT_PIN)"
+BTN_PREV_PIN="$(get BTN_PREV_PIN)"
 SSID="$(get NETWORK_SSID)"
 PW="$(get NETWORK_PW)"
 
@@ -69,6 +89,9 @@ FORM_ARGS=()
 [ -n "$LED_TYPE" ]     && FORM_ARGS+=(--data-urlencode "led_type=$LED_TYPE")
 [ -n "$LAMP_TYPE" ]    && FORM_ARGS+=(--data-urlencode "lamp_type=$LAMP_TYPE")
 [ -n "$FORM" ]         && FORM_ARGS+=(--data-urlencode "lamp_form=$FORM")
+[ -n "$BTN_PWR_PIN" ]  && FORM_ARGS+=(--data-urlencode "btn_pwr_pin=$BTN_PWR_PIN")
+[ -n "$BTN_NEXT_PIN" ] && FORM_ARGS+=(--data-urlencode "btn_next_pin=$BTN_NEXT_PIN")
+[ -n "$BTN_PREV_PIN" ] && FORM_ARGS+=(--data-urlencode "btn_prev_pin=$BTN_PREV_PIN")
 
 echo "  → POST /config (device will reboot)"
 curl -sS -X POST "http://$HOST/config" "${FORM_ARGS[@]}" -o /dev/null -w "    HTTP=%{http_code}\n"
@@ -83,6 +106,22 @@ for i in $(seq 1 30); do
     fi
     sleep 1
 done
+
+# 2b. Pixel grouping + orientation — live-apply endpoints, no reboot.
+if [ -n "$PX_GROUP_W" ] && [ -n "$PX_GROUP_H" ]; then
+    echo "  → POST /api/grid  (pixel group ${PX_GROUP_W}x${PX_GROUP_H})"
+    curl -sS -X POST "http://$HOST/api/grid" -H "Content-Type: application/json" \
+        -d "{\"pixelGroupW\":${PX_GROUP_W},\"pixelGroupH\":${PX_GROUP_H}}" \
+        -o /dev/null -w "    HTTP=%{http_code}\n"
+fi
+if [ -n "$ROTATION$ORIGIN$SERPENTINE$SERP_AXIS" ]; then
+    serp_bool="true"
+    case "$SERPENTINE" in y|Y|yes|true|1) serp_bool="true";; n|N|no|false|0) serp_bool="false";; esac
+    echo "  → POST /api/orientation  (rot=${ROTATION:-0} origin=${ORIGIN:-0} serp=$serp_bool axis=${SERP_AXIS:-0})"
+    curl -sS -X POST "http://$HOST/api/orientation" -H "Content-Type: application/json" \
+        -d "{\"rotation\":${ROTATION:-0},\"origin\":${ORIGIN:-0},\"serpentine\":$serp_bool,\"serpentineAxis\":${SERP_AXIS:-0}}" \
+        -o /dev/null -w "    HTTP=%{http_code}\n"
+fi
 
 # 3. Optional WiFi join. Only POST /network if we have creds.
 if [ -n "$SSID" ]; then

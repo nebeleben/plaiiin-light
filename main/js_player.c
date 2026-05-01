@@ -67,6 +67,9 @@ static int s_fps = 10;
 static char *s_source = NULL;
 static char s_current_name[64] = {0};
 static char s_last_err[128] = {0};
+// Latest base color, fed into render() as a 3-element [r,g,b] array. Defaults
+// to mid-grey so a noop.js shows *something* before any /api/color call.
+static uint8_t s_base_r = 128, s_base_g = 128, s_base_b = 128;
 
 /**
  * Logical grid: width/height derived from lamp_type when it's a matrix,
@@ -169,12 +172,19 @@ static void player_task(void *arg)
 
     while (s_running) {
         mjs_val_t result;
-        mjs_val_t args[3] = {
+        // Build [r,g,b] freshly each frame so HA-driven color changes pick up
+        // immediately on the very next render.
+        mjs_val_t base = mjs_mk_array(mjs);
+        mjs_array_push(mjs, base, mjs_mk_number(mjs, s_base_r));
+        mjs_array_push(mjs, base, mjs_mk_number(mjs, s_base_g));
+        mjs_array_push(mjs, base, mjs_mk_number(mjs, s_base_b));
+        mjs_val_t args[4] = {
             mjs_mk_number(mjs, frame_idx),
             mjs_mk_number(mjs, w),
-            mjs_mk_number(mjs, h)
+            mjs_mk_number(mjs, h),
+            base
         };
-        mjs_err_t rerr = mjs_apply(mjs, &result, render_fn, mjs_mk_null(), 3, args);
+        mjs_err_t rerr = mjs_apply(mjs, &result, render_fn, mjs_mk_null(), 4, args);
         if (rerr != MJS_OK) {
             const char *msg = mjs_strerror(mjs, rerr);
             ESP_LOGW(TAG, "render() error: %s", msg ? msg : "?");
@@ -323,12 +333,17 @@ esp_err_t js_player_validate(const char *source, const char **err_out)
     int w, h;
     get_grid(&w, &h);
     mjs_val_t result;
-    mjs_val_t args[3] = {
+    mjs_val_t base = mjs_mk_array(mjs);
+    mjs_array_push(mjs, base, mjs_mk_number(mjs, s_base_r));
+    mjs_array_push(mjs, base, mjs_mk_number(mjs, s_base_g));
+    mjs_array_push(mjs, base, mjs_mk_number(mjs, s_base_b));
+    mjs_val_t args[4] = {
         mjs_mk_number(mjs, 0),
         mjs_mk_number(mjs, w),
-        mjs_mk_number(mjs, h)
+        mjs_mk_number(mjs, h),
+        base
     };
-    mjs_err_t rerr = mjs_apply(mjs, &result, render_fn, mjs_mk_null(), 3, args);
+    mjs_err_t rerr = mjs_apply(mjs, &result, render_fn, mjs_mk_null(), 4, args);
     if (rerr != MJS_OK) {
         if (err_out) *err_out = stash_err(mjs, rerr);
         mjs_destroy(mjs);
@@ -395,4 +410,18 @@ void js_player_set_current_name(const char *name)
 {
     if (!name) { s_current_name[0] = 0; return; }
     snprintf(s_current_name, sizeof(s_current_name), "%s", name);
+}
+
+void js_player_set_base_color(uint8_t r, uint8_t g, uint8_t b)
+{
+    s_base_r = r;
+    s_base_g = g;
+    s_base_b = b;
+}
+
+void js_player_get_base_color(uint8_t *r, uint8_t *g, uint8_t *b)
+{
+    if (r) *r = s_base_r;
+    if (g) *g = s_base_g;
+    if (b) *b = s_base_b;
 }

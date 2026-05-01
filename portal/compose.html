@@ -78,6 +78,12 @@ var ledCount=64,gridW=8,gridH=8,isMatrix=true;
 var frames=[],frameIdx=0,playing=false,timer=null,ws=null,streaming=false;
 var fps=10,messages=[];
 var lastJsSource=null;  // raw JS body of the most recent generator response
+// Latest base color from /api/state (set via /api/color, persisted in NVS).
+// Passed as the 4th arg to render() so previews match what the device will do.
+var baseColor=[128,128,128];
+fetch('/api/state').then(function(r){return r.json()}).then(function(s){
+  if(s&&Array.isArray(s.color)&&s.color.length===3) baseColor=s.color.slice(0,3);
+}).catch(function(){});
 
 // Theme
 var dark=localStorage.getItem('theme')!=='light';
@@ -157,15 +163,23 @@ function getSystemPrompt(){
   'Respond with ONLY a code block containing either JSON data or JavaScript code. No explanation outside the code block.\n\n'+
   'FORMAT 1 - Pixel data (for simple patterns or short animations):\n```json\n{"type":"static","pixels":["ff0000","00ff00",...]}\n```\nor:\n```json\n{"type":"animation","fps":10,"frames":[["ff0000","00ff00",...],["aabbcc",...]]}\n```\n'+
   'Pixels in row-major order (left-to-right, top-to-bottom). Each frame has exactly '+total+' hex colors (6 chars, no #).\n\n'+
-  'FORMAT 2 - Generator code (for complex patterns, gradients, waves, long animations):\n```js\nfunction render(frame, width, height) {\n  var pixels = [];\n  for (var y = 0; y < height; y++)\n    for (var x = 0; x < width; x++)\n      pixels.push([r, g, b]); // 0-255 each\n  return pixels; // array of '+total+' [r,g,b] arrays\n}\n```\n'+
-  'The render function receives frame index (0,1,2,...), width ('+gridW+'), height ('+gridH+'). Return exactly '+total+' [r,g,b] arrays.\n\n'+
+  'FORMAT 2 - Generator code (for complex patterns, gradients, waves, long animations):\n```js\nfunction render(frame, width, height, baseColor) {\n  var pixels = [];\n  for (var y = 0; y < height; y++)\n    for (var x = 0; x < width; x++)\n      pixels.push([r, g, b]); // 0-255 each\n  return pixels; // array of '+total+' [r,g,b] arrays\n}\n```\n'+
+  'render() receives: frame index (0,1,2,...), width ('+gridW+'), height ('+gridH+'), baseColor=[r,g,b] (the lamp current solid color set via /api/color, defaults to mid-grey). Return exactly '+total+' [r,g,b] arrays.\n\n'+
   'Choose the best format: use generator code for gradients, waves, math patterns, long animations. Use pixel data for specific images or short sequences.\n'+
   'Grid dimensions: '+gridW+' wide, '+gridH+' tall, '+total+' pixels total.';
 }
 
-// AI key (shared storage with /config page)
-var AI_KEY_STORAGE='_plk';
-function loadKey(){var e=localStorage.getItem(AI_KEY_STORAGE);if(!e)return '';try{return atob(e).split('').reverse().join('');}catch(x){return '';}}
+// AI key — server-rendered into <meta name="plk-aikey"> when the page is
+// served to an authenticated caller (auth.js bootstrapper exposes it via
+// window.plkAIKey()). Never returned over /api/ai/key any more, so a snooper
+// on the WiFi can't pull it off the device by hitting an endpoint.
+var _aiKeyCache='';
+async function ensureKeyLoaded(){
+  if(_aiKeyCache)return _aiKeyCache;
+  if(window.plkAIKey){var k=window.plkAIKey();if(k){_aiKeyCache=k;return k;}}
+  return '';
+}
+function loadKey(){return _aiKeyCache;}
 
 // Chat
 function addChatMsg(role,text){
@@ -182,7 +196,7 @@ function addChatMsg(role,text){
 
 // AI call
 async function callAI(userMsg){
-  var key=loadKey();
+  var key=await ensureKeyLoaded();
   if(!key){addChatMsg('ai','No API key configured. Go to Config page to set your API key.');return null;}
   var aiProvider=localStorage.getItem('aiProvider')||'claude';
   var aiModel=(localStorage.getItem('aiModel')||'claude-haiku-4-5-20251001').trim();
@@ -233,7 +247,7 @@ function parseResponse(text){
       var src=jsMatch[1];
       lastJsSource=src;
       var renderFn=new Function('return ('+src+')')();
-      for(var f=0;f<300;f++){var px=renderFn(f,gridW,gridH);if(!px||px.length<total)break;frames.push(rgbToImg(px,total));}
+      for(var f=0;f<300;f++){var px=renderFn(f,gridW,gridH,baseColor);if(!px||px.length<total)break;frames.push(rgbToImg(px,total));}
       fps=parseInt(document.getElementById('fpsSlider').value)||10;
     }catch(e){addChatMsg('ai','Code error: '+e.message);}
   }
@@ -332,8 +346,8 @@ document.getElementById('btnSaveJs').onclick=function(){
   var name=prompt('Save as:','sparkle');
   if(!name)return;
   name=name.replace(/[^A-Za-z0-9_.-]/g,'_');
-  // Wrap anonymous function into `function render(frame,w,h){...}` so the on-device player finds it.
-  var wrapped='function render(frame, w, h) {\n  var __fn = ('+lastJsSource+');\n  return __fn(frame, w, h);\n}\n';
+  // Wrap anonymous function into `function render(frame,w,h,baseColor){...}` so the on-device player finds it.
+  var wrapped='function render(frame, w, h, baseColor) {\n  var __fn = ('+lastJsSource+');\n  return __fn(frame, w, h, baseColor);\n}\n';
   fetch('/api/js/'+encodeURIComponent(name),{method:'PUT',headers:{'Content-Type':'text/plain'},body:wrapped})
     .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})})
     .then(function(x){

@@ -1,4 +1,6 @@
 #include "ota_update.h"
+#include "pairing.h"
+#include "http_server.h"
 #include "esp_ota_ops.h"
 #include "esp_log.h"
 #include "esp_app_format.h"
@@ -13,10 +15,7 @@ extern const uint8_t ota_html_end[]   asm("_binary_ota_html_end");
 
 static esp_err_t ota_page_handler(httpd_req_t *req)
 {
-    httpd_resp_set_type(req, "text/html");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
-    httpd_resp_send(req, (const char *)ota_html_start,
-                    ota_html_end - ota_html_start);
+    portal_send_html(req, ota_html_start, ota_html_end, NULL);
     return ESP_OK;
 }
 
@@ -41,6 +40,7 @@ static esp_err_t ota_info_handler(httpd_req_t *req)
 // POST /api/ota - receive firmware binary and flash
 static esp_err_t ota_upload_handler(httpd_req_t *req)
 {
+    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
     ESP_LOGI(TAG, "OTA update started, content length: %d", req->content_len);
 
     const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);

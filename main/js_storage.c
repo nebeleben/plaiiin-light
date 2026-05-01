@@ -5,6 +5,7 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -164,4 +165,39 @@ esp_err_t js_storage_remove(const char *name)
         return ESP_FAIL;
     }
     return ESP_OK;
+}
+
+bool js_storage_exists(const char *name)
+{
+    if (!name_is_valid(name)) return false;
+    char path[96];
+    full_path(name, path, sizeof(path));
+    struct stat st;
+    return stat(path, &st) == 0;
+}
+
+static int cmp_names(const void *a, const void *b)
+{
+    return strcmp((const char *)a, (const char *)b);
+}
+
+int js_storage_collect_sorted(char (*out)[64], int max_names)
+{
+    if (!out || max_names <= 0) return 0;
+    DIR *d = opendir(BASE_PATH);
+    if (!d) return 0;
+    int count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(d)) != NULL && count < max_names) {
+        size_t len = strlen(entry->d_name);
+        if (len < 4 || strcmp(entry->d_name + len - 3, ".js") != 0) continue;
+        size_t base = len - 3;
+        if (base >= 64) base = 63;
+        memcpy(out[count], entry->d_name, base);
+        out[count][base] = 0;
+        count++;
+    }
+    closedir(d);
+    qsort(out, count, sizeof(out[0]), cmp_names);
+    return count;
 }

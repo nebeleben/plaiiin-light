@@ -1,11 +1,24 @@
 #pragma once
 
 #include "esp_http_server.h"
+#include <stdbool.h>
+#include <stdint.h>
 
 /**
  * Light API: HTTP endpoints for controlling LEDs.
  *   POST /api/power  {"on": true/false}
  *   POST /api/color  {"colors": [[r,g,b], ...]}
+ *
+ * The transport-agnostic helpers (light_api_apply_*) are also called from
+ * the BLE GATT layer so HTTP and BLE writes share state machines.
  */
 
 esp_err_t light_api_register(httpd_handle_t server);
+
+// Transport-agnostic helpers — call these from any transport (HTTP, BLE).
+// They take care of persistent-mode awareness (e.g. /api/color in js mode
+// only updates baseColor, never the framebuffer) and NVS persistence.
+void light_api_apply_power(bool on);
+void light_api_apply_color_solid(uint8_t r, uint8_t g, uint8_t b);
+/// 0 = ok, -1 = unknown mode string. Accepts "api" / "js" / "stream".
+int  light_api_apply_mode(const char *mode);

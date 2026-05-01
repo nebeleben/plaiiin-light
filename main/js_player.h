@@ -30,3 +30,8 @@ bool js_player_is_running(void);
 /** Name of the currently loaded script (NULL if none). */
 const char *js_player_current_name(void);
 void js_player_set_current_name(const char *name);
+
+/** Base color passed as the 4th arg to render(). Updated by /api/color so
+ *  scripts can tint themselves to whatever Home Assistant just set. */
+void js_player_set_base_color(uint8_t r, uint8_t g, uint8_t b);
+void js_player_get_base_color(uint8_t *r, uint8_t *g, uint8_t *b);
