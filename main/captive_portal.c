@@ -121,6 +121,11 @@ static esp_err_t config_save_handler(httpd_req_t *req)
 }
 
 // --- POST /network: WiFi settings (reboot) ---
+//
+// The captive portal stays available for users without the macOS / Android
+// app — they connect to the lamp's AP and POST WiFi creds here. App-side
+// onboarding goes through the BLE wifiConfig characteristic instead, but
+// both paths land at the same NVS write + reboot.
 
 static esp_err_t network_save_handler(httpd_req_t *req)
 {

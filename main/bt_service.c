@@ -10,6 +10,7 @@
 
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_system.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -223,6 +224,17 @@ static int access_wifi_scan(uint16_t conn, uint16_t attr,
     return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
 }
 
+// Self-restarting tail of the wifi-config BLE write. Runs in its own task so
+// the GATT access callback can return immediately and the "saved" notify
+// gets out before the radio dies. Brief delay so the host has time to read
+// the notify; without it the macOS sheet would just see the disconnect.
+static void wifi_config_reboot_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(800));
+    esp_restart();
+}
+
 static int access_wifi_config(uint16_t conn, uint16_t attr,
                               struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
@@ -234,8 +246,10 @@ static int access_wifi_config(uint16_t conn, uint16_t attr,
     extract_json_str(buf, "psk", psk, sizeof(psk));   // psk optional (open networks)
     config_store_set_str(CONFIG_KEY_WIFI_SSID, ssid);
     config_store_set_str(CONFIG_KEY_WIFI_PASS, psk);
-    notify_str(s_h_wifi_status, "{\"state\":\"saved\",\"hint\":\"reboot to apply\"}");
-    ESP_LOGI(TAG, "BLE wrote WiFi creds for ssid=%s", ssid);
+    notify_str(s_h_wifi_status, "{\"state\":\"saved\",\"hint\":\"rebooting\"}");
+    ESP_LOGI(TAG, "BLE wrote WiFi creds for ssid=%s — scheduling reboot", ssid);
+    // Defer the actual restart so the GATT response + notify clear the air.
+    xTaskCreate(wifi_config_reboot_task, "wifi_cfg_reboot", 2048, NULL, 5, NULL);
     return 0;
 }
 
@@ -488,26 +502,37 @@ static int gap_event(struct ble_gap_event *event, void *arg);
 
 static void advertise(void)
 {
-    struct ble_hs_adv_fields fields = {0};
-    fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    fields.tx_pwr_lvl_is_present = 1;
-    fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
+    // BLE advert payload budget is 31 bytes. Flags(3) + UUID128(18) +
+    // tx_pwr(3) = 24 bytes already; the device name (10–32 bytes) pushes us
+    // over and NimBLE silently drops the whole packet — neither macOS nor
+    // Android ever saw the lamp. Split: adv carries discoverability + the
+    // service UUID (so ScanFilter on the Android side still matches), name
+    // moves into the scan response which has its own 31-byte budget.
+    struct ble_hs_adv_fields adv_fields = {0};
+    adv_fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+    adv_fields.tx_pwr_lvl_is_present = 1;
+    adv_fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
+    adv_fields.uuids128 = (ble_uuid128_t *)&svc_uuid;
+    adv_fields.num_uuids128 = 1;
+    adv_fields.uuids128_is_complete = 1;
 
-    char node[32];
-    config_get_str_or(CONFIG_KEY_NODE_NAME, node, sizeof(node), "PlaiiinLight");
-    fields.name = (uint8_t *)node;
-    fields.name_len = strlen(node);
-    fields.name_is_complete = 1;
-
-    fields.uuids128 = (ble_uuid128_t *)&svc_uuid;
-    fields.num_uuids128 = 1;
-    fields.uuids128_is_complete = 1;
-
-    int rc = ble_gap_adv_set_fields(&fields);
+    int rc = ble_gap_adv_set_fields(&adv_fields);
     if (rc != 0) {
         ESP_LOGE(TAG, "adv_set_fields rc=%d", rc);
         return;
     }
+
+    char node[32];
+    config_get_str_or(CONFIG_KEY_NODE_NAME, node, sizeof(node), "PlaiiinLight");
+    struct ble_hs_adv_fields rsp_fields = {0};
+    rsp_fields.name = (uint8_t *)node;
+    rsp_fields.name_len = strlen(node);
+    rsp_fields.name_is_complete = 1;
+    rc = ble_gap_adv_rsp_set_fields(&rsp_fields);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "adv_rsp_set_fields rc=%d (name truncated in scans)", rc);
+    }
+
     struct ble_gap_adv_params params = {0};
     params.conn_mode = BLE_GAP_CONN_MODE_UND;
     params.disc_mode = BLE_GAP_DISC_MODE_GEN;

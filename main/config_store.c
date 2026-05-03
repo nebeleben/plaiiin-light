@@ -72,6 +72,22 @@ esp_err_t config_store_set_i32(const char *key, int32_t value)
     return err;
 }
 
+esp_err_t config_store_erase_keys(const char *const *keys, int count)
+{
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) return err;
+    for (int i = 0; i < count; i++) {
+        esp_err_t e = nvs_erase_key(handle, keys[i]);
+        if (e != ESP_OK && e != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "erase %s: %s", keys[i], esp_err_to_name(e));
+        }
+    }
+    err = nvs_commit(handle);
+    nvs_close(handle);
+    return err;
+}
+
 bool config_store_has_wifi(void)
 {
     char ssid[64] = {0};

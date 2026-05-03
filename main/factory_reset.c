@@ -2,13 +2,12 @@
 #include "config_store.h"
 #include "error_light.h"
 #include "led_control.h"
+#include "mdns_service.h"
 
 #include "esp_log.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "nvs.h"
-#include "nvs_flash.h"
 
 static const char *TAG = "factory_reset";
 
@@ -34,31 +33,29 @@ static void confirm_blink(uint8_t r, uint8_t g, uint8_t b)
     free(frame);
 }
 
-static esp_err_t clear_keys(const char *const *keys, int count)
-{
-    nvs_handle_t h;
-    esp_err_t err = nvs_open("storage", NVS_READWRITE, &h);
-    if (err != ESP_OK) return err;
-    for (int i = 0; i < count; i++) {
-        esp_err_t e = nvs_erase_key(h, keys[i]);
-        if (e != ESP_OK && e != ESP_ERR_NVS_NOT_FOUND) {
-            ESP_LOGW(TAG, "erase %s: %s", keys[i], esp_err_to_name(e));
-        }
-    }
-    nvs_commit(h);
-    nvs_close(h);
-    return ESP_OK;
-}
-
 esp_err_t factory_reset_wifi(bool reboot)
 {
-    ESP_LOGW(TAG, "Resetting WiFi credentials");
+    // Earlier this function called nvs_open("storage", …) directly, but the
+    // config_store namespace is "plaiiin_cfg" — so the erase silently no-op'd
+    // and lamps stayed on the same network after every "reset wifi". Both
+    // reset paths now route through config_store_erase_keys, which already
+    // knows the correct namespace.
+    //
+    // Phase 12.x: wifi-reset also releases pairing so the lamp comes back
+    // claimable by whoever onboards it next. The macOS/Android client side
+    // mirrors this by removing the saved row + clearing the local token.
+    ESP_LOGW(TAG, "Resetting WiFi credentials + releasing pairing");
     static const char *const keys[] = {
         CONFIG_KEY_WIFI_SSID,
         CONFIG_KEY_WIFI_PASS,
+        CONFIG_KEY_PAIR_TOKEN,
+        CONFIG_KEY_PAIR_MODE,
     };
-    clear_keys(keys, sizeof(keys) / sizeof(keys[0]));
+    config_store_erase_keys(keys, sizeof(keys) / sizeof(keys[0]));
     confirm_blink(0, 200, 0);   // green
+    // mDNS goodbye so clients drop our cached entry instead of pinning the
+    // old WiFi IP for a TTL window after we reboot into AP mode.
+    mdns_service_stop();
     if (reboot) { vTaskDelay(pdMS_TO_TICKS(200)); esp_restart(); }
     return ESP_OK;
 }
@@ -70,7 +67,7 @@ esp_err_t factory_reset_full(bool reboot)
     // pins, pixel-group, orientation, button mappings) is intentionally KEPT
     // so the device is still operational on the next boot — the user just
     // needs to put it back on a network and re-pair an AI key.
-    ESP_LOGW(TAG, "Personal-data reset — wiping wifi creds, current_js, ai_api_key");
+    ESP_LOGW(TAG, "Personal-data reset — wifi creds, current_js, ai_api_key, pairing");
     static const char *const keys[] = {
         CONFIG_KEY_WIFI_SSID,
         CONFIG_KEY_WIFI_PASS,
@@ -81,8 +78,9 @@ esp_err_t factory_reset_full(bool reboot)
         CONFIG_KEY_PAIR_TOKEN,
         CONFIG_KEY_PAIR_MODE,
     };
-    clear_keys(keys, sizeof(keys) / sizeof(keys[0]));
+    config_store_erase_keys(keys, sizeof(keys) / sizeof(keys[0]));
     confirm_blink(0, 100, 255);   // blue
+    mdns_service_stop();
     if (reboot) { vTaskDelay(pdMS_TO_TICKS(200)); esp_restart(); }
     return ESP_OK;
 }

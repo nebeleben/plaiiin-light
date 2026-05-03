@@ -54,12 +54,17 @@ static esp_err_t start_ap(void)
 {
     esp_netif_create_default_wifi_ap();
 
-    // Build SSID with MAC suffix
+    // Build SSID = <node_name>-<MAC suffix>. node_name comes from NVS so a
+    // profile-burned lamp ("tower8v2") shows up as "tower8v2-3FA8" instead of
+    // a generic "PlaiiinLight-3FA8". Falls back to the Kconfig prefix on a
+    // brand-new chip with no profile yet.
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
+    char node[24];
+    config_get_str_or(CONFIG_KEY_NODE_NAME, node, sizeof(node),
+                      CONFIG_PLAIIIN_WIFI_AP_SSID_PREFIX);
     char ssid[32];
-    snprintf(ssid, sizeof(ssid), "%s-%02X%02X",
-             CONFIG_PLAIIIN_WIFI_AP_SSID_PREFIX, mac[4], mac[5]);
+    snprintf(ssid, sizeof(ssid), "%s-%02X%02X", node, mac[4], mac[5]);
 
     wifi_config_t wifi_config = {0};
     strncpy((char *)wifi_config.ap.ssid, ssid, sizeof(wifi_config.ap.ssid) - 1);

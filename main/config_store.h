@@ -80,6 +80,13 @@ esp_err_t config_store_get_str(const char *key, char *out, size_t max_len);
 esp_err_t config_store_set_str(const char *key, const char *value);
 esp_err_t config_store_get_i32(const char *key, int32_t *out);
 esp_err_t config_store_set_i32(const char *key, int32_t value);
+
+/** Erase one or more keys from the config namespace, then commit. Used by
+ *  factory_reset to wipe selective fields (wifi, pair token, …) without
+ *  touching the rest. ESP_ERR_NVS_NOT_FOUND for individual keys is treated
+ *  as success — already gone is the same as just gone. */
+esp_err_t config_store_erase_keys(const char *const *keys, int count);
+
 bool config_store_has_wifi(void);
 
 /** Read string from NVS; if not set, copy fallback into out. */

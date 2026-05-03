@@ -215,6 +215,12 @@ void mqtt_client_stop(void)
     }
 }
 
+esp_err_t mqtt_client_restart(void)
+{
+    mqtt_client_stop();
+    return mqtt_client_start();
+}
+
 void mqtt_client_publish_state(void)
 {
     if (!s_client) return;

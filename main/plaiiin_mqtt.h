@@ -18,3 +18,8 @@
 esp_err_t mqtt_client_start(void);
 void mqtt_client_stop(void);
 void mqtt_client_publish_state(void);
+
+/** Stop the running client, re-read NVS settings, start again. Used by
+ *  /api/mqtt POST so toggling MQTT on/off or changing host/port doesn't
+ *  require a full device reboot. Safe when the client isn't running. */
+esp_err_t mqtt_client_restart(void);

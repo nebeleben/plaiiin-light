@@ -1,13 +1,16 @@
 #include "mdns_service.h"
 #include "config_store.h"
+#include "pairing.h"
 #include "mdns.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
 
 #include <ctype.h>
+#include <stdatomic.h>
 #include <string.h>
 
 static const char *TAG = "mdns_svc";
+static atomic_bool s_started = false;
 
 // mDNS hostnames must be a subset of [a-z0-9-]. Sanitise the configured
 // node name in place — anything else becomes a dash, uppercase becomes lowercase.
@@ -46,6 +49,9 @@ esp_err_t mdns_service_start(void)
     mdns_instance_name_set(node_name);
 
     // Two TXT record sets — same content. Lets clients filter by service.
+    // `paired` lets clients pre-filter lamps that already belong to someone
+    // else (Phase 12 pair-once); refreshed via mdns_service_set_paired().
+    const char *paired_val = pairing_is_paired() ? "1" : "0";
     mdns_txt_item_t txt[] = {
         {"vendor",   vendor},
         {"node",     node_name},
@@ -53,6 +59,7 @@ esp_err_t mdns_service_start(void)
         {"api",      api_ver},
         {"lamp",     lamp_type},
         {"path",     "/api"},
+        {"paired",   (char *)paired_val},
     };
     const size_t txt_count = sizeof(txt) / sizeof(txt[0]);
 
@@ -60,8 +67,37 @@ esp_err_t mdns_service_start(void)
 
     mdns_service_add(NULL, "_http",          "_tcp", port, txt, txt_count);
     mdns_service_add(NULL, "_plaiiinlight",  "_tcp", port, txt, txt_count);
+    atomic_store(&s_started, true);
 
-    ESP_LOGI(TAG, "mDNS up: %s.local on _http._tcp + _plaiiinlight._tcp:%u",
-             hostname, port);
+    ESP_LOGI(TAG, "mDNS up: %s.local on _http._tcp + _plaiiinlight._tcp:%u (paired=%s)",
+             hostname, port, paired_val);
+    return ESP_OK;
+}
+
+esp_err_t mdns_service_set_paired(bool paired)
+{
+    if (!atomic_load(&s_started)) return ESP_OK;
+    const char *val = paired ? "1" : "0";
+    esp_err_t a = mdns_service_txt_item_set("_http",         "_tcp", "paired", val);
+    esp_err_t b = mdns_service_txt_item_set("_plaiiinlight", "_tcp", "paired", val);
+    if (a != ESP_OK || b != ESP_OK) {
+        ESP_LOGW(TAG, "txt update failed http=%s plaiiin=%s",
+                 esp_err_to_name(a), esp_err_to_name(b));
+    } else {
+        ESP_LOGI(TAG, "mDNS paired=%s", val);
+    }
+    return (a == ESP_OK && b == ESP_OK) ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t mdns_service_stop(void)
+{
+    if (!atomic_load(&s_started)) return ESP_OK;
+    // mdns_free emits goodbye records on its way down so listening clients
+    // drop the cached service immediately. Without this, macOS NWBrowser
+    // would keep showing the lamp at <node>.local for the TTL window even
+    // after we've rebooted into AP mode.
+    mdns_free();
+    atomic_store(&s_started, false);
+    ESP_LOGI(TAG, "mDNS stopped (goodbye sent)");
     return ESP_OK;
 }
