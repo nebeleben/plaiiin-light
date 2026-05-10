@@ -8248,18 +8248,21 @@ static void exec_expr(struct mjs *mjs, int op) {
     }
     case TOK_UNARY_PLUS:
       break;
+    /*
+     * PlaiiinLight patch: stock mjs rejects == / != to discourage type
+     * coercion bugs. For LED-art scripts (and AI-generated code that doesn't
+     * know mjs's quirks) the strictness is more nuisance than safety —
+     * comparisons here are almost always against integer indices. Treat
+     * loose equality as strict equality (same code path as ===/!==).
+     */
     case TOK_EQ:
-      mjs_set_errorf(mjs, MJS_NOT_IMPLEMENTED_ERROR, "Use ===, not ==");
-      break;
-    case TOK_NE:
-      mjs_set_errorf(mjs, MJS_NOT_IMPLEMENTED_ERROR, "Use !==, not !=");
-      break;
     case TOK_EQ_EQ: {
       mjs_val_t a = mjs_pop(mjs);
       mjs_val_t b = mjs_pop(mjs);
       mjs_push(mjs, mjs_mk_boolean(mjs, check_equal(mjs, a, b)));
       break;
     }
+    case TOK_NE:
     case TOK_NE_NE: {
       mjs_val_t a = mjs_pop(mjs);
       mjs_val_t b = mjs_pop(mjs);
@@ -12659,6 +12662,16 @@ static mjs_err_t parse_if(struct pstate *p) {
 
   EXPECT(p, TOK_CLOSE_PAREN);
   if ((res = parse_block_or_stmt(p, 1)) != MJS_OK) return res;
+
+  /*
+   * PlaiiinLight patch: parse_block_or_stmt → parse_statement parses the
+   * if-body but does NOT consume the trailing ';' for expression-statements
+   * like `headX = 1;`. Stock mjs then sees `;` instead of `else` here and
+   * exits the if; the outer parse_statement_list eats `;` and re-enters
+   * parse_statement on `else`, which has no case and falls into parse_expr →
+   * SYNTAX_ERROR. Skip optional semicolons so `if (x) y; else z;` parses.
+   */
+  while (p->tok.tok == TOK_SEMICOLON) pnext1(p);
 
   if (p->tok.tok == TOK_KEYWORD_ELSE) {
     /*

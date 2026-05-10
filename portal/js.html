@@ -6,11 +6,12 @@
 <title>PlaiiinLight - Scripts</title>
 <link rel="stylesheet" href="/style.css">
 <style>
-.script-list{border:1px solid var(--border);border-radius:8px;padding:6px;margin-bottom:10px;max-height:200px;overflow-y:auto;background:var(--input-bg)}
+.script-list{border:1px solid var(--border);border-radius:8px;padding:6px;max-height:200px;overflow-y:auto;background:var(--input-bg)}
 .script-row{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:4px;font-size:.88rem}
 .script-row:hover{background:var(--card)}
 .script-row.playing{color:var(--on)}
 .script-row .name{flex:1;cursor:pointer}
+.list-footer{font-size:.7rem;color:var(--text-dim);margin:4px 2px 14px 2px}
 .editor-area{border:1px solid var(--border);border-radius:8px;background:var(--input-bg);margin-bottom:8px}
 .editor-area textarea{width:100%;border:none;background:transparent;color:var(--text);font-family:monospace;font-size:.78rem;padding:8px;resize:vertical;min-height:160px;outline:none;box-sizing:border-box}
 .row-actions{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
@@ -19,12 +20,14 @@
 .play-btn{background:var(--on);color:#fff}
 .stop-btn{background:var(--off);color:#fff}
 .apply-btn{background:var(--accent);color:#fff}
-.limits{display:flex;gap:12px;align-items:center;font-size:.78rem;margin-top:10px}
-.limits input{width:90px}
-.preview-wrap{display:flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:8px}
+.preview-wrap{display:flex;flex-direction:column;align-items:center;gap:6px;margin-bottom:10px}
 .preview-grid{display:inline-grid;gap:1px;border-radius:6px;overflow:hidden;background:#000;padding:2px}
 .preview-grid .px{transition:background .05s}
 .preview-meta{font-size:.7rem;color:var(--text-dim)}
+.slider-row{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.slider-row .label{font-size:.78rem;color:var(--text-dim);min-width:62px}
+.slider-row input[type=range]{flex:1;accent-color:var(--accent)}
+.slider-row .val{font-size:.85rem;min-width:36px;text-align:right}
 </style>
 </head>
 <body>
@@ -47,12 +50,20 @@
 
 <h2>Saved</h2>
 <div class="script-list" id="scriptList"><div style="color:var(--text-dim);padding:6px">Loading...</div></div>
+<div class="list-footer" id="listFooter">—</div>
 
-<h2>Editor</h2>
+<h2>Preview &amp; Editor</h2>
 <input id="nameInput" placeholder="name (letters, digits, _ -)" style="margin-bottom:6px">
+
+<div class="preview-wrap">
+<div id="previewGrid" class="preview-grid"></div>
+<div class="preview-meta" id="previewMeta">—</div>
+</div>
+
 <div class="editor-area">
 <textarea id="srcInput" spellcheck="false" placeholder="function render(frame, w, h, baseColor) {&#10;  var out = [];&#10;  for (var y = 0; y < h; y++)&#10;    for (var x = 0; x < w; x++)&#10;      out.push(baseColor);&#10;  return out;&#10;}"></textarea>
 </div>
+
 <div class="row-actions">
 <button class="apply-btn" id="btnSave">Save</button>
 <button class="play-btn" id="btnPlay">Play</button>
@@ -60,29 +71,33 @@
 <button class="small-btn" id="btnUpload">Upload file</button>
 <input type="file" id="fileInput" style="display:none" accept=".js,text/javascript">
 </div>
+
+<div class="slider-row">
+<span class="label">Brightness</span>
+<input type="range" id="brightnessSlider" min="0" max="255" value="255">
+<span class="val" id="brightnessVal">100%</span>
+</div>
+<div class="slider-row">
+<span class="label">FPS</span>
+<input type="range" id="fpsSlider" min="1" max="30" value="10">
+<span class="val" id="fpsVal">10</span>
+</div>
+
+<div class="row-actions" style="margin-top:4px">
+<button class="play-btn" id="btnPreview">Show preview</button>
+<button class="stop-btn" id="btnPreviewStop">Stop preview</button>
+</div>
+
+<p style="font-size:.68rem;color:var(--text-dim);margin-bottom:6px">Play sends the editor source to the lamp; the preview runs locally in your browser.</p>
+
 <div class="msg" id="msg"></div>
-
-<h2>Preview</h2>
-<div class="preview-wrap">
-<div id="previewGrid" class="preview-grid"></div>
-<div class="preview-meta" id="previewMeta">—</div>
-</div>
-<div class="row-actions">
-<button class="play-btn" id="btnPreview">Show</button>
-<button class="stop-btn" id="btnPreviewStop">Stop</button>
-<label style="font-size:.78rem;color:var(--text-dim);display:flex;align-items:center;gap:6px;margin-left:auto">
-  FPS <input id="previewFps" type="number" min="1" max="60" value="10" style="width:60px">
-</label>
-</div>
-<p style="font-size:.68rem;color:var(--text-dim);margin-bottom:6px">Preview runs the editor's JS in your browser — it does not stream to the lamp.</p>
-
 <div class="info-bar"><span id="status"></span></div>
 </div>
 <p class="copyright">&copy; <a href="https://plaiiin.com">plaiiin.com</a></p>
 
 <script>
 var dark=localStorage.getItem('theme')!=='light';
-function applyTheme(){document.body.classList.toggle('light',!dark);document.getElementById('themeBtn').textContent=dark?'\u2600':'\u263E';}
+function applyTheme(){document.body.classList.toggle('light',!dark);document.getElementById('themeBtn').textContent=dark?'☀':'☾';}
 applyTheme();
 document.getElementById('themeBtn').onclick=function(){dark=!dark;localStorage.setItem('theme',dark?'dark':'light');applyTheme();};
 
@@ -91,6 +106,14 @@ var msgEl=document.getElementById('msg');
 var nameInput=document.getElementById('nameInput');
 var srcInput=document.getElementById('srcInput');
 var statusEl=document.getElementById('status');
+var listFooter=document.getElementById('listFooter');
+
+// baseColor reflects /api/state.color so the local preview tints match what
+// the lamp will paint when render() honors the 4th arg.
+var baseColor=[128,128,128];
+fetch('/api/state').then(function(r){return r.json()}).then(function(s){
+  if(s&&Array.isArray(s.color)&&s.color.length===3) baseColor=s.color.slice(0,3);
+}).catch(function(){});
 
 function showMsg(text, ok){
   msgEl.textContent=text;
@@ -105,7 +128,8 @@ function refreshList(){
     listEl.innerHTML='';
     if(scripts.length===0){
       listEl.innerHTML='<div style="color:var(--text-dim);padding:6px">No scripts yet</div>';
-      statusEl.textContent='0 scripts';
+      listFooter.textContent='0 scripts';
+      statusEl.textContent='';
       return;
     }
     scripts.forEach(function(n){
@@ -118,7 +142,7 @@ function refreshList(){
       name.onclick=function(){loadScript(n);};
       row.appendChild(name);
 
-      // Per-row toggle: Play (idle) ↔ Stop (this script is currently
+      // Per-row toggle: Play (idle) <-> Stop (this script is currently
       // playing). Play also flips the persistent mode to "js"; Stop flips
       // it back to "api" so the lamp returns to plain-color behavior.
       var play=document.createElement('button');
@@ -140,7 +164,8 @@ function refreshList(){
 
       listEl.appendChild(row);
     });
-    statusEl.textContent=scripts.length+' script'+(scripts.length===1?'':'s')+(playing?' — playing '+playing:'');
+    listFooter.textContent=scripts.length+' script'+(scripts.length===1?'':'s');
+    statusEl.textContent=playing?'playing '+playing:'';
   }).catch(function(e){
     listEl.innerHTML='<div style="color:var(--off);padding:6px">List failed: '+e.message+'</div>';
   });
@@ -153,6 +178,8 @@ function loadScript(name){
   }).then(function(src){
     nameInput.value=name;
     srcInput.value=src;
+    // Auto-restart preview so the user immediately sees what they loaded.
+    startPreview();
   }).catch(function(e){showMsg('Load failed: '+e.message,false);});
 }
 
@@ -161,19 +188,21 @@ function saveScript(){
   var src=srcInput.value;
   if(!name){showMsg('Name required',false);return;}
   if(!src){showMsg('Source required',false);return;}
-  fetch('/api/js/'+encodeURIComponent(name),{method:'PUT',headers:{'Content-Type':'text/plain'},body:src})
+  return fetch('/api/js/'+encodeURIComponent(name),{method:'PUT',headers:{'Content-Type':'text/plain'},body:src})
     .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})})
     .then(function(x){
-      if(!x.ok){showMsg(x.j.message||'Save failed',false);return;}
-      showMsg('Saved',true);refreshList();
-    }).catch(function(e){showMsg('Save failed: '+e.message,false);});
+      if(!x.ok){showMsg(x.j.message||'Save failed',false);return false;}
+      showMsg('Saved',true);refreshList();return true;
+    }).catch(function(e){showMsg('Save failed: '+e.message,false);return false;});
 }
 
 // Playing a script == js mode. Set persistent mode first so a reboot
-// resumes the same script, then start the player.
+// resumes the same script, then start the player. Always stop the local
+// preview first — running both is just visual noise.
 function playScriptInJsMode(name){
+  stopPreview();
   fetch('/api/mode',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'js'})})
-    .then(function(){return fetch('/api/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({file:name,fps:10})});})
+    .then(function(){return fetch('/api/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({file:name,fps:fps})});})
     .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})})
     .then(function(x){
       if(!x.ok){showMsg(x.j.message||'Play failed',false);return;}
@@ -192,10 +221,6 @@ function stopScriptAndApiMode(){
     }).catch(function(e){showMsg('Stop failed: '+e.message,false);});
 }
 
-// Compatibility shims for the big editor buttons below.
-function playScript(name){playScriptInJsMode(name);}
-function stopScript(){stopScriptAndApiMode();}
-
 function deleteScript(name){
   if(!confirm('Delete '+name+'?'))return;
   fetch('/api/js/'+encodeURIComponent(name),{method:'DELETE'})
@@ -207,12 +232,17 @@ function deleteScript(name){
 
 document.getElementById('btnSave').onclick=saveScript;
 document.getElementById('btnPlay').onclick=function(){
+  // Editor Play: persist + play whatever's in the textarea. Save is a
+  // pre-req (the device only plays files it has on disk), so chain Save →
+  // Play. stopPreview() runs because device playback supersedes the local
+  // preview view.
   var name=nameInput.value.trim();
   if(!name){showMsg('Name required',false);return;}
-  // Save then play
-  saveScript();setTimeout(function(){playScript(name);},300);
+  Promise.resolve(saveScript()).then(function(ok){
+    if(ok!==false) playScriptInJsMode(name);
+  });
 };
-document.getElementById('btnStop').onclick=stopScript;
+document.getElementById('btnStop').onclick=stopScriptAndApiMode;
 
 var fileInput=document.getElementById('fileInput');
 document.getElementById('btnUpload').onclick=function(){fileInput.click();};
@@ -226,13 +256,38 @@ fileInput.onchange=function(){
   r.readAsText(f);
 };
 
+// --- Brightness slider (mirrors Compose) -------------------------------
+var bSlider=document.getElementById('brightnessSlider');
+var bVal=document.getElementById('brightnessVal');
+var bTimer=null;
+fetch('/api/brightness').then(function(r){return r.json()}).then(function(d){
+  bSlider.value=d.brightness;
+  bVal.textContent=Math.round(d.brightness/2.55)+'%';
+}).catch(function(){});
+bSlider.oninput=function(){
+  bVal.textContent=Math.round(this.value/2.55)+'%';
+  clearTimeout(bTimer);
+  var v=this.value;
+  bTimer=setTimeout(function(){
+    fetch('/api/brightness',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"brightness":'+v+'}'});
+  },100);
+};
 
-// --- Preview (browser-local, no streaming to lamp) ---
+// --- FPS slider (drives both upload Play and local preview cadence) ----
+var fps=10;
+var fSlider=document.getElementById('fpsSlider');
+var fVal=document.getElementById('fpsVal');
+fSlider.oninput=function(){fps=parseInt(this.value)||10;fVal.textContent=fps;};
+
+// --- Local preview (browser-side; never streams to lamp) ---------------
 var gridEl=document.getElementById('previewGrid');
 var metaEl=document.getElementById('previewMeta');
-var fpsInput=document.getElementById('previewFps');
 var previewW=1,previewH=1,previewCells=[];
 var previewTimer=null,previewFrame=0,previewFn=null;
+// previewActive tracks the *intent* to preview (independent of having a
+// compiled function). Used by save-then-resume so an edit doesn't blank
+// the grid while the user is iterating.
+var previewActive=false;
 
 function buildPreviewGrid(w,h){
   previewW=w;previewH=h;
@@ -253,21 +308,40 @@ function buildPreviewGrid(w,h){
   metaEl.textContent=w+'×'+h+' logical';
 }
 
+// Build with sane defaults so the rect is always visible — then override
+// from /api once the lamp's logical dimensions come back.
+buildPreviewGrid(8,8);
 fetch('/api').then(function(r){return r.json()}).then(function(d){
-  var w=d.logicalW||d.physicalW||d.ledCount||1;
+  var w=d.logicalW||d.physicalW||d.ledCount||8;
   var h=d.logicalH||d.physicalH||1;
   buildPreviewGrid(w,h);
-}).catch(function(){ buildPreviewGrid(8,8); });
+}).catch(function(){});
 
 function stopPreview(){
   if(previewTimer){clearTimeout(previewTimer);previewTimer=null;}
   previewFn=null;
+  previewActive=false;
+}
+
+function compilePreview(){
+  var src=srcInput.value;
+  if(!src) return false;
+  try{
+    // Wrap so arrow functions and top-level statements both work: the user
+    // code defines `render`, then we return it.
+    previewFn=new Function(src+'\nreturn render;')();
+    if(typeof previewFn!=='function')throw new Error('render() not found');
+    return true;
+  }catch(e){
+    showMsg('Preview compile error: '+e.message,false);
+    previewFn=null;return false;
+  }
 }
 
 function renderPreviewFrame(){
   if(!previewFn)return;
   var pixels;
-  try{pixels=previewFn(previewFrame,previewW,previewH);}
+  try{pixels=previewFn(previewFrame,previewW,previewH,baseColor);}
   catch(e){stopPreview();showMsg('Preview error: '+e.message,false);return;}
   if(!Array.isArray(pixels)){stopPreview();showMsg('render() must return an array',false);return;}
   for(var i=0;i<previewCells.length&&i<pixels.length;i++){
@@ -276,24 +350,30 @@ function renderPreviewFrame(){
     previewCells[i].style.background='rgb('+r+','+g+','+b+')';
   }
   previewFrame++;
-  var fps=parseInt(fpsInput.value)||10;
-  if(fps<1)fps=1;
-  previewTimer=setTimeout(renderPreviewFrame,1000/fps);
+  var rate=fps<1?1:fps;
+  previewTimer=setTimeout(renderPreviewFrame,1000/rate);
 }
 
-document.getElementById('btnPreview').onclick=function(){
-  stopPreview();
-  var src=srcInput.value;
-  if(!src){showMsg('No source to preview',false);return;}
-  try{
-    // Wrap so arrow functions and top-level statements both work: the user
-    // code defines `render`, then we return it.
-    previewFn=new Function(src+'\nreturn render;')();
-    if(typeof previewFn!=='function')throw new Error('render() not found');
-  }catch(e){showMsg('Preview compile error: '+e.message,false);previewFn=null;return;}
+// Cross-stop: if a script is currently playing on the device, kick it back
+// to api mode first so the user isn't watching two competing renderings.
+function startPreview(){
+  if(!srcInput.value){showMsg('No source to preview',false);return;}
+  if(previewTimer){clearTimeout(previewTimer);previewTimer=null;}
+  previewActive=true;
+  fetch('/api/js').then(function(r){return r.json()}).then(function(d){
+    if(d&&d.playing){
+      // Best-effort stop; don't gate the preview on the response.
+      fetch('/api/stop',{method:'POST'}).then(function(){
+        return fetch('/api/mode',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'api'})});
+      }).then(function(){refreshList();}).catch(function(){});
+    }
+  }).catch(function(){});
+  if(!compilePreview())return;
   previewFrame=0;
   renderPreviewFrame();
-};
+}
+
+document.getElementById('btnPreview').onclick=startPreview;
 document.getElementById('btnPreviewStop').onclick=stopPreview;
 
 refreshList();
