@@ -487,7 +487,14 @@ static esp_err_t orientation_set_handler(httpd_req_t *req)
 static esp_err_t state_get_handler(httpd_req_t *req)
 {
     if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
-    led_color_t c = led_control_get_last_color();
+    // `color` was historically the *last painted* color. In js / stream modes
+    // that flips every frame, so client-side color pickers couldn't sync
+    // sensibly — the picker chased the latest frame's first pixel. Return
+    // baseColor instead: the user's *intent* (last value sent through
+    // /api/color), which stays stable across modes. In api mode baseColor ==
+    // last painted, so existing api-mode clients see no behavioral change.
+    uint8_t br = 0, bg = 0, bb = 0;
+    js_player_get_base_color(&br, &bg, &bb);
     bool on = led_control_is_on();
     char persistent[16] = {0};
     get_persistent_mode(persistent, sizeof(persistent));
@@ -499,12 +506,30 @@ static esp_err_t state_get_handler(httpd_req_t *req)
     if (current) {
         snprintf(resp, sizeof(resp),
                  "{\"on\":%s,\"color\":[%u,%u,%u],\"mode\":\"%s\",\"brightness\":%u,\"current\":\"%s\"}",
-                 on ? "true" : "false", c.r, c.g, c.b, mode, brightness, current);
+                 on ? "true" : "false", br, bg, bb, mode, brightness, current);
     } else {
         snprintf(resp, sizeof(resp),
                  "{\"on\":%s,\"color\":[%u,%u,%u],\"mode\":\"%s\",\"brightness\":%u,\"current\":null}",
-                 on ? "true" : "false", c.r, c.g, c.b, mode, brightness);
+                 on ? "true" : "false", br, bg, bb, mode, brightness);
     }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, resp);
+    return ESP_OK;
+}
+
+// GET /api/base_color -> {"color":[r,g,b]}
+//
+// The user-set color (4th arg to render() in js mode; same as the LED color
+// in api mode). Distinct from the painted-frame color, which is what state.color
+// returned before 1.8.6 and is no longer surfaced — the painted color flips
+// per frame in js / stream mode and was never useful for clients.
+static esp_err_t base_color_get_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    uint8_t r = 0, g = 0, b = 0;
+    js_player_get_base_color(&r, &g, &b);
+    char resp[40];
+    snprintf(resp, sizeof(resp), "{\"color\":[%u,%u,%u]}", r, g, b);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, resp);
     return ESP_OK;
@@ -608,6 +633,13 @@ esp_err_t light_api_register(httpd_handle_t server)
         .handler = state_get_handler
     };
     httpd_register_uri_handler(server, &state_get);
+
+    httpd_uri_t base_color_get = {
+        .uri = "/api/base_color",
+        .method = HTTP_GET,
+        .handler = base_color_get_handler
+    };
+    httpd_register_uri_handler(server, &base_color_get);
 
     httpd_uri_t limits_get = {
         .uri = "/api/limits",

@@ -77,6 +77,11 @@
 <input type="range" id="brightnessSlider" min="0" max="255" value="255">
 <span class="val" id="brightnessVal">100%</span>
 </div>
+<div id="paramsBlock" style="display:none;margin-bottom:8px">
+<div style="font-size:.78rem;color:var(--text-dim);margin-bottom:4px">Script parameters</div>
+<div id="paramsList"></div>
+</div>
+
 <div class="slider-row">
 <span class="label">FPS</span>
 <input type="range" id="fpsSlider" min="1" max="30" value="10">
@@ -178,9 +183,80 @@ function loadScript(name){
   }).then(function(src){
     nameInput.value=name;
     srcInput.value=src;
+    loadParams(name);
     // Auto-restart preview so the user immediately sees what they loaded.
     startPreview();
   }).catch(function(e){showMsg('Load failed: '+e.message,false);});
+}
+
+// --- Script parameters (Phase 18 magic-comment params) ---------------
+// Schema is fetched from /api/js/<name>/params; one slider per item.
+// PUT is debounced per-name so dragging emits a single update at the end.
+var paramsBlock=document.getElementById('paramsBlock');
+var paramsList=document.getElementById('paramsList');
+var paramsName='';
+var paramsValues={};
+var paramsTimer={};
+
+function loadParams(name){
+  paramsName=name;
+  fetch('/api/js/'+encodeURIComponent(name)+'/params')
+    .then(function(r){return r.ok?r.json():{items:[]};})
+    .then(function(d){renderParams(d.items||[]);})
+    .catch(function(){renderParams([]);});
+}
+
+function renderParams(items){
+  paramsValues={};
+  paramsList.innerHTML='';
+  if(!items.length){paramsBlock.style.display='none';return;}
+  paramsBlock.style.display='';
+  items.forEach(function(p){
+    paramsValues[p.name]=p.value;
+    var row=document.createElement('div');
+    row.className='slider-row';
+    var lbl=document.createElement('span');
+    lbl.className='label';
+    lbl.textContent=p.name;
+    if(p.description) lbl.title=p.description;
+    var inp=document.createElement('input');
+    inp.type='range';
+    // Range sliders are integer by default — divide into ~100 steps so
+    // floats show useful resolution (density 0..1, fadeIn 50..3000…).
+    var range=p.max-p.min;
+    var step=range>=10?1:(range/100);
+    inp.min=p.min;inp.max=p.max;inp.step=step;inp.value=p.value;
+    var val=document.createElement('span');
+    val.className='val';
+    val.textContent=formatVal(p.value);
+    inp.oninput=function(){
+      var v=parseFloat(this.value);
+      val.textContent=formatVal(v);
+      paramsValues[p.name]=v;
+      schedulePut(p.name,v);
+    };
+    row.appendChild(lbl);row.appendChild(inp);row.appendChild(val);
+    paramsList.appendChild(row);
+  });
+}
+
+function formatVal(v){
+  if(Number.isInteger(v)) return String(v);
+  // Two decimals for sub-1 ranges (density, scale), zero for ms-style ints.
+  return Math.abs(v)>=10?Math.round(v):v.toFixed(2);
+}
+
+function schedulePut(name,v){
+  clearTimeout(paramsTimer[name]);
+  paramsTimer[name]=setTimeout(function(){
+    if(!paramsName) return;
+    var body={};body[name]=v;
+    fetch('/api/js/'+encodeURIComponent(paramsName)+'/params',{
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(body)
+    }).catch(function(e){showMsg('params PUT failed: '+e.message,false);});
+  },120);
 }
 
 function saveScript(){
@@ -341,7 +417,7 @@ function compilePreview(){
 function renderPreviewFrame(){
   if(!previewFn)return;
   var pixels;
-  try{pixels=previewFn(previewFrame,previewW,previewH,baseColor);}
+  try{pixels=previewFn(previewFrame,previewW,previewH,baseColor,paramsValues);}
   catch(e){stopPreview();showMsg('Preview error: '+e.message,false);return;}
   if(!Array.isArray(pixels)){stopPreview();showMsg('render() must return an array',false);return;}
   for(var i=0;i<previewCells.length&&i<pixels.length;i++){

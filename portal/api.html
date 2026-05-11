@@ -11,7 +11,8 @@
 .endpoint-table th{font-weight:600;color:var(--text-dim);font-size:.72rem;text-transform:uppercase;letter-spacing:.05em}
 .endpoint-table td.method{font-family:monospace;font-size:.72rem;color:var(--accent);width:60px}
 .endpoint-table td.path{font-family:monospace;font-size:.78rem;width:30%}
-.endpoint-table td.body{font-family:monospace;font-size:.72rem;color:var(--text-dim);white-space:pre-wrap}
+.endpoint-table td.body{font-family:monospace;font-size:.72rem;color:var(--text-dim);white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+.endpoint-table code,.note code{overflow-wrap:anywhere;word-break:break-word}
 .endpoint-table td.desc{color:var(--text);}
 .endpoint-table tr:last-child td{border-bottom:none}
 h2{margin-top:22px}
@@ -42,7 +43,8 @@ h2{margin-top:22px}
 <table class="endpoint-table">
 <tr><th>Method</th><th>Path</th><th>Body / Response</th><th>Description</th></tr>
 <tr><td class="method">GET</td><td class="path">/api</td><td class="body">{vendor, apiVersion, firmwareVersion, nodeName, ledPin, ledClkPin, ledCount, ledType, lampType, lampForm, physicalW/H, logicalW/H, pixelGroupW/H, rotation, origin, serpentine, serpentineAxis}</td><td class="desc">All device metadata.</td></tr>
-<tr><td class="method">GET</td><td class="path">/api/state</td><td class="body">{on, color:[r,g,b], mode, brightness}</td><td class="desc">Current lamp state.</td></tr>
+<tr><td class="method">GET</td><td class="path">/api/state</td><td class="body">{on, color:[r,g,b], mode, brightness, current}</td><td class="desc">Current lamp state. <code>color</code> is the user-set <b>baseColor</b> (last value sent through <code>/api/color</code>) — stable across modes; clients sync color pickers from this. <code>current</code> is the active JS script when <code>mode == "js"</code>.</td></tr>
+<tr><td class="method">GET</td><td class="path">/api/base_color</td><td class="body">{color: [r, g, b]}</td><td class="desc">Just the baseColor, without the rest of the state. Same value as <code>state.color</code>; useful when the client only needs the color and wants a smaller payload.</td></tr>
 <tr><td class="method">GET</td><td class="path">/api/storage</td><td class="body">{total, used, free, files}</td><td class="desc">SPIFFS storage usage in bytes + script file count.</td></tr>
 </table>
 
@@ -53,7 +55,8 @@ h2{margin-top:22px}
 <tr><td class="method">POST</td><td class="path">/api/color</td><td class="body">{"colors": [[r,g,b], ...]}</td><td class="desc">Set LED colors. Values clamped 0–255.</td></tr>
 <tr><td class="method">GET</td><td class="path">/api/brightness</td><td class="body">{brightness:0..255}</td><td class="desc">Current brightness.</td></tr>
 <tr><td class="method">POST</td><td class="path">/api/brightness</td><td class="body">{"brightness": 0..255}</td><td class="desc">Set brightness; saved to NVS.</td></tr>
-<tr><td class="method">POST</td><td class="path">/api/mode</td><td class="body">{"mode": "stream"|"api"}</td><td class="desc">Switch between API and WebSocket streaming mode.</td></tr>
+<tr><td class="method">GET</td><td class="path">/api/mode</td><td class="body">{mode, persistent, current}</td><td class="desc">Effective mode (incl. transient "stream"), the persisted choice (NVS, "api" | "js"), and the currently-selected JS script if any.</td></tr>
+<tr><td class="method">PUT</td><td class="path">/api/mode</td><td class="body">{"mode": "api"|"js"|"stream"}</td><td class="desc">Switch lamp mode. "api" = solid color via /api/color, "js" = run the selected script, "stream" = WebSocket-driven (set automatically when /ws is in use).</td></tr>
 </table>
 
 <h2>Layout &amp; Orientation</h2>
@@ -73,10 +76,16 @@ h2{margin-top:22px}
 <tr><td class="method">GET</td><td class="path">/api/js</td><td class="body">{scripts:[...], playing:&lt;name&gt;|null}</td><td class="desc">List scripts and currently playing one.</td></tr>
 <tr><td class="method">GET</td><td class="path">/api/js/{name}</td><td class="body">raw JS source</td><td class="desc">Read a single script.</td></tr>
 <tr><td class="method">PUT</td><td class="path">/api/js/{name}</td><td class="body">JS source body</td><td class="desc">Save script. Validated + eval'd once before write.</td></tr>
-<tr><td class="method">DELETE</td><td class="path">/api/js/{name}</td><td class="body">—</td><td class="desc">Delete a script.</td></tr>
+<tr><td class="method">DELETE</td><td class="path">/api/js/{name}</td><td class="body">—</td><td class="desc">Delete a script (and its params sidecar).</td></tr>
+<tr><td class="method">GET</td><td class="path">/api/js/{name}/params</td><td class="body">{items: [{name, min, max, default, value, description}, ...]}</td><td class="desc">Tunable parameters for a script. Schema is parsed from <code>// @param</code> magic comments in the script source; persisted overrides are merged in. Empty <code>items</code> if the script declares none.</td></tr>
+<tr><td class="method">PUT</td><td class="path">/api/js/{name}/params</td><td class="body">{"&lt;param&gt;": value, ...}</td><td class="desc">Update one or more params. Values are clamped to [min, max], persisted to a sidecar file, and applied live to the player without restarting the animation if this is the currently-playing script. Returns the post-update schema.</td></tr>
 <tr><td class="method">POST</td><td class="path">/api/play</td><td class="body">{"file":"&lt;name&gt;","fps":N}</td><td class="desc">Run a script at the given FPS.</td></tr>
+<tr><td class="method">POST</td><td class="path">/api/play/next</td><td class="body">{playing:&lt;name&gt;}</td><td class="desc">Step to the next script alphabetically and play it.</td></tr>
+<tr><td class="method">POST</td><td class="path">/api/play/prev</td><td class="body">{playing:&lt;name&gt;}</td><td class="desc">Step to the previous script alphabetically and play it.</td></tr>
+<tr><td class="method">GET</td><td class="path">/api/play/current</td><td class="body">{current:&lt;name&gt;|null, playing:&lt;name&gt;|null}</td><td class="desc"><code>current</code> is the persisted selection (NVS, survives reboot); <code>playing</code> is what the player has loaded right now.</td></tr>
 <tr><td class="method">POST</td><td class="path">/api/stop</td><td class="body">—</td><td class="desc">Stop JS playback.</td></tr>
 </table>
+<p class="note"><b>Magic-comment parameters.</b> Add <code>// @param NAME MIN..MAX = DEFAULT DESCRIPTION</code> lines anywhere in a script to expose tunable knobs. Numeric only; up to 8 per script. Example:<br><code>// @param density 0..1 = 0.75 Fraction of LEDs animating concurrently</code><br>The script receives a <code>params</code> object as the 5th argument to <code>render(frame, w, h, baseColor, params)</code>; read <code>params.density</code> etc.</p>
 
 <h2>OTA &amp; Config</h2>
 <table class="endpoint-table">

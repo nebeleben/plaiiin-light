@@ -1,8 +1,10 @@
 #include "js_api.h"
 #include "js_storage.h"
 #include "js_player.h"
+#include "js_params.h"
 #include "config_store.h"
 #include "pairing.h"
+#include <stdbool.h>
 
 #include "esp_log.h"
 
@@ -14,14 +16,43 @@ static const char *TAG = "js_api";
 
 #define MAX_UPLOAD_BYTES (48 * 1024)
 
-/** Extract name from "/api/js/<name>". Returns pointer into req->uri or NULL. */
+/** Extract name from "/api/js/<name>" or "/api/js/<name>/params". Writes
+ *  the name into `out` (NUL-terminated), and returns true if the URI ends
+ *  with "/params" (so the caller dispatches to the params handler instead
+ *  of the source handler). */
+static bool split_uri(const char *uri, char *out, size_t out_cap, bool *is_params)
+{
+    *is_params = false;
+    if (out_cap == 0) return false;
+    out[0] = '\0';
+    const char *prefix = "/api/js/";
+    if (strncmp(uri, prefix, strlen(prefix)) != 0) return false;
+    const char *name = uri + strlen(prefix);
+    if (*name == 0) return false;
+    // Strip trailing "/params" if present.
+    size_t len = strlen(name);
+    const char *suffix = "/params";
+    size_t slen = strlen(suffix);
+    if (len > slen && strcmp(name + len - slen, suffix) == 0) {
+        *is_params = true;
+        len -= slen;
+    }
+    if (len + 1 > out_cap) return false;
+    memcpy(out, name, len);
+    out[len] = '\0';
+    return out[0] != '\0';
+}
+
+/** Back-compat wrapper for the existing source handlers. Returns NULL when
+ *  the URI is the params sub-resource so callers naturally fall through to
+ *  the dispatcher. */
 static const char *name_from_uri(const char *uri)
 {
-    const char *prefix = "/api/js/";
-    if (strncmp(uri, prefix, strlen(prefix)) != 0) return NULL;
-    const char *name = uri + strlen(prefix);
-    if (*name == 0) return NULL;
-    return name;
+    static char buf[64];
+    bool is_params = false;
+    if (!split_uri(uri, buf, sizeof(buf), &is_params)) return NULL;
+    if (is_params) return NULL;
+    return buf;
 }
 
 static esp_err_t send_err_json(httpd_req_t *req, int status, const char *msg)
@@ -56,12 +87,36 @@ static esp_err_t list_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// GET /api/js/<name> -> script source as text/javascript
+// GET /api/js/<name>            -> script source as text/javascript
+// GET /api/js/<name>/params     -> {"items":[{"name":..,"min":..,...}]}
 static esp_err_t read_handler(httpd_req_t *req)
 {
     if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
-    const char *name = name_from_uri(req->uri);
-    if (!name) return send_err_json(req, 400, "missing name");
+    char name[64];
+    bool is_params = false;
+    if (!split_uri(req->uri, name, sizeof(name), &is_params)) {
+        return send_err_json(req, 400, "missing name");
+    }
+    if (is_params) {
+        // Read source, parse the schema fresh, layer overrides, emit JSON.
+        // We deliberately don't lean on js_player_dump_params_json — it only
+        // sees the *currently playing* script. Clients want this for any
+        // script in storage, including the one they're about to play.
+        char *src = NULL; size_t slen = 0;
+        esp_err_t err = js_storage_read(name, &src, &slen);
+        if (err == ESP_ERR_NOT_FOUND) return send_err_json(req, 404, "not found");
+        if (err != ESP_OK) return send_err_json(req, 500, "read failed");
+        js_params_schema_t schema = {0};
+        js_params_parse(src, &schema);
+        free(src);
+        js_params_load_overrides(name, &schema);
+        char buf[2048];
+        int n = js_params_to_json(&schema, buf, sizeof(buf));
+        if (n <= 0) return send_err_json(req, 500, "params encode failed");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, buf, n);
+        return ESP_OK;
+    }
     char *source = NULL;
     size_t len = 0;
     esp_err_t err = js_storage_read(name, &source, &len);
@@ -108,15 +163,47 @@ int js_api_write_script(const char *name, const char *body, size_t len,
     return 1;
 }
 
-// PUT /api/js/<name>  body: raw JS source
+// PUT /api/js/<name>            body: raw JS source
+// PUT /api/js/<name>/params     body: {"name":value,...} — partial OK
 static esp_err_t write_handler(httpd_req_t *req)
 {
     if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
-    const char *name = name_from_uri(req->uri);
-    if (!name) return send_err_json(req, 400, "missing name");
+    char name[64];
+    bool is_params = false;
+    if (!split_uri(req->uri, name, sizeof(name), &is_params)) {
+        return send_err_json(req, 400, "missing name");
+    }
     char *body = NULL; size_t body_len = 0;
     esp_err_t err = receive_body(req, &body, &body_len);
     if (err != ESP_OK) return send_err_json(req, 400, "bad body");
+
+    if (is_params) {
+        // Apply against the on-disk schema first so we persist no matter what.
+        char *src = NULL; size_t slen = 0;
+        esp_err_t rerr = js_storage_read(name, &src, &slen);
+        if (rerr == ESP_ERR_NOT_FOUND) { free(body); return send_err_json(req, 404, "not found"); }
+        if (rerr != ESP_OK)            { free(body); return send_err_json(req, 500, "read failed"); }
+        js_params_schema_t schema = {0};
+        js_params_parse(src, &schema);
+        free(src);
+        js_params_load_overrides(name, &schema);
+        int updated = js_params_apply_json(&schema, body, body_len);
+        if (updated > 0) js_params_save_overrides(name, &schema);
+        // If this is the currently-playing script, push the live values too
+        // so the change is visible on the very next frame without restart.
+        const char *playing = js_player_current_name();
+        if (playing && strcmp(playing, name) == 0) {
+            js_player_apply_params_json(body, body_len);
+        }
+        free(body);
+        char buf[2048];
+        int n = js_params_to_json(&schema, buf, sizeof(buf));
+        if (n <= 0) return send_err_json(req, 500, "params encode failed");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, buf, n);
+        return ESP_OK;
+    }
+
     char errbuf[160] = {0};
     int ok = js_api_write_script(name, body, body_len, errbuf, sizeof(errbuf));
     free(body);
@@ -141,6 +228,9 @@ static esp_err_t delete_handler(httpd_req_t *req)
     esp_err_t err = js_storage_remove(name);
     if (err == ESP_ERR_NOT_FOUND) return send_err_json(req, 404, "not found");
     if (err != ESP_OK) return send_err_json(req, 500, "delete failed");
+    // Drop any persisted params sidecar so a future script with the same
+    // name doesn't inherit ghost overrides.
+    js_params_drop(name);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
     return ESP_OK;

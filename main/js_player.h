@@ -35,3 +35,13 @@ void js_player_set_current_name(const char *name);
  *  scripts can tint themselves to whatever Home Assistant just set. */
 void js_player_set_base_color(uint8_t r, uint8_t g, uint8_t b);
 void js_player_get_base_color(uint8_t *r, uint8_t *g, uint8_t *b);
+
+/** Apply a params JSON override to the currently-running script.
+ *  Returns the number of parameters successfully updated.
+ *  Safe to call from an HTTP handler — values are swapped under the player
+ *  lock so the next frame picks them up atomically. */
+int js_player_apply_params_json(const char *json, size_t len);
+
+/** Currently-running script's params as JSON. Returns bytes written, or 0
+ *  if no script is loaded. */
+int js_player_dump_params_json(char *out, size_t max_len);

@@ -149,19 +149,32 @@ void app_main(void)
     }
     js_player_init();
 
-    // 6a. Install the embedded noop.js if missing. noop just paints baseColor —
-    // gives the lamp a sensible "smart bulb" behavior in js mode out of the box.
+    // 6a. Install the embedded default scripts if missing. Once on disk they
+    // are NOT overwritten — the user is free to edit them in place, and a
+    // firmware upgrade respects those edits. Wipe via /api/js DELETE to get
+    // the next reinstall on reboot.
     {
-        extern const uint8_t noop_js_start[] asm("_binary_noop_js_start");
-        extern const uint8_t noop_js_end[]   asm("_binary_noop_js_end");
-        if (!js_storage_exists("noop")) {
-            esp_err_t werr = js_storage_write("noop",
-                                              (const char *)noop_js_start,
-                                              noop_js_end - noop_js_start);
+        extern const uint8_t noop_js_start[]   asm("_binary_noop_js_start");
+        extern const uint8_t noop_js_end[]     asm("_binary_noop_js_end");
+        extern const uint8_t fade_js_start[]   asm("_binary_fade_js_start");
+        extern const uint8_t fade_js_end[]     asm("_binary_fade_js_end");
+        extern const uint8_t plasma_js_start[] asm("_binary_plasma_js_start");
+        extern const uint8_t plasma_js_end[]   asm("_binary_plasma_js_end");
+        struct { const char *name; const uint8_t *start; const uint8_t *end; } defaults[] = {
+            { "noop",   noop_js_start,   noop_js_end },
+            { "fade",   fade_js_start,   fade_js_end },
+            { "plasma", plasma_js_start, plasma_js_end },
+        };
+        for (size_t i = 0; i < sizeof(defaults) / sizeof(defaults[0]); i++) {
+            if (js_storage_exists(defaults[i].name)) continue;
+            esp_err_t werr = js_storage_write(defaults[i].name,
+                                              (const char *)defaults[i].start,
+                                              defaults[i].end - defaults[i].start);
             if (werr == ESP_OK) {
-                ESP_LOGI(TAG, "Installed default noop.js");
+                ESP_LOGI(TAG, "Installed default %s.js", defaults[i].name);
             } else {
-                ESP_LOGW(TAG, "Could not install noop.js: %s", esp_err_to_name(werr));
+                ESP_LOGW(TAG, "Could not install %s.js: %s", defaults[i].name,
+                         esp_err_to_name(werr));
             }
         }
     }

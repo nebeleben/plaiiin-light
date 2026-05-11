@@ -5,6 +5,18 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PlaiiinLight - Control</title>
 <link rel="stylesheet" href="/style.css">
+<style>
+.mode-seg{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--input-bg)}
+.mode-seg button{padding:6px 14px;border:0;background:transparent;color:var(--text);font-size:.86rem;cursor:pointer}
+.mode-seg button.active{background:var(--accent);color:#fff}
+.script-row{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.script-row .name{font-family:monospace;font-size:.9rem;flex:1;text-align:center}
+.script-row button{padding:4px 10px;border:1px solid var(--border);background:var(--input-bg);color:var(--text);border-radius:6px;cursor:pointer}
+.knob-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(82px,1fr));gap:10px;margin-top:6px}
+.knob{display:flex;flex-direction:column;align-items:center;font-size:.7rem;color:var(--text-dim);user-select:none;-webkit-user-select:none}
+.knob svg{cursor:ns-resize;touch-action:none}
+.knob .lbl{margin-top:2px;text-align:center;line-height:1.1;max-width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+</style>
 </head>
 <body>
 <div class="nav">
@@ -37,12 +49,14 @@
 </div>
 <div class="msg" id="powerMsg"></div>
 
-<h2>Brightness</h2>
-<div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
-<input type="range" id="brightnessSlider" min="0" max="255" value="255" style="flex:1;accent-color:var(--accent)">
-<span id="brightnessVal" style="font-size:.9rem;min-width:36px;text-align:right">100%</span>
+<h2>Mode</h2>
+<div class="mode-seg" id="modeSeg">
+<button data-mode="api">Color</button>
+<button data-mode="js">JS</button>
 </div>
+<div class="msg" id="modeMsg"></div>
 
+<div id="colorSection">
 <h2>Color</h2>
 <div class="color-section">
 <div class="presets" id="presets"></div>
@@ -53,6 +67,24 @@
 </div>
 <div class="msg" id="colorMsg"></div>
 </div>
+</div>
+
+<h2>Brightness</h2>
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
+<input type="range" id="brightnessSlider" min="0" max="255" value="255" style="flex:1;accent-color:var(--accent)">
+<span id="brightnessVal" style="font-size:.9rem;min-width:36px;text-align:right">100%</span>
+</div>
+
+<div id="jsSection" style="display:none">
+<h2>Script</h2>
+<div class="script-row">
+<button id="btnPrev" title="Previous script">&lsaquo;</button>
+<span class="name" id="currentScript">—</span>
+<button id="btnNext" title="Next script">&rsaquo;</button>
+</div>
+<div id="knobGrid" class="knob-grid"></div>
+<div class="msg" id="scriptMsg"></div>
+</div>
 
 <div class="info-bar">
 <span id="ledInfo"></span>
@@ -61,11 +93,11 @@
 <p class="copyright">&copy; <a href="https://plaiiin.com">plaiiin.com</a></p>
 
 <script>
-var powerOn=false,ledCount=30;
+var powerOn=false,ledCount=30,currentMode='api',currentScript=null;
 var presetColors=['#ff4444','#ff8c00','#ffd700','#44ff44','#00cccc','#4488ff','#7c8cf5','#cc44ff','#ff69b4','#ffffff'];
 
 var dark=localStorage.getItem('theme')!=='light';
-function applyTheme(){document.body.classList.toggle('light',!dark);document.getElementById('themeBtn').textContent=dark?'\u2600':'\u263E';}
+function applyTheme(){document.body.classList.toggle('light',!dark);document.getElementById('themeBtn').textContent=dark?'☀':'☾';}
 applyTheme();
 document.getElementById('themeBtn').onclick=function(){dark=!dark;localStorage.setItem('theme',dark?'dark':'light');applyTheme();};
 
@@ -75,7 +107,7 @@ fetch('/api').then(function(r){return r.json()}).then(function(d){
   ledCount=d.ledCount||30;
 }).catch(function(){});
 
-// Restore current state from device (power, color)
+// Restore current state from device (power, color, mode, current script).
 fetch('/api/state').then(function(r){return r.json()}).then(function(s){
   updateStatus(!!s.on);
   if(s.color&&s.color.length===3){
@@ -83,6 +115,8 @@ fetch('/api/state').then(function(r){return r.json()}).then(function(s){
     document.getElementById('colorPicker').value=hex;
     document.getElementById('colorHex').value=hex;
   }
+  if(s.mode){applyMode(s.mode==='stream'?'api':s.mode);}  // stream is transient — fall back to api
+  if(s.current){currentScript=s.current;document.getElementById('currentScript').textContent=s.current;loadKnobs(s.current);}
 }).catch(function(){});
 
 // Brightness
@@ -132,6 +166,222 @@ function sendColor(hex){
   .catch(function(){showMsg('colorMsg','Failed',false);});
 }
 document.getElementById('btnColor').onclick=function(){sendColor(document.getElementById('colorPicker').value);};
+
+// --- Mode switching (Phase 19) ---------------------------------------
+function applyMode(mode){
+  currentMode=mode;
+  var seg=document.getElementById('modeSeg');
+  var btns=seg.querySelectorAll('button');
+  for(var i=0;i<btns.length;i++){btns[i].classList.toggle('active',btns[i].dataset.mode===mode);}
+  // Color picker stays visible in both modes — in api mode it paints the
+  // panel, in js mode the firmware redirects it to baseColor (the 4th arg
+  // to render()). No labels flip; intentionally minimal chrome.
+  document.getElementById('jsSection').style.display=mode==='js'?'':'none';
+  // When switching to JS, refresh the current-script name only if we
+  // don't already have it (e.g. user toggled mode without page reload).
+  // Skipping the redundant /api/play/current fetch on initial page load
+  // avoids a race that briefly rendered duplicate knob sets.
+  if(mode==='js' && !currentScript){
+    fetch('/api/play/current').then(function(r){return r.json()}).then(function(d){
+      var name=d.playing||d.current;
+      if(name){currentScript=name;document.getElementById('currentScript').textContent=name;loadKnobs(name);}
+    }).catch(function(){});
+  }
+}
+document.getElementById('modeSeg').addEventListener('click',function(e){
+  var b=e.target.closest('button[data-mode]');if(!b)return;
+  var m=b.dataset.mode;
+  fetch('/api/mode',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:m})})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);})
+    .then(function(){applyMode(m);showMsg('modeMsg','Mode: '+m,true);})
+    .catch(function(e){showMsg('modeMsg','Mode: '+e.message,false);});
+});
+
+// --- Script carousel -------------------------------------------------
+function step(direction){
+  var url=direction>0?'/api/play/next':'/api/play/prev';
+  fetch(url,{method:'POST'}).then(function(r){return r.json()}).then(function(d){
+    if(!d.playing){showMsg('scriptMsg','no scripts',false);return;}
+    currentScript=d.playing;
+    document.getElementById('currentScript').textContent=d.playing;
+    loadKnobs(d.playing);
+  }).catch(function(e){showMsg('scriptMsg','step failed: '+e.message,false);});
+}
+document.getElementById('btnPrev').onclick=function(){step(-1);};
+document.getElementById('btnNext').onclick=function(){step(+1);};
+
+// --- Knobs (Phase 19) ------------------------------------------------
+// Inline SVG, vertical drag input. 100 px = full range. Changes are
+// debounced 120 ms then PUT to /api/js/<name>/params.
+// Generation token — every loadKnobs call bumps this and only the latest
+// token is allowed to render. Two simultaneous loads (e.g. one from
+// /api/state.current on page-load and one from /api/play/current via
+// applyMode) used to clear-then-append twice, so both schemas ended up in
+// the grid. Now stale fetches resolve into a no-op.
+var knobLoadId=0;
+function loadKnobs(name){
+  var grid=document.getElementById('knobGrid');
+  grid.innerHTML='';
+  if(!name)return;
+  var myId=++knobLoadId;
+  fetch('/api/js/'+encodeURIComponent(name)+'/params')
+    .then(function(r){return r.ok?r.json():{items:[]};})
+    .then(function(d){
+      if(myId!==knobLoadId)return;  // a newer load took over
+      var items=d.items||[];
+      if(!items.length){grid.innerHTML='<div style="color:var(--text-dim);font-size:.78rem">No tunable parameters</div>';return;}
+      items.forEach(function(p){grid.appendChild(makeKnob(p,name));});
+    }).catch(function(){});
+}
+
+function makeKnob(p,scriptName){
+  var wrap=document.createElement('div');wrap.className='knob';
+  var size=72;
+  // 270° usable arc, centered at 6 o'clock (-135° to +135° from top).
+  var startDeg=-135,arcDeg=270;
+  var ns='http://www.w3.org/2000/svg';
+  var svg=document.createElementNS(ns,'svg');
+  svg.setAttribute('viewBox','0 0 '+size+' '+size);
+  svg.setAttribute('width',size);svg.setAttribute('height',size);
+  var cx=size/2,cy=size/2,outerR=size/2-2,innerR=outerR-4;
+  // Pre-build the static layers; the dynamic ones (fill arc, pointer,
+  // text) get re-drawn on every update.
+  var tickGroup=document.createElementNS(ns,'g');svg.appendChild(tickGroup);
+  var trackPath=document.createElementNS(ns,'path');
+  trackPath.setAttribute('d',arcPath(cx,cy,outerR-7,startDeg,startDeg+arcDeg));
+  trackPath.setAttribute('stroke','rgba(128,128,128,0.25)');
+  trackPath.setAttribute('stroke-width','3');trackPath.setAttribute('stroke-linecap','round');
+  trackPath.setAttribute('fill','none');svg.appendChild(trackPath);
+  var fillPath=document.createElementNS(ns,'path');
+  fillPath.setAttribute('stroke','var(--accent)');fillPath.setAttribute('stroke-width','3');
+  fillPath.setAttribute('stroke-linecap','round');fillPath.setAttribute('fill','none');
+  svg.appendChild(fillPath);
+  // Glass face.
+  var face=document.createElementNS(ns,'circle');
+  face.setAttribute('cx',cx);face.setAttribute('cy',cy);face.setAttribute('r',outerR-12);
+  face.setAttribute('fill','url(#knobGlass)');face.setAttribute('stroke','rgba(255,255,255,0.06)');
+  svg.appendChild(face);
+  var pointer=document.createElementNS(ns,'line');
+  pointer.setAttribute('stroke','var(--accent)');pointer.setAttribute('stroke-width','2');
+  pointer.setAttribute('stroke-linecap','round');
+  svg.appendChild(pointer);
+  var text=document.createElementNS(ns,'text');
+  text.setAttribute('x',cx);text.setAttribute('y',cy+4);
+  text.setAttribute('text-anchor','middle');text.setAttribute('font-size','11');
+  text.setAttribute('fill','var(--text)');text.setAttribute('font-family','-apple-system,system-ui');
+  svg.appendChild(text);
+  ensureKnobDefs(svg);
+
+  var value=p.value;
+  function frac(){var s=p.max-p.min;return s>0?Math.max(0,Math.min(1,(value-p.min)/s)):0;}
+  function update(){
+    var f=frac();
+    fillPath.setAttribute('d',arcPath(cx,cy,outerR-7,startDeg,startDeg+arcDeg*f));
+    var deg=startDeg+arcDeg*f;
+    var rad=(deg-90)*Math.PI/180;
+    var len=outerR-14;
+    pointer.setAttribute('x1',cx);pointer.setAttribute('y1',cy);
+    pointer.setAttribute('x2',cx+Math.cos(rad)*len);pointer.setAttribute('y2',cy+Math.sin(rad)*len);
+    text.textContent=fmt(value,p.max-p.min);
+    // Re-render tick ring with active/inactive split at current fraction.
+    tickGroup.innerHTML='';
+    var ticks=21;
+    for(var i=0;i<ticks;i++){
+      var tf=i/(ticks-1);
+      var td=startDeg+arcDeg*tf;
+      var tr=(td-90)*Math.PI/180;
+      var x1=cx+Math.cos(tr)*outerR,y1=cy+Math.sin(tr)*outerR;
+      var x2=cx+Math.cos(tr)*innerR,y2=cy+Math.sin(tr)*innerR;
+      var ln=document.createElementNS(ns,'line');
+      ln.setAttribute('x1',x1);ln.setAttribute('y1',y1);
+      ln.setAttribute('x2',x2);ln.setAttribute('y2',y2);
+      ln.setAttribute('stroke',tf<=f+0.001?'var(--accent)':'rgba(128,128,128,0.4)');
+      ln.setAttribute('stroke-width','1');
+      tickGroup.appendChild(ln);
+    }
+  }
+  update();
+
+  // Drag — vertical only. 100 px = full range. Debounced PUT on each tick.
+  var dragStart=null,dragVal=null,pushTimer=null;
+  function onDown(e){
+    e.preventDefault();
+    dragStart=e.touches?e.touches[0].clientY:e.clientY;
+    dragVal=value;
+    document.addEventListener('mousemove',onMove);
+    document.addEventListener('mouseup',onUp);
+    document.addEventListener('touchmove',onMove,{passive:false});
+    document.addEventListener('touchend',onUp);
+  }
+  function onMove(e){
+    if(dragStart==null)return;
+    e.preventDefault&&e.preventDefault();
+    var y=e.touches?e.touches[0].clientY:e.clientY;
+    var dy=dragStart-y;  // up = positive
+    var span=p.max-p.min;
+    var next=dragVal+dy/100*span;
+    if(next<p.min)next=p.min;if(next>p.max)next=p.max;
+    value=next;
+    update();
+    schedulePush();
+  }
+  function onUp(){
+    dragStart=null;dragVal=null;
+    document.removeEventListener('mousemove',onMove);
+    document.removeEventListener('mouseup',onUp);
+    document.removeEventListener('touchmove',onMove);
+    document.removeEventListener('touchend',onUp);
+  }
+  function schedulePush(){
+    clearTimeout(pushTimer);
+    pushTimer=setTimeout(function(){
+      var body={};body[p.name]=value;
+      fetch('/api/js/'+encodeURIComponent(scriptName)+'/params',{
+        method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
+      }).catch(function(){});
+    },120);
+  }
+  svg.addEventListener('mousedown',onDown);
+  svg.addEventListener('touchstart',onDown,{passive:false});
+
+  wrap.appendChild(svg);
+  var lbl=document.createElement('div');lbl.className='lbl';lbl.textContent=p.name;
+  if(p.description) wrap.title=p.description;
+  wrap.appendChild(lbl);
+  return wrap;
+}
+
+// SVG arc helper. Takes degrees-from-top (clockwise). Returns an `M ... A
+// ... A ...` path string drawing only an arc (no fill needed).
+function arcPath(cx,cy,r,startDeg,endDeg){
+  function pt(deg){var rad=(deg-90)*Math.PI/180;return [cx+Math.cos(rad)*r,cy+Math.sin(rad)*r];}
+  var s=pt(startDeg),e=pt(endDeg);
+  var largeArc=Math.abs(endDeg-startDeg)>180?1:0;
+  var sweep=endDeg>startDeg?1:0;
+  return 'M '+s[0]+' '+s[1]+' A '+r+' '+r+' 0 '+largeArc+' '+sweep+' '+e[0]+' '+e[1];
+}
+
+function fmt(v,span){
+  if(span>=10)return String(Math.round(v));
+  if(span<=1)return v.toFixed(2);
+  return v.toFixed(1);
+}
+
+// Defs are global to the SVG; we share one radial gradient across all knobs
+// in the page by appending it to the first knob's SVG that asks for it.
+function ensureKnobDefs(svg){
+  if(document.getElementById('knobGlass'))return;
+  var ns='http://www.w3.org/2000/svg';
+  var defs=document.createElementNS(ns,'defs');
+  var grad=document.createElementNS(ns,'radialGradient');
+  grad.setAttribute('id','knobGlass');
+  grad.setAttribute('cx','35%');grad.setAttribute('cy','30%');grad.setAttribute('r','70%');
+  var s1=document.createElementNS(ns,'stop');s1.setAttribute('offset','0%');s1.setAttribute('stop-color','rgba(255,255,255,0.10)');
+  var s2=document.createElementNS(ns,'stop');s2.setAttribute('offset','100%');s2.setAttribute('stop-color','rgba(0,0,0,0.18)');
+  grad.appendChild(s1);grad.appendChild(s2);
+  defs.appendChild(grad);
+  svg.insertBefore(defs,svg.firstChild);
+}
 </script>
 </body>
 </html>

@@ -13,6 +13,7 @@ idf_component_register(
         "plaiiin_mqtt.c"
         "js_storage.c"
         "js_player.c"
+        "js_params.c"
         "js_api.c"
         "mdns_service.c"
         "bt_service.c"
@@ -50,4 +51,6 @@ idf_component_register(
         "../portal/js.html"
         "../portal/api.html"
         "../portal/noop.js"
+        "../portal/fade.js"
+        "../portal/plasma.js"
 )

@@ -1,4 +1,5 @@
 #include "js_player.h"
+#include "js_params.h"
 #include "led_control.h"
 #include "mjs.h"
 
@@ -70,6 +71,11 @@ static char s_last_err[128] = {0};
 // Latest base color, fed into render() as a 3-element [r,g,b] array. Defaults
 // to mid-grey so a noop.js shows *something* before any /api/color call.
 static uint8_t s_base_r = 128, s_base_g = 128, s_base_b = 128;
+
+// Active script's params (5th render arg). Updated at script load time and
+// patched live by js_player_apply_params_json. Always touched under s_lock so
+// the player task gets a consistent snapshot per frame.
+static js_params_schema_t s_params = {0};
 
 /**
  * Logical grid: width/height derived from lamp_type when it's a matrix,
@@ -178,13 +184,22 @@ static void player_task(void *arg)
         mjs_array_push(mjs, base, mjs_mk_number(mjs, s_base_r));
         mjs_array_push(mjs, base, mjs_mk_number(mjs, s_base_g));
         mjs_array_push(mjs, base, mjs_mk_number(mjs, s_base_b));
-        mjs_val_t args[4] = {
+        // Snapshot the params schema under the lock so a concurrent PUT
+        // /api/js/<name>/params can't tear values mid-frame. We then build
+        // an mjs object fresh per call — same lifecycle as `base` above.
+        js_params_schema_t local_params;
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        local_params = s_params;
+        xSemaphoreGive(s_lock);
+        mjs_val_t params_obj = js_params_to_mjs(mjs, &local_params);
+        mjs_val_t args[5] = {
             mjs_mk_number(mjs, frame_idx),
             mjs_mk_number(mjs, w),
             mjs_mk_number(mjs, h),
-            base
+            base,
+            params_obj
         };
-        mjs_err_t rerr = mjs_apply(mjs, &result, render_fn, mjs_mk_null(), 4, args);
+        mjs_err_t rerr = mjs_apply(mjs, &result, render_fn, mjs_mk_null(), 5, args);
         if (rerr != MJS_OK) {
             const char *msg = mjs_strerror(mjs, rerr);
             ESP_LOGW(TAG, "render() error: %s", msg ? msg : "?");
@@ -375,6 +390,11 @@ esp_err_t js_player_start(const char *source, int fps)
     free(s_source);
     s_source = strdup(source);
     s_fps = fps > 0 ? fps : 10;
+    // Reset and re-parse the params schema for the *new* source. Overrides
+    // for the current name are layered on by js_player_set_current_name(),
+    // which the api/main paths call right after start().
+    memset(&s_params, 0, sizeof(s_params));
+    js_params_parse(source, &s_params);
     s_running = true;
     xSemaphoreGive(s_lock);
 
@@ -410,6 +430,35 @@ void js_player_set_current_name(const char *name)
 {
     if (!name) { s_current_name[0] = 0; return; }
     snprintf(s_current_name, sizeof(s_current_name), "%s", name);
+    // Now that we know which script is loaded, layer in any persisted
+    // sidecar overrides on top of the schema defaults.
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    js_params_load_overrides(s_current_name, &s_params);
+    xSemaphoreGive(s_lock);
+}
+
+int js_player_apply_params_json(const char *json, size_t len)
+{
+    if (!json || s_current_name[0] == '\0') return 0;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    int updated = js_params_apply_json(&s_params, json, len);
+    if (updated > 0) {
+        // Persist immediately so the override survives a reboot. If the file
+        // write fails (storage full, etc.) the live value still applies for
+        // this session — the caller's PUT is treated as best-effort durable.
+        js_params_save_overrides(s_current_name, &s_params);
+    }
+    xSemaphoreGive(s_lock);
+    return updated;
+}
+
+int js_player_dump_params_json(char *out, size_t max_len)
+{
+    if (!out || max_len == 0) return 0;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    int n = js_params_to_json(&s_params, out, max_len);
+    xSemaphoreGive(s_lock);
+    return n > 0 ? n : 0;
 }
 
 void js_player_set_base_color(uint8_t r, uint8_t g, uint8_t b)
