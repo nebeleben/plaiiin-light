@@ -23,6 +23,10 @@ typedef struct {
  */
 esp_err_t led_control_init(int gpio_pin, int clk_pin, int led_count, const char *led_type);
 esp_err_t led_control_set_all(const led_color_t *colors, int count);
+/** Like set_all but does NOT persist colors[0] as last_color — for transient
+ *  indicator frames (long-press warnings, factory-reset confirm flashes) that
+ *  shouldn't outlive themselves across reboots. */
+esp_err_t led_control_set_all_transient(const led_color_t *colors, int count);
 esp_err_t led_control_set_pixel(int index, uint8_t r, uint8_t g, uint8_t b);
 esp_err_t led_control_refresh(void);
 esp_err_t led_control_clear(void);

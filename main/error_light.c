@@ -22,7 +22,16 @@ static void set_first_n(uint8_t r, uint8_t g, uint8_t b, int n)
 static void error_light_task(void *arg)
 {
     s_running = true;
+    error_light_pattern_t last_pattern = ERROR_LIGHT_NONE;
     while (s_running) {
+        if (s_pattern != last_pattern) {
+            // Pattern (re)activated — wipe so indicator pixels show against
+            // a blank strip. apply_last_color() on boot would otherwise leave
+            // every pixel painted with the restored color, and the patterns
+            // below only overwrite pixels 0..2 — so 3..N would shine through.
+            led_control_clear();
+            last_pattern = s_pattern;
+        }
         switch (s_pattern) {
             case ERROR_LIGHT_NO_WIFI:
                 // Slow red blink

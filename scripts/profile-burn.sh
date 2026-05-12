@@ -64,6 +64,17 @@ DEVICE="${PROFILE##*/}"
 DEFAULTS="$PROJECT_DIR/profiles/$FAMILY/$DEVICE.defaults"
 [ -f "$DEFAULTS" ] || { echo "missing $DEFAULTS" >&2; exit 1; }
 
+# Catch the copy-paste mistake where a new profile inherits its predecessor's
+# NODE_NAME — the chip then advertises under the wrong name over BLE/mDNS and
+# silently collides with the real device. We've hit this three times; refuse
+# to burn rather than discover it after the fact.
+file_node_name=$(awk -F= '$1=="CONFIG_PLAIIIN_NODE_NAME"{sub(/^"/,"",$2);sub(/"$/,"",$2);print $2;exit}' "$DEFAULTS")
+if [ "$file_node_name" != "$DEVICE" ]; then
+    echo "refusing to burn: $DEFAULTS sets NODE_NAME='$file_node_name' but filename is '$DEVICE'" >&2
+    echo "fix CONFIG_PLAIIIN_NODE_NAME in the .defaults to match the filename, then retry." >&2
+    exit 1
+fi
+
 [ -e "$PORT" ]    || { echo "no device at $PORT" >&2; exit 1; }
 [ -x "$PYTHON" ]  || { echo "no python at $PYTHON (set IDF_PYTHON)" >&2; exit 1; }
 [ -f "$ESPTOOL" ] || { echo "no esptool.py at $ESPTOOL" >&2; exit 1; }

@@ -25,7 +25,8 @@ static void confirm_blink(uint8_t r, uint8_t g, uint8_t b)
     for (int i = 0; i < n; i++) frame[i] = color;
     for (int i = 0; i < 2; i++) {
         led_control_power(true);
-        led_control_set_all(frame, n);
+        // Transient: confirmation flash, not a user color — see paint_solid().
+        led_control_set_all_transient(frame, n);
         vTaskDelay(pdMS_TO_TICKS(160));
         led_control_power(false);
         vTaskDelay(pdMS_TO_TICKS(120));

@@ -310,7 +310,7 @@ esp_err_t led_control_init(int gpio_pin, int clk_pin, int led_count, const char 
     return ESP_OK;
 }
 
-esp_err_t led_control_set_all(const led_color_t *colors, int count)
+static esp_err_t set_all_impl(const led_color_t *colors, int count)
 {
     if (!backend_ready() || !s_power_on) return ESP_ERR_INVALID_STATE;
     if (colors == NULL || count <= 0) return ESP_ERR_INVALID_ARG;
@@ -335,12 +335,22 @@ esp_err_t led_control_set_all(const led_color_t *colors, int count)
         backend_set_pixel(i, colors[i].r, colors[i].g, colors[i].b, effective);
     }
 
-    if (count > 0) {
+    return backend_refresh();
+}
+
+esp_err_t led_control_set_all(const led_color_t *colors, int count)
+{
+    esp_err_t err = set_all_impl(colors, count);
+    if (err == ESP_OK && colors != NULL && count > 0) {
         s_last_color = colors[0];
         save_last_color();
     }
+    return err;
+}
 
-    return backend_refresh();
+esp_err_t led_control_set_all_transient(const led_color_t *colors, int count)
+{
+    return set_all_impl(colors, count);
 }
 
 esp_err_t led_control_set_pixel(int index, uint8_t r, uint8_t g, uint8_t b)

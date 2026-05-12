@@ -38,7 +38,10 @@ static void paint_solid(uint8_t r, uint8_t g, uint8_t b)
     led_color_t c = {r, g, b};
     for (int i = 0; i < n; i++) frame[i] = c;
     led_control_power(true);
-    led_control_set_all(frame, n);
+    // Transient: this is a long-press warning indicator, not a user-set color,
+    // so it must not stomp last_color in NVS — otherwise the next boot
+    // restores green/blue across the whole strip.
+    led_control_set_all_transient(frame, n);
     free(frame);
 }
 
@@ -108,10 +111,15 @@ static esp_err_t make_button(int pin, btn_kind_t kind, button_handle_t *out)
     };
     button_gpio_config_t gpio_cfg = {
         .gpio_num = pin,
-        // Active-low — TTP223 outputs HIGH at rest, pulled LOW on touch
-        // when wired with the typical configuration. Same for momentary
-        // switches with an internal pull-up.
-        .active_level = 0,
+        // Active-HIGH — TTP223 (default jumper config) idles LOW and drives
+        // HIGH while touched. With disable_pull=false the iot_button driver
+        // wires an internal pull-DOWN, so a disconnected/floating pin idles
+        // LOW = inactive (otherwise the firmware would see "stuck pressed",
+        // fire the 10/15 s long-press cascade on every boot, and corrupt
+        // last_color). For momentary switches: wire to GND with an external
+        // pull-up if you need the inverted polarity, or close jumper A on the
+        // TTP223 board and flip back to active_level=0.
+        .active_level = 1,
         .enable_power_save = false,
         .disable_pull = false,
     };
