@@ -41,6 +41,53 @@ static void full_path(const char *name, char *out, size_t max_len)
     snprintf(out, max_len, "%s/%s.js", BASE_PATH, name);
 }
 
+static void full_path_bc(const char *name, char *out, size_t max_len)
+{
+    snprintf(out, max_len, "%s/%s.bc", BASE_PATH, name);
+}
+
+esp_err_t js_storage_write_bc(const char *name, const void *buf, size_t len)
+{
+    if (!name_is_valid(name) || !buf) return ESP_ERR_INVALID_ARG;
+    if (len > MAX_SCRIPT_BYTES) return ESP_ERR_INVALID_SIZE;
+    char path[96];
+    full_path_bc(name, path, sizeof(path));
+    FILE *f = fopen(path, "wb");
+    if (!f) return ESP_FAIL;
+    size_t wrote = fwrite(buf, 1, len, f);
+    fclose(f);
+    return wrote == len ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t js_storage_read_bc(const char *name, void **out, size_t *len_out)
+{
+    if (!name_is_valid(name) || !out) return ESP_ERR_INVALID_ARG;
+    char path[96];
+    full_path_bc(name, path, sizeof(path));
+    FILE *f = fopen(path, "rb");
+    if (!f) return ESP_ERR_NOT_FOUND;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz < 0 || sz > MAX_SCRIPT_BYTES) { fclose(f); return ESP_ERR_INVALID_SIZE; }
+    void *buf = malloc(sz);
+    if (!buf) { fclose(f); return ESP_ERR_NO_MEM; }
+    size_t n = fread(buf, 1, sz, f);
+    fclose(f);
+    *out = buf;
+    if (len_out) *len_out = n;
+    return ESP_OK;
+}
+
+esp_err_t js_storage_remove_bc(const char *name)
+{
+    if (!name_is_valid(name)) return ESP_ERR_INVALID_ARG;
+    char path[96];
+    full_path_bc(name, path, sizeof(path));
+    if (unlink(path) != 0) return ESP_ERR_NOT_FOUND;
+    return ESP_OK;
+}
+
 esp_err_t js_storage_init(void)
 {
     esp_vfs_spiffs_conf_t conf = {

@@ -6,6 +6,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/** Default render fps when a caller doesn't specify one — used by the
+ *  chevron next/prev path, BLE play characteristic, on-boot resume, and
+ *  /api/power-driven auto-start. The previous default (10) felt smooth
+ *  on the old mJS engine because nothing rendered faster than that
+ *  anyway; with the PLBC VM the engine ceiling is ~50 fps on a 256-LED
+ *  panel, so a default of 30 just lets animations look as fluid as the
+ *  hardware allows. Callers that have a UX-level fps knob (Scripts pane)
+ *  override this. */
+#define JS_DEFAULT_FPS 30
+
 /** Register JS CRUD and playback HTTP endpoints. */
 esp_err_t js_api_register(httpd_handle_t server);
 

@@ -1,60 +1,39 @@
-// Random fade-in / hold / fade-out per LED. Phase 22 — rewritten stateless:
-// each LED's animation phase is a deterministic pseudo-random offset inside
-// a (fadeIn + hold + fadeOut + dark gap) cycle, so the whole panel looks
-// like a bunch of independent breathing LEDs but no per-LED state array is
-// allocated. The earlier object-array version hit the FreeRTOS task watchdog
-// on 16×16 panels (256 object allocations + 1280 array pushes on the first
-// frame is several seconds of mJS work — past the 5–15 s watchdog).
+// Random fade-in / hold / fade-out per LED. Each LED runs on its own phase
+// inside a (fadeIn + hold + fadeOut + dark gap) cycle, offset by a
+// deterministic per-LED hash — so the panel looks like independent
+// breathing LEDs.
 //
-// Density is encoded as the fraction of the cycle that's "active" — at
+// Phase 23 — DSL syntax. Stateless: per-LED phase is derived from idx, so
+// no @state needed. The whole shader compiles to ~50 bytes of bytecode.
+// Density is encoded as the fraction of the cycle that's "active": at
 // density=1.0 every LED is always doing one of the three phases; at 0.5
-// each LED spends half the cycle in a dark gap.
+// each LED spends half the cycle dark.
 
 // @param density 0..1 = 0.75 Fraction of LEDs animating concurrently
 // @param fadeIn 50..15000 = 400 Fade-in duration in ms
 // @param hold 0..15000 = 200 Time at peak brightness in ms
 // @param fadeOut 50..20000 = 800 Fade-out duration in ms
 
-let fpsHint = 10;  // dt = 1000/fpsHint per frame; exact value isn't critical
-
-function render(frame, w, h, baseColor, params) {
-  let total = w * h;
-  let dt = 1000 / fpsHint;
+function shade(x, y, idx, frame, base, params) {
+  let dt = 100;                              // ~10 fps tick, exact value isn't critical
   let now = frame * dt;
+  let active = params.fadeIn + params.hold + params.fadeOut;
+  let cycle = active / max(params.density, 0.01);
+  let holdEnd = params.fadeIn + params.hold;
 
-  let fi = params.fadeIn;
-  let hd = params.hold;
-  let fo = params.fadeOut;
-  let density = params.density;
-  if (density < 0.01) density = 0.01;
-  if (density > 1)    density = 1;
-  let active = fi + hd + fo;
-  let cycle  = active / density;       // dark gap = cycle - active
-  let holdEnd = fi + hd;
+  // Per-LED phase offset, scattered via hash. hash(i) ∈ [0,1) → mul by cycle.
+  let offset = hash(idx) * cycle;
+  let t = (now + offset) % cycle;
 
-  let r = baseColor[0];
-  let g = baseColor[1];
-  let b = baseColor[2];
-
-  let pixels = [];
-  for (let i = 0; i < total; i++) {
-    // Knuth multiplicative hash mod cycle — gives each LED an apparently
-    // random phase offset that's reproducible across frames (so the same LED
-    // continues its cycle smoothly between renders).
-    let offset = (i * 2654435761) % cycle;
-    let t = (now + offset) % cycle;
-
-    let bright = 0;
-    if (t < fi)             bright = t / fi;
-    else if (t < holdEnd)   bright = 1;
-    else if (t < active)    bright = 1 - (t - holdEnd) / fo;
-    // else: in the dark gap → bright stays 0
-
-    pixels.push([
-      Math.floor(r * bright),
-      Math.floor(g * bright),
-      Math.floor(b * bright)
-    ]);
+  let bright = 0;
+  if (t < params.fadeIn) {
+    bright = t / params.fadeIn;
+  } else if (t < holdEnd) {
+    bright = 1;
+  } else if (t < active) {
+    bright = 1 - (t - holdEnd) / params.fadeOut;
   }
-  return pixels;
+  // else: in the dark gap → bright stays 0
+
+  emitBright(bright);
 }

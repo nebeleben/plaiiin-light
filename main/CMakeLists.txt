@@ -13,7 +13,6 @@ idf_component_register(
         "plaiiin_mqtt.c"
         "js_storage.c"
         "js_player.c"
-        "js_params.c"
         "js_api.c"
         "mdns_service.c"
         "bt_service.c"
@@ -36,7 +35,7 @@ idf_component_register(
         app_update
         spiffs
         mqtt
-        mjs
+        plbc
         bt
         button
     EMBED_TXTFILES

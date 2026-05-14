@@ -51,3 +51,10 @@ int js_player_dump_params_json(char *out, size_t max_len);
  *  just-started). Sampled and the timestamp ring is reset on every
  *  js_player_start so a previous run's tail doesn't leak in. */
 float js_player_get_fps(void);
+
+/** Phase 22 — Diagnostic: run a pure-C render loop (no JS engine involved).
+ *  Used to measure the LED-driver / scheduler ceiling independent of JS.
+ *  mode == 0: fillSolid with baseColor.
+ *  mode == 1: stateless fade equivalent to fade.js.
+ *  Stops any current player first. fps controls the requested rate. */
+esp_err_t js_player_start_cbench(int mode, int fps);

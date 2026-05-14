@@ -4,6 +4,7 @@
 #include "config_store.h"
 #include "js_player.h"
 #include "js_storage.h"
+#include "js_api.h"
 #include "pairing.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -66,7 +67,7 @@ static esp_err_t start_current_js(void)
     size_t len = 0;
     esp_err_t err = js_storage_read(name, &src, &len);
     if (err != ESP_OK) return err;
-    err = js_player_start(src, 10);
+    err = js_player_start(src, JS_DEFAULT_FPS);
     free(src);
     if (err == ESP_OK) js_player_set_current_name(name);
     return err;

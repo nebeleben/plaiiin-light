@@ -325,7 +325,7 @@ static int access_current(uint16_t conn, uint16_t attr,
         // Write a script name → load + play it.
         char name[64] = {0};
         if (copy_mbuf_str(ctxt->om, name, sizeof(name)) != 0) return BLE_ATT_ERR_UNLIKELY;
-        if (js_api_play(name, 10) != ESP_OK) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        if (js_api_play(name, JS_DEFAULT_FPS) != ESP_OK) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         notify_str(s_h_current, name);
         return 0;
     }

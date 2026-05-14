@@ -1,7 +1,7 @@
 #include "js_api.h"
 #include "js_storage.h"
 #include "js_player.h"
-#include "js_params.h"
+#include "plbc.h"
 #include "config_store.h"
 #include "pairing.h"
 #include <stdbool.h>
@@ -13,6 +13,8 @@
 #include <string.h>
 
 static const char *TAG = "js_api";
+
+#define MAX_BC_BYTES (16 * 1024)
 
 #define MAX_UPLOAD_BYTES (48 * 1024)
 
@@ -98,23 +100,44 @@ static esp_err_t read_handler(httpd_req_t *req)
         return send_err_json(req, 400, "missing name");
     }
     if (is_params) {
-        // Read source, parse the schema fresh, layer overrides, emit JSON.
-        // We deliberately don't lean on js_player_dump_params_json — it only
-        // sees the *currently playing* script. Clients want this for any
-        // script in storage, including the one they're about to play.
-        char *src = NULL; size_t slen = 0;
-        esp_err_t err = js_storage_read(name, &src, &slen);
+        /* Phase 23 — schema lives in the compiled .bc. Load it, emit JSON
+         * via PLBC. Works for any script in storage, not just the running
+         * one (the player keeps its own copy in memory). */
+        void *bc = NULL; size_t bc_len = 0;
+        esp_err_t err = js_storage_read_bc(name, &bc, &bc_len);
         if (err == ESP_ERR_NOT_FOUND) return send_err_json(req, 404, "not found");
         if (err != ESP_OK) return send_err_json(req, 500, "read failed");
-        js_params_schema_t schema = {0};
-        js_params_parse(src, &schema);
-        free(src);
-        js_params_load_overrides(name, &schema);
+        plbc_program_t *prog = (plbc_program_t *)calloc(1, sizeof(*prog));
+        if (!prog) { free(bc); return send_err_json(req, 500, "oom"); }
+        char perr[64] = {0};
+        if (plbc_load(bc, bc_len, prog, perr, sizeof(perr)) != ESP_OK) {
+            free(bc); free(prog);
+            return send_err_json(req, 500, perr[0] ? perr : "load failed");
+        }
+        free(bc);
         char buf[2048];
-        int n = js_params_to_json(&schema, buf, sizeof(buf));
+        int n = plbc_params_to_json(prog, buf, sizeof(buf));
+        free(prog);
         if (n <= 0) return send_err_json(req, 500, "params encode failed");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, buf, n);
+        return ESP_OK;
+    }
+    /* Phase 23 — GET /api/js/<name>.bc returns the raw bytecode. We strip
+     * the `.bc` suffix in split_uri's output if present here, but for the
+     * regular .js case the name has no extension and we serve the source. */
+    size_t nlen = strlen(name);
+    if (nlen > 3 && strcmp(name + nlen - 3, ".bc") == 0) {
+        char base[64]; size_t bl = nlen - 3;
+        if (bl >= sizeof(base)) return send_err_json(req, 400, "name too long");
+        memcpy(base, name, bl); base[bl] = 0;
+        void *bc = NULL; size_t bc_len = 0;
+        esp_err_t err = js_storage_read_bc(base, &bc, &bc_len);
+        if (err == ESP_ERR_NOT_FOUND) return send_err_json(req, 404, "not found");
+        if (err != ESP_OK) return send_err_json(req, 500, "read failed");
+        httpd_resp_set_type(req, "application/octet-stream");
+        httpd_resp_send(req, bc, bc_len);
+        free(bc);
         return ESP_OK;
     }
     char *source = NULL;
@@ -149,15 +172,41 @@ static esp_err_t receive_body(httpd_req_t *req, char **out, size_t *len_out)
 int js_api_write_script(const char *name, const char *body, size_t len,
                         char *err_buf, size_t err_len)
 {
-    const char *verr = NULL;
-    esp_err_t err = js_player_validate(body, &verr);
+    /* Phase 23 — compile to bytecode in place. Store both .js (source of
+     * truth for editing) and .bc (what the runtime player loads). If the
+     * compile fails we DON'T write the .js — keeping disk consistent. */
+    plbc_program_t *prog = (plbc_program_t *)calloc(1, sizeof(*prog));
+    if (!prog) {
+        if (err_buf && err_len) snprintf(err_buf, err_len, "oom");
+        return 0;
+    }
+    char cerr[128] = {0};
+    esp_err_t err = plbc_compile(body, len, prog, cerr, sizeof(cerr));
     if (err != ESP_OK) {
-        if (err_buf && err_len) snprintf(err_buf, err_len, "validation failed: %s", verr ? verr : "?");
+        free(prog);
+        if (err_buf && err_len) snprintf(err_buf, err_len, "compile: %s", cerr[0] ? cerr : "?");
+        return 0;
+    }
+    /* Heap, not stack — MAX_BC_BYTES is 16 KB; HTTP task stack is ~4 KB. */
+    uint8_t *bc = (uint8_t *)malloc(MAX_BC_BYTES);
+    if (!bc) { free(prog); if (err_buf && err_len) snprintf(err_buf, err_len, "oom"); return 0; }
+    int n_bc = plbc_serialize(prog, bc, MAX_BC_BYTES);
+    free(prog);
+    if (n_bc <= 0) {
+        free(bc);
+        if (err_buf && err_len) snprintf(err_buf, err_len, "bytecode too large");
         return 0;
     }
     err = js_storage_write(name, body, len);
     if (err != ESP_OK) {
-        if (err_buf && err_len) snprintf(err_buf, err_len, "write failed");
+        free(bc);
+        if (err_buf && err_len) snprintf(err_buf, err_len, "write .js failed");
+        return 0;
+    }
+    err = js_storage_write_bc(name, bc, (size_t)n_bc);
+    free(bc);
+    if (err != ESP_OK) {
+        if (err_buf && err_len) snprintf(err_buf, err_len, "write .bc failed");
         return 0;
     }
     return 1;
@@ -178,26 +227,32 @@ static esp_err_t write_handler(httpd_req_t *req)
     if (err != ESP_OK) return send_err_json(req, 400, "bad body");
 
     if (is_params) {
-        // Apply against the on-disk schema first so we persist no matter what.
-        char *src = NULL; size_t slen = 0;
-        esp_err_t rerr = js_storage_read(name, &src, &slen);
+        /* Phase 23 — load .bc, apply JSON patch, re-serialize. */
+        void *bc = NULL; size_t bc_len = 0;
+        esp_err_t rerr = js_storage_read_bc(name, &bc, &bc_len);
         if (rerr == ESP_ERR_NOT_FOUND) { free(body); return send_err_json(req, 404, "not found"); }
         if (rerr != ESP_OK)            { free(body); return send_err_json(req, 500, "read failed"); }
-        js_params_schema_t schema = {0};
-        js_params_parse(src, &schema);
-        free(src);
-        js_params_load_overrides(name, &schema);
-        int updated = js_params_apply_json(&schema, body, body_len);
-        if (updated > 0) js_params_save_overrides(name, &schema);
-        // If this is the currently-playing script, push the live values too
-        // so the change is visible on the very next frame without restart.
+        plbc_program_t *prog = (plbc_program_t *)calloc(1, sizeof(*prog));
+        if (!prog) { free(bc); free(body); return send_err_json(req, 500, "oom"); }
+        char perr[64] = {0};
+        if (plbc_load(bc, bc_len, prog, perr, sizeof(perr)) != ESP_OK) {
+            free(bc); free(prog); free(body);
+            return send_err_json(req, 500, perr[0] ? perr : "load failed");
+        }
+        free(bc);
+        plbc_apply_params_json(prog, body, body_len);
+        uint8_t out_bc[MAX_BC_BYTES];
+        int n_bc = plbc_serialize(prog, out_bc, sizeof(out_bc));
+        if (n_bc > 0) js_storage_write_bc(name, out_bc, (size_t)n_bc);
+        /* Push live values into the running player if it's playing this script. */
         const char *playing = js_player_current_name();
         if (playing && strcmp(playing, name) == 0) {
             js_player_apply_params_json(body, body_len);
         }
         free(body);
         char buf[2048];
-        int n = js_params_to_json(&schema, buf, sizeof(buf));
+        int n = plbc_params_to_json(prog, buf, sizeof(buf));
+        free(prog);
         if (n <= 0) return send_err_json(req, 500, "params encode failed");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, buf, n);
@@ -208,14 +263,44 @@ static esp_err_t write_handler(httpd_req_t *req)
     int ok = js_api_write_script(name, body, body_len, errbuf, sizeof(errbuf));
     free(body);
     if (!ok) {
-        // Keep the existing 400-on-validation behaviour by checking the prefix.
-        bool is_validation = strncmp(errbuf, "validation", 10) == 0;
+        bool is_validation = strncmp(errbuf, "compile", 7) == 0 || strncmp(errbuf, "validation", 10) == 0;
         return send_err_json(req, is_validation ? 400 : 500, errbuf);
     }
     httpd_resp_set_type(req, "application/json");
     char resp[96];
     snprintf(resp, sizeof(resp), "{\"status\":\"ok\",\"name\":\"%s\"}", name);
     httpd_resp_sendstr(req, resp);
+    return ESP_OK;
+}
+
+/* Phase 23 — POST /api/js/compile  body: raw JS source
+ *
+ * Compiles without saving. Returns the bytecode as application/octet-stream
+ * on success, or a JSON error body on failure. macOS preview uses this to
+ * run new scripts in its Swift VM without round-tripping a save. */
+static esp_err_t compile_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    char *body = NULL; size_t body_len = 0;
+    esp_err_t err = receive_body(req, &body, &body_len);
+    if (err != ESP_OK) return send_err_json(req, 400, "bad body");
+    plbc_program_t *prog = (plbc_program_t *)calloc(1, sizeof(*prog));
+    if (!prog) { free(body); return send_err_json(req, 500, "oom"); }
+    char cerr[128] = {0};
+    err = plbc_compile(body, body_len, prog, cerr, sizeof(cerr));
+    free(body);
+    if (err != ESP_OK) {
+        free(prog);
+        return send_err_json(req, 400, cerr[0] ? cerr : "compile failed");
+    }
+    uint8_t *bc = (uint8_t *)malloc(MAX_BC_BYTES);
+    if (!bc) { free(prog); return send_err_json(req, 500, "oom"); }
+    int n = plbc_serialize(prog, bc, MAX_BC_BYTES);
+    free(prog);
+    if (n <= 0) { free(bc); return send_err_json(req, 500, "bytecode too large"); }
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_send(req, (const char *)bc, n);
+    free(bc);
     return ESP_OK;
 }
 
@@ -257,9 +342,8 @@ static esp_err_t delete_handler(httpd_req_t *req)
     esp_err_t err = js_storage_remove(name);
     if (err == ESP_ERR_NOT_FOUND) return send_err_json(req, 404, "not found");
     if (err != ESP_OK) return send_err_json(req, 500, "delete failed");
-    // Drop any persisted params sidecar so a future script with the same
-    // name doesn't inherit ghost overrides.
-    js_params_drop(name);
+    /* Drop the .bc alongside the .js. Best-effort — missing .bc is fine. */
+    js_storage_remove_bc(name);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
     return ESP_OK;
@@ -268,15 +352,20 @@ static esp_err_t delete_handler(httpd_req_t *req)
 esp_err_t js_api_play(const char *name, int fps)
 {
     if (!name || !name[0]) return ESP_ERR_INVALID_ARG;
-    if (fps <= 0) fps = 10;
-    char *source = NULL;
-    size_t len = 0;
-    esp_err_t err = js_storage_read(name, &source, &len);
+    if (fps <= 0) fps = JS_DEFAULT_FPS;
+    /* Phase 23 — verify the .bc exists before starting. Player reads .bc
+     * directly so the source body isn't needed here. */
+    if (!js_storage_exists(name)) return ESP_ERR_NOT_FOUND;
+    void *probe = NULL; size_t probe_len = 0;
+    esp_err_t err = js_storage_read_bc(name, &probe, &probe_len);
+    if (err == ESP_ERR_NOT_FOUND) return ESP_ERR_NOT_FOUND;
     if (err != ESP_OK) return err;
-    err = js_player_start(source, fps);
-    free(source);
-    if (err != ESP_OK) return err;
+    free(probe);
+    /* Order matters — set_current_name must run before start so the player
+     * task sees the right name when it loads the .bc. */
     js_player_set_current_name(name);
+    err = js_player_start(NULL, fps);
+    if (err != ESP_OK) return err;
     config_store_set_str(CONFIG_KEY_CURRENT_JS, name);
     return ESP_OK;
 }
@@ -304,7 +393,7 @@ static esp_err_t play_handler(httpd_req_t *req)
     if (n >= sizeof(name)) return send_err_json(req, 400, "name too long");
     memcpy(name, p, n);
 
-    int fps = 10;
+    int fps = JS_DEFAULT_FPS;
     const char *fp = strstr(buf, "\"fps\"");
     if (fp) {
         fp = strchr(fp, ':');
@@ -352,7 +441,7 @@ static esp_err_t advance_script(int direction, char *out_name, size_t out_len)
         next = (idx + direction + n) % n;
     }
     snprintf(out_name, out_len, "%s", names[next]);
-    return js_api_play(names[next], 10);
+    return js_api_play(names[next], JS_DEFAULT_FPS);
 }
 
 esp_err_t js_api_play_next(char *out_name, size_t out_len)
@@ -438,6 +527,36 @@ static esp_err_t stop_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// Phase 22 — POST /api/bench { "mode": "fill"|"fade", "fps": 120 }
+// Pure-C render loop; reports its fps via /api/state.fps so we can compare
+// directly to JS scripts.
+static esp_err_t bench_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    char buf[128] = {0};
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret <= 0) return send_err_json(req, 400, "no body");
+    int mode = 0;
+    const char *m = strstr(buf, "\"mode\"");
+    if (m) {
+        m = strchr(m, '"');
+        if (m) m = strchr(m + 1, '"');
+        if (m) {
+            if (strstr(m, "fade")) mode = 1;
+        }
+    }
+    int fps = 120;
+    const char *fp = strstr(buf, "\"fps\"");
+    if (fp) { fp = strchr(fp, ':'); if (fp) fps = atoi(fp + 1); }
+    esp_err_t err = js_player_start_cbench(mode, fps);
+    if (err != ESP_OK) return send_err_json(req, 500, "bench start failed");
+    httpd_resp_set_type(req, "application/json");
+    char resp[80];
+    snprintf(resp, sizeof(resp), "{\"status\":\"ok\",\"mode\":%d,\"fps\":%d}", mode, fps);
+    httpd_resp_sendstr(req, resp);
+    return ESP_OK;
+}
+
 /// Register a single URI and complain loudly on failure — silent failures
 /// (usually httpd_max_uri_handlers being too low) cost us hours of debugging
 /// 404s on routes that "should" exist.
@@ -488,6 +607,12 @@ esp_err_t js_api_register(httpd_handle_t server)
 
     httpd_uri_t stop = {.uri="/api/stop", .method=HTTP_POST, .handler=stop_handler};
     register_or_warn(server, &stop);
+
+    httpd_uri_t bench = {.uri="/api/bench", .method=HTTP_POST, .handler=bench_handler};
+    register_or_warn(server, &bench);
+
+    httpd_uri_t compile = {.uri="/api/js/compile", .method=HTTP_POST, .handler=compile_handler};
+    register_or_warn(server, &compile);
 
     ESP_LOGI(TAG, "JS API registered");
     return ESP_OK;

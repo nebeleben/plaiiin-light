@@ -21,6 +21,15 @@ esp_err_t js_storage_remove(const char *name);
 /** True if a script with this exact name (no .js suffix) exists on disk. */
 bool js_storage_exists(const char *name);
 
+/** Phase 23 — compiled bytecode is stored alongside the .js source as a
+ *  separate <name>.bc file. The .js is the source of truth for editing;
+ *  the .bc is what the runtime player loads. Writing the .js (via
+ *  PUT /api/js/<name>) recompiles and overwrites the .bc.
+ *  read_bc allocates *out (caller frees). */
+esp_err_t js_storage_write_bc(const char *name, const void *buf, size_t len);
+esp_err_t js_storage_read_bc(const char *name, void **out, size_t *len_out);
+esp_err_t js_storage_remove_bc(const char *name);
+
 /** Collect JS script names (without the .js suffix) into `out`, sorted
  *  alphabetically (strcmp). Caller supplies the buffer.
  *  Returns the number of names actually written, capped at `max_names`. */

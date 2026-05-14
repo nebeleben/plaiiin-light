@@ -6,6 +6,8 @@
 #include "plaiiin_mqtt.h"
 #include "js_player.h"
 #include "js_storage.h"
+#include "plbc.h"
+#include <stdlib.h>
 #include "js_api.h"
 #include "mdns_service.h"
 #include "bt_service.h"
@@ -167,15 +169,45 @@ void app_main(void)
         };
         for (size_t i = 0; i < sizeof(defaults) / sizeof(defaults[0]); i++) {
             if (js_storage_exists(defaults[i].name)) continue;
+            size_t src_len = defaults[i].end - defaults[i].start;
             esp_err_t werr = js_storage_write(defaults[i].name,
                                               (const char *)defaults[i].start,
-                                              defaults[i].end - defaults[i].start);
-            if (werr == ESP_OK) {
-                ESP_LOGI(TAG, "Installed default %s.js", defaults[i].name);
-            } else {
+                                              src_len);
+            if (werr != ESP_OK) {
                 ESP_LOGW(TAG, "Could not install %s.js: %s", defaults[i].name,
                          esp_err_to_name(werr));
+                continue;
             }
+            /* Phase 23 — compile to .bc immediately. The player loads .bc
+             * directly; without it a fresh boot would have a .js on disk
+             * but no runnable bytecode. */
+            plbc_program_t *prog = (plbc_program_t *)calloc(1, sizeof(*prog));
+            if (!prog) {
+                ESP_LOGW(TAG, "OOM seeding %s.bc", defaults[i].name);
+                continue;
+            }
+            char cerr[128] = {0};
+            if (plbc_compile((const char *)defaults[i].start, src_len, prog,
+                             cerr, sizeof(cerr)) != ESP_OK) {
+                ESP_LOGW(TAG, "compile %s.js: %s", defaults[i].name, cerr);
+                free(prog);
+                continue;
+            }
+            /* Heap allocation — main_task stack is 3.5 KB, this buffer is
+             * up to 8 KB. Stack-allocating it would crash on first boot. */
+            uint8_t *bc = (uint8_t *)malloc(8192);
+            if (!bc) { free(prog); ESP_LOGW(TAG, "OOM bc buf"); continue; }
+            int n = plbc_serialize(prog, bc, 8192);
+            free(prog);
+            if (n <= 0) {
+                free(bc);
+                ESP_LOGW(TAG, "serialize %s.bc failed", defaults[i].name);
+                continue;
+            }
+            if (js_storage_write_bc(defaults[i].name, bc, (size_t)n) == ESP_OK) {
+                ESP_LOGI(TAG, "Installed default %s.js + .bc (%d B)", defaults[i].name, n);
+            }
+            free(bc);
         }
     }
 
@@ -204,7 +236,7 @@ void app_main(void)
             }
             char *src = NULL; size_t len = 0;
             if (js_storage_read(name, &src, &len) == ESP_OK) {
-                if (js_player_start(src, 10) == ESP_OK) {
+                if (js_player_start(src, JS_DEFAULT_FPS) == ESP_OK) {
                     js_player_set_current_name(name);
                     ESP_LOGI(TAG, "Resumed js mode with %s", name);
                 }
