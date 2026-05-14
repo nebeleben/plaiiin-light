@@ -70,6 +70,8 @@ typedef enum {
     PLBC_LOAD_BASE_R    = 0x26,
     PLBC_LOAD_BASE_G    = 0x27,
     PLBC_LOAD_BASE_B    = 0x28,
+    PLBC_LOAD_PLAY_START= 0x29,  /* ms-since-boot at js_player_start; per-run seed */
+    PLBC_LOAD_TIME      = 0x2A,  /* ms since this playback started; advances per frame */
 
     /* Params (read-only at runtime) */
     PLBC_LOAD_PARAM     = 0x30,  /* + u8 idx */
@@ -168,6 +170,20 @@ typedef struct {
     /* Pre-loaded per-frame constants */
     uint32_t frame_idx;
     uint8_t base_r, base_g, base_b;
+    /* ms-since-boot at the moment js_player_start fired. Constant during
+     * a playback. Used as a seed input by scripts that want a different
+     * per-LED pattern every run, e.g. fade does `hash(idx + playStart)`.
+     * Masked to 24 bits so it stays exact in float32. */
+    uint32_t play_start_ms;
+    /* Full-precision ms-since-boot at start of playback. NOT exposed to
+     * scripts directly — used by the player to compute `now_ms = current -
+     * play_start_full_ms` per frame. */
+    uint32_t play_start_full_ms;
+    /* Ms since play started, snapshotted at frame setup so all pixels in
+     * one frame see the same value. Exposed to scripts as `time` — the
+     * right way to drive animations now that fps is variable (the old
+     * `frame * dt` pattern was implicitly assuming 10 fps). */
+    uint32_t now_ms;
 } plbc_runtime_t;
 
 /* Compile JS-subset source to a program. On error, returns ESP_FAIL and

@@ -32,12 +32,21 @@ static inline float sin_lut_lookup(float x)
     return s_sin_lut[(uint32_t)idx & (SIN_LUT_SIZE - 1)];
 }
 
-/* Knuth multiplicative hash → uniform [0,1). Deterministic per input, so
- * scripts get reproducible "random" patterns frame-over-frame. */
+/* Avalanching integer hash → uniform [0,1). Knuth's `x * 2654435761` is
+ * uniform statistically but the output for sequential keys is a golden-
+ * ratio sequence — visibly regular when laid out on a 2D grid (which is
+ * exactly what fade.js does: `hash(idx)` where idx = y*w + x). Thomas Wang's
+ * mixer has full avalanche: a 1-bit input flip changes ~50% of output bits,
+ * so consecutive idx produce uncorrelated offsets. Same speed (~8 ALU ops
+ * vs Knuth's 1 mul); the perceptual win for "looks random" is worth it. */
 static inline float hash01(float v)
 {
     uint32_t x = (uint32_t)((int32_t)v);
-    x = x * 2654435761u;
+    x = (x ^ 61u) ^ (x >> 16);
+    x = x + (x << 3);
+    x = x ^ (x >> 4);
+    x = x * 0x27d4eb2du;
+    x = x ^ (x >> 15);
     return (float)x * (1.0f / 4294967296.0f);
 }
 
@@ -190,6 +199,8 @@ esp_err_t plbc_run_pixel(const plbc_program_t *prog,
             case PLBC_LOAD_BASE_R: PUSH((float)rt->base_r); break;
             case PLBC_LOAD_BASE_G: PUSH((float)rt->base_g); break;
             case PLBC_LOAD_BASE_B: PUSH((float)rt->base_b); break;
+            case PLBC_LOAD_PLAY_START: PUSH((float)rt->play_start_ms); break;
+            case PLBC_LOAD_TIME:       PUSH((float)rt->now_ms); break;
 
             case PLBC_LOAD_PARAM: {
                 uint8_t i = code[pc++];

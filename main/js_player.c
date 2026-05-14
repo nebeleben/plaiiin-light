@@ -162,6 +162,18 @@ static void player_task(void *arg)
     rt.base_r = s_base_r;
     rt.base_g = s_base_g;
     rt.base_b = s_base_b;
+    /* Per-playback seed for stateless scripts that want a fresh look every
+     * run. Masked to 24 bits so it stays exact in float32 (the VM stack is
+     * f32). Different every play because esp_log_timestamp is monotonic
+     * and never resets without a reboot. */
+    rt.play_start_ms = esp_log_timestamp() & 0xFFFFFFu;
+    /* Full-precision start time for the `time` input — per-frame elapsed
+     * ms is computed as `current - play_start_full_ms`. Keeping it
+     * separate from the hash-seed `play_start_ms` lets the seed stay
+     * 24-bit (exact in float32) while elapsed-time tracking uses the
+     * full 32-bit range. */
+    rt.play_start_full_ms = esp_log_timestamp();
+    rt.now_ms = 0;
     xSemaphoreGive(s_lock);
 
     int fps = s_fps;
@@ -174,6 +186,9 @@ static void player_task(void *arg)
 
     while (s_running) {
         rt.frame_idx = frame_idx;
+        /* Snapshot wall-clock-elapsed-ms once per frame — all pixels see
+         * the same `time` value, animations are smooth even if fps shifts. */
+        rt.now_ms = esp_log_timestamp() - rt.play_start_full_ms;
         /* Refresh base color in case /api/color was called mid-playback. */
         rt.base_r = s_base_r;
         rt.base_g = s_base_g;

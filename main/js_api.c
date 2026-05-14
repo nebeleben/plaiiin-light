@@ -241,9 +241,12 @@ static esp_err_t write_handler(httpd_req_t *req)
         }
         free(bc);
         plbc_apply_params_json(prog, body, body_len);
-        uint8_t out_bc[MAX_BC_BYTES];
-        int n_bc = plbc_serialize(prog, out_bc, sizeof(out_bc));
+        /* Heap, not stack — httpd task stack is ~4 KB; MAX_BC_BYTES is 16 KB. */
+        uint8_t *out_bc = (uint8_t *)malloc(MAX_BC_BYTES);
+        if (!out_bc) { free(prog); free(body); return send_err_json(req, 500, "oom"); }
+        int n_bc = plbc_serialize(prog, out_bc, MAX_BC_BYTES);
         if (n_bc > 0) js_storage_write_bc(name, out_bc, (size_t)n_bc);
+        free(out_bc);
         /* Push live values into the running player if it's playing this script. */
         const char *playing = js_player_current_name();
         if (playing && strcmp(playing, name) == 0) {

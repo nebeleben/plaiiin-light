@@ -347,6 +347,14 @@ static uint8_t input_opcode(const char *name)
     if (strcmp(name, "w") == 0) return PLBC_LOAD_W;
     if (strcmp(name, "h") == 0) return PLBC_LOAD_H;
     if (strcmp(name, "frame") == 0) return PLBC_LOAD_FRAME;
+    /* Phase 23 — per-playback seed (ms-since-boot at start). Different
+     * every play so stateless scripts like fade can vary their pattern. */
+    if (strcmp(name, "playStart") == 0) return PLBC_LOAD_PLAY_START;
+    /* Phase 23 — ms since playback started, advances per frame. The right
+     * input to drive animations now that fps is configurable; using `frame
+     * * dt` with a hard-coded dt locks animations to whatever fps the
+     * script's author assumed. */
+    if (strcmp(name, "time") == 0) return PLBC_LOAD_TIME;
     return 0;
 }
 
