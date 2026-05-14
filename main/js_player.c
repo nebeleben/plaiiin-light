@@ -77,6 +77,64 @@ static uint8_t s_base_r = 128, s_base_g = 128, s_base_b = 128;
 // the player task gets a consistent snapshot per frame.
 static js_params_schema_t s_params = {0};
 
+// Phase 22 — Rendered-frame timestamp ring for the /api/state fps field. The
+// player task pushes esp_log_timestamp() (ms since boot) on every successful
+// frame; js_player_get_fps() counts entries inside the trailing 5 s window and
+// divides by the span. Size chosen so a 100 fps cap × 5 s window still fits
+// (max 500 entries) without overwriting unread samples. Wraparound at uint32
+// max is a non-issue: rollover happens once per ~49 days, and the window
+// comparison clamps both sides.
+#define FPS_WINDOW_MS 5000u
+#define FPS_RING_SIZE 512
+static uint32_t s_fps_ring[FPS_RING_SIZE];
+static uint16_t s_fps_ring_idx = 0;
+static bool     s_fps_ring_full = false;
+
+/* Phase 22 — Append the latest frame timestamp to the ring. Called from the
+ * player task under s_lock. */
+static void fps_tick(uint32_t now_ms)
+{
+    s_fps_ring[s_fps_ring_idx] = now_ms;
+    s_fps_ring_idx++;
+    if (s_fps_ring_idx >= FPS_RING_SIZE) {
+        s_fps_ring_idx = 0;
+        s_fps_ring_full = true;
+    }
+}
+
+/* Phase 22 — Wipe the ring so a previous run's frames don't leak into the
+ * first /api/state read after a fresh /api/play. Called from js_player_start. */
+static void fps_reset(void)
+{
+    memset(s_fps_ring, 0, sizeof(s_fps_ring));
+    s_fps_ring_idx = 0;
+    s_fps_ring_full = false;
+}
+
+float js_player_get_fps(void)
+{
+    uint32_t now = esp_log_timestamp();
+    uint32_t cutoff = now - FPS_WINDOW_MS;
+    // Modular subtraction handles wraparound: if now < FPS_WINDOW_MS, cutoff
+    // becomes a huge number and the comparison below correctly excludes any
+    // timestamp ≤ now (which all post-boot timestamps are).
+    int count = 0;
+    uint32_t oldest = now;
+    int limit = s_fps_ring_full ? FPS_RING_SIZE : s_fps_ring_idx;
+    for (int i = 0; i < limit; i++) {
+        uint32_t t = s_fps_ring[i];
+        if (t == 0) continue;            // empty slot (pre-fill)
+        if (t > now) continue;           // post-wraparound stragglers
+        if (t < cutoff) continue;        // older than the window
+        count++;
+        if (t < oldest) oldest = t;
+    }
+    if (count < 2) return 0.0f;
+    uint32_t span = now - oldest;
+    if (span == 0) return 0.0f;
+    return (float)count * 1000.0f / (float)span;
+}
+
 /**
  * Logical grid: width/height derived from lamp_type when it's a matrix,
  * otherwise treat the strip as 1 row of N.
@@ -210,6 +268,11 @@ static void player_task(void *arg)
         if (n > 0) {
             // Logical → physical (pixel grouping expansion happens here).
             led_control_set_logical(frame, w, h);
+            // Phase 22 — stamp only on successful frames so /api/state.fps
+            // reflects what actually reached the LEDs, not abandoned attempts.
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            fps_tick(esp_log_timestamp());
+            xSemaphoreGive(s_lock);
         }
         frame_idx++;
         vTaskDelay(period);
@@ -236,6 +299,37 @@ esp_err_t js_player_init(void)
  * returns via mjs_return().
  * ------------------------------------------------------------------------ */
 
+/* Phase 22 — Sin lookup table for fast trig from JS. Plasma-style scripts
+ * can issue hundreds of Math.sin per frame; libm sin itself is cheap, but
+ * the mJS argument-marshalling/return overhead dominates at this rate and
+ * caps a 16×8 matrix at ~3–5 fps even when the lamp's fps knob asks for 30.
+ * Math.sinLUT(x) wraps `x` into a 256-entry table (1.4° resolution,
+ * |error| ≤ 0.01) — invisible at LED brightness resolution and ~10× faster
+ * end-to-end. Math.sin still goes through libm for callers that need
+ * precision. The table fills lazily on first install_math() call. */
+#define SIN_LUT_SIZE 256
+static float s_sin_lut[SIN_LUT_SIZE];
+static bool s_sin_lut_ready = false;
+static const double SIN_LUT_SCALE = (double)SIN_LUT_SIZE / (2.0 * M_PI);
+
+static void sin_lut_init(void)
+{
+    if (s_sin_lut_ready) return;
+    for (int i = 0; i < SIN_LUT_SIZE; i++) {
+        s_sin_lut[i] = (float)sin(2.0 * M_PI * (double)i / (double)SIN_LUT_SIZE);
+    }
+    s_sin_lut_ready = true;
+}
+
+/* Two's-complement wraparound on negative idx maps -x angles to the
+ * equivalent positive bucket (mod 2π), so the same lookup serves both
+ * signs with no fmod or floor() needed. */
+static inline double sin_lut_lookup(double x)
+{
+    long idx = (long)(x * SIN_LUT_SCALE);
+    return (double)s_sin_lut[(unsigned long)idx & (SIN_LUT_SIZE - 1)];
+}
+
 static double arg_num(struct mjs *mjs, int i)
 {
     mjs_val_t v = mjs_arg(mjs, i);
@@ -250,6 +344,8 @@ static void math_round(struct mjs *mjs) { mjs_return(mjs, mjs_mk_number(mjs, rou
 static void math_sqrt(struct mjs *mjs)  { mjs_return(mjs, mjs_mk_number(mjs, sqrt(arg_num(mjs, 0)))); }
 static void math_sin(struct mjs *mjs)   { mjs_return(mjs, mjs_mk_number(mjs, sin(arg_num(mjs, 0)))); }
 static void math_cos(struct mjs *mjs)   { mjs_return(mjs, mjs_mk_number(mjs, cos(arg_num(mjs, 0)))); }
+static void math_sinLUT(struct mjs *mjs){ mjs_return(mjs, mjs_mk_number(mjs, sin_lut_lookup(arg_num(mjs, 0)))); }
+static void math_cosLUT(struct mjs *mjs){ mjs_return(mjs, mjs_mk_number(mjs, sin_lut_lookup(arg_num(mjs, 0) + M_PI_2))); }
 static void math_tan(struct mjs *mjs)   { mjs_return(mjs, mjs_mk_number(mjs, tan(arg_num(mjs, 0)))); }
 static void math_atan(struct mjs *mjs)  { mjs_return(mjs, mjs_mk_number(mjs, atan(arg_num(mjs, 0)))); }
 static void math_atan2(struct mjs *mjs) { mjs_return(mjs, mjs_mk_number(mjs, atan2(arg_num(mjs, 0), arg_num(mjs, 1)))); }
@@ -284,6 +380,7 @@ static void math_sign(struct mjs *mjs)
 
 static void install_math(struct mjs *mjs)
 {
+    sin_lut_init();
     mjs_val_t m = mjs_mk_object(mjs);
     mjs_set(mjs, m, "PI", ~0, mjs_mk_number(mjs, M_PI));
     mjs_set(mjs, m, "E",  ~0, mjs_mk_number(mjs, M_E));
@@ -294,6 +391,8 @@ static void install_math(struct mjs *mjs)
     mjs_set(mjs, m, "sqrt",   ~0, mjs_mk_foreign_func(mjs, (mjs_func_ptr_t)math_sqrt));
     mjs_set(mjs, m, "sin",    ~0, mjs_mk_foreign_func(mjs, (mjs_func_ptr_t)math_sin));
     mjs_set(mjs, m, "cos",    ~0, mjs_mk_foreign_func(mjs, (mjs_func_ptr_t)math_cos));
+    mjs_set(mjs, m, "sinLUT", ~0, mjs_mk_foreign_func(mjs, (mjs_func_ptr_t)math_sinLUT));
+    mjs_set(mjs, m, "cosLUT", ~0, mjs_mk_foreign_func(mjs, (mjs_func_ptr_t)math_cosLUT));
     mjs_set(mjs, m, "tan",    ~0, mjs_mk_foreign_func(mjs, (mjs_func_ptr_t)math_tan));
     mjs_set(mjs, m, "atan",   ~0, mjs_mk_foreign_func(mjs, (mjs_func_ptr_t)math_atan));
     mjs_set(mjs, m, "atan2",  ~0, mjs_mk_foreign_func(mjs, (mjs_func_ptr_t)math_atan2));
@@ -352,13 +451,23 @@ esp_err_t js_player_validate(const char *source, const char **err_out)
     mjs_array_push(mjs, base, mjs_mk_number(mjs, s_base_r));
     mjs_array_push(mjs, base, mjs_mk_number(mjs, s_base_g));
     mjs_array_push(mjs, base, mjs_mk_number(mjs, s_base_b));
-    mjs_val_t args[4] = {
+    // Phase 22 — Render contract is 5 args including params (since Phase 21).
+    // Validating with only 4 args left params=undefined inside the script, so
+    // any modern `params.foo` access threw "type error" at upload time and the
+    // user got a useless validation failure. Build params from the script's
+    // own @param schema (defaults) so validate runs render() in the same
+    // shape the player_task does.
+    js_params_schema_t v_schema = {0};
+    js_params_parse(scratch, &v_schema);
+    mjs_val_t v_params = js_params_to_mjs(mjs, &v_schema);
+    mjs_val_t args[5] = {
         mjs_mk_number(mjs, 0),
         mjs_mk_number(mjs, w),
         mjs_mk_number(mjs, h),
-        base
+        base,
+        v_params
     };
-    mjs_err_t rerr = mjs_apply(mjs, &result, render_fn, mjs_mk_null(), 4, args);
+    mjs_err_t rerr = mjs_apply(mjs, &result, render_fn, mjs_mk_null(), 5, args);
     if (rerr != MJS_OK) {
         if (err_out) *err_out = stash_err(mjs, rerr);
         mjs_destroy(mjs);
@@ -395,6 +504,8 @@ esp_err_t js_player_start(const char *source, int fps)
     // which the api/main paths call right after start().
     memset(&s_params, 0, sizeof(s_params));
     js_params_parse(source, &s_params);
+    // Phase 22 — wipe the fps ring so the new run's window starts empty.
+    fps_reset();
     s_running = true;
     xSemaphoreGive(s_lock);
 

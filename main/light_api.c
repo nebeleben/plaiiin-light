@@ -479,11 +479,12 @@ static esp_err_t orientation_set_handler(httpd_req_t *req)
 
 // GET /api/state ->
 //   {"on":bool,"color":[r,g,b],"mode":"api"|"js"|"stream",
-//    "brightness":int,"current":"name"|null}
+//    "brightness":int,"current":"name"|null,"fps":float}
 //
 // "mode" reflects the *effective* mode: stream when WS is active, otherwise
 // the persisted lamp mode. "current" is the name of the currently-loaded JS
-// script (or null) — useful for the dashboard to show the active animation.
+// script (or null). "fps" (Phase 22) is the rolling-5s rendered-FPS of the
+// JS player — 0 when no script is producing frames.
 static esp_err_t state_get_handler(httpd_req_t *req)
 {
     if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
@@ -501,16 +502,19 @@ static esp_err_t state_get_handler(httpd_req_t *req)
     const char *mode = (ws_server_get_mode() == LAMP_MODE_STREAM) ? "stream" : persistent;
     uint8_t brightness = led_control_get_brightness();
     const char *current = js_player_current_name();
+    float fps = js_player_get_fps();
+    // One-decimal formatting keeps the payload compact and matches what UIs
+    // want to display anyway. snprintf with %.1f rounds for us.
 
-    char resp[224];
+    char resp[256];
     if (current) {
         snprintf(resp, sizeof(resp),
-                 "{\"on\":%s,\"color\":[%u,%u,%u],\"mode\":\"%s\",\"brightness\":%u,\"current\":\"%s\"}",
-                 on ? "true" : "false", br, bg, bb, mode, brightness, current);
+                 "{\"on\":%s,\"color\":[%u,%u,%u],\"mode\":\"%s\",\"brightness\":%u,\"current\":\"%s\",\"fps\":%.1f}",
+                 on ? "true" : "false", br, bg, bb, mode, brightness, current, fps);
     } else {
         snprintf(resp, sizeof(resp),
-                 "{\"on\":%s,\"color\":[%u,%u,%u],\"mode\":\"%s\",\"brightness\":%u,\"current\":null}",
-                 on ? "true" : "false", br, bg, bb, mode, brightness);
+                 "{\"on\":%s,\"color\":[%u,%u,%u],\"mode\":\"%s\",\"brightness\":%u,\"current\":null,\"fps\":%.1f}",
+                 on ? "true" : "false", br, bg, bb, mode, brightness, fps);
     }
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, resp);

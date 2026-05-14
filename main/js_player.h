@@ -45,3 +45,9 @@ int js_player_apply_params_json(const char *json, size_t len);
 /** Currently-running script's params as JSON. Returns bytes written, or 0
  *  if no script is loaded. */
 int js_player_dump_params_json(char *out, size_t max_len);
+
+/** Phase 22 — Rendered-frames-per-second over a rolling 5 s window. Returns
+ *  0.0 when no script has produced a frame in the window (idle / stopped /
+ *  just-started). Sampled and the timestamp ring is reset on every
+ *  js_player_start so a previous run's tail doesn't leak in. */
+float js_player_get_fps(void);
