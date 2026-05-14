@@ -219,6 +219,35 @@ static esp_err_t write_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// POST /api/js/validate    body: raw JS source
+//   200  {"status":"ok"}
+//   400  {"status":"error","message":"<reason>"}
+//
+// Lets clients pre-flight a script through the same `js_player_validate`
+// pass that gatekeeps PUT /api/js/<name>, without committing it to NVS.
+// Phase 21 — the "device is master" handshake: if validate rejects it,
+// no client should save it or run it locally.
+static esp_err_t validate_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    char *body = NULL; size_t body_len = 0;
+    esp_err_t err = receive_body(req, &body, &body_len);
+    if (err != ESP_OK) return send_err_json(req, 400, "bad body");
+    const char *verr = NULL;
+    esp_err_t code = js_player_validate(body, &verr);
+    free(body);
+    if (code != ESP_OK) {
+        // js_player_validate writes a short, ASCII-only reason; safe to embed
+        // directly. Keep the buffer modest — we're only mirroring one phrase.
+        char msg[160];
+        snprintf(msg, sizeof(msg), "%s", verr ? verr : "validation failed");
+        return send_err_json(req, 400, msg);
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    return ESP_OK;
+}
+
 // DELETE /api/js/<name>
 static esp_err_t delete_handler(httpd_req_t *req)
 {
@@ -429,6 +458,12 @@ esp_err_t js_api_register(httpd_handle_t server)
 {
     httpd_uri_t list = {.uri="/api/js", .method=HTTP_GET, .handler=list_handler};
     register_or_warn(server, &list);
+
+    // Phase 21 — validate is a sibling of read/write/delete; registered as
+    // a specific POST so it doesn't collide with the wildcard GET/PUT/DELETE
+    // handlers below (different HTTP methods, no ambiguity).
+    httpd_uri_t validate = {.uri="/api/js/validate", .method=HTTP_POST, .handler=validate_handler};
+    register_or_warn(server, &validate);
 
     httpd_uri_t read_one = {.uri="/api/js/*", .method=HTTP_GET, .handler=read_handler};
     register_or_warn(server, &read_one);

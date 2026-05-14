@@ -247,7 +247,12 @@ function parseResponse(text){
       var src=jsMatch[1];
       lastJsSource=src;
       var renderFn=new Function('return ('+src+')')();
-      for(var f=0;f<300;f++){var px=renderFn(f,gridW,gridH,baseColor);if(!px||px.length<total)break;frames.push(rgbToImg(px,total));}
+      // Phase 21 — magic-comment params. The AI-generated script may include
+      // `// @param NAME MIN..MAX = DEFAULT DESC` lines (fade.js / plasma.js
+      // both do). Seed defaults here and pass as the 5th arg so render() can
+      // dereference `params.something` without throwing.
+      var params=parseScriptParams(src);
+      for(var f=0;f<300;f++){var px=renderFn(f,gridW,gridH,baseColor,params);if(!px||px.length<total)break;frames.push(rgbToImg(px,total));}
       fps=parseInt(document.getElementById('fpsSlider').value)||10;
     }catch(e){addChatMsg('ai','Code error: '+e.message);}
   }
@@ -257,6 +262,28 @@ function parseResponse(text){
     renderFrame(0);document.getElementById('frameInfo').textContent=frames.length+' frame'+(frames.length>1?'s':'')+' generated';
   }
 }
+/// Phase 21 — mirror of `js_params_parse` (firmware) / `JSScriptParams.parse`
+/// (Swift). Returns `{name:default,...}` extracted from `// @param ...` lines.
+/// Defaults clamp into [min,max]. Same 8-param cap as the firmware.
+function parseScriptParams(src){
+  var out={};var n=0;
+  var lines=src.split('\n');
+  for(var i=0;i<lines.length&&n<8;i++){
+    var s=lines[i].replace(/^[ \t]+/,'');
+    if(s.indexOf('// @param')!==0)continue;
+    var body=s.substring(9).replace(/^[ \t]+/,'');
+    var m=body.match(/^(\S+)\s+(\S+)\s*=\s*(\S+)/);
+    if(!m)continue;
+    var dd=m[2].indexOf('..');if(dd<0)continue;
+    var lo=parseFloat(m[2].substring(0,dd));
+    var hi=parseFloat(m[2].substring(dd+2));
+    var def=parseFloat(m[3]);
+    if(!isFinite(lo)||!isFinite(hi)||!isFinite(def)||hi<=lo)continue;
+    out[m[1]]=Math.max(lo,Math.min(hi,def));n++;
+  }
+  return out;
+}
+
 function hexToImg(arr,total){
   var w=isMatrix?gridW:total,h=isMatrix?gridH:1;
   var c=document.createElement('canvas');c.width=w;c.height=h;var ctx=c.getContext('2d');
