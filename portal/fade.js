@@ -16,39 +16,44 @@
 
 function shade(x, y, idx, frame, base, params) {
   // `time` is wall-clock ms since /api/play, advanced by the player every
-  // frame from esp_timer. Using it (instead of the old `frame * dt` with a
-  // hard-coded dt=100ms-per-frame) keeps fadeIn/hold/fadeOut in real
-  // seconds regardless of the requested render fps.
+  // frame from esp_timer. Using it (instead of `frame * dt`) keeps
+  // fadeIn/hold/fadeOut in real seconds regardless of render fps.
   let now = time;
   let active = params.fadeIn + params.hold + params.fadeOut;
-  let nominalCycle = active / max(params.density, 0.01);
   let holdEnd = params.fadeIn + params.hold;
 
-  // Phase 23 — two axes of randomization:
-  //   (1) Per-LED *cycle jitter*: each LED's total period is nominalCycle
-  //       ×(1.0 .. 1.1), so neighbouring LEDs run at incommensurate
-  //       frequencies and the composite pattern never exactly repeats.
-  //       Without this, after `nominalCycle` ms the whole panel replays
-  //       its sequence verbatim — you'd see the same LED-by-LED schedule
-  //       on loop.
-  //   (2) Per-LED *offset shuffle*, re-seeded each playback via playStart
-  //       (ms-since-boot at /api/play), so a Stop / Play also gives a
-  //       fresh distribution.
-  // Both hashes go through the VM's Wang mixer (HASH_I opcode) — small
-  // input changes avalanche to uncorrelated outputs.
-  let cycle = nominalCycle * (1 + hash(idx + 999) * 0.1);
+  // Cycle length is ~active (the fade-in/hold/out trio back-to-back) with
+  // a small ±5% per-LED jitter so the panel never globally re-syncs.
+  // Crucially this is INDEPENDENT of density — at low density the per-LED
+  // cycle still feels normal, density just controls how often each LED
+  // chooses to participate.
+  let cycle = active * (1 + hash(idx + 999) * 0.1);
+
+  // Per-LED phase offset, reseeded each playback via playStart so back-to-
+  // back runs look different.
   let offset = hash(idx + playStart) * cycle;
-  let t = (now + offset) % cycle;
+  let totalPos = now + offset;
+  let local = totalPos % cycle;
+
+  // Per-cycle participation dice roll. Every time this LED reaches the end
+  // of its cycle (local wraps back to 0), a new dice is rolled: with
+  // probability `density` the LED takes part in this cycle; otherwise it
+  // stays dark for the whole cycle. The re-roll lines up with the cycle
+  // boundary — at which point bright was naturally ~0 from the prior
+  // fade-out — so there's no visual glitch.
+  let cycleNum = floor(totalPos / cycle);
+  let participates = hash(idx * 257 + cycleNum) < params.density;
 
   let bright = 0;
-  if (t < params.fadeIn) {
-    bright = t / params.fadeIn;
-  } else if (t < holdEnd) {
-    bright = 1;
-  } else if (t < active) {
-    bright = 1 - (t - holdEnd) / params.fadeOut;
+  if (participates) {
+    if (local < params.fadeIn) {
+      bright = local / params.fadeIn;
+    } else if (local < holdEnd) {
+      bright = 1;
+    } else if (local < active) {
+      bright = 1 - (local - holdEnd) / params.fadeOut;
+    }
+    // local ∈ [active, cycle) is the 0–5% jitter tail → stays dark
   }
-  // else: in the dark gap → bright stays 0
-
   emitBright(bright);
 }

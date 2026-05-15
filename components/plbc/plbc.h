@@ -34,9 +34,13 @@
 #define PLBC_VERSION     1
 
 #define PLBC_MAX_PARAMS         12
-#define PLBC_MAX_FRAME_STATE    16
+/* Bumped from 16 → 32 in Phase 23 so multi-slot effects (e.g. shootingstar
+ * with 4 stars × 6 fields = 24) can keep their state in one program. The
+ * `n_frame_state` wire field is u8 so 32 is well within format limits;
+ * runtime cost is one float per slot per program. */
+#define PLBC_MAX_FRAME_STATE    32
 #define PLBC_MAX_PIXEL_STATE     8
-#define PLBC_MAX_LOCALS         16
+#define PLBC_MAX_LOCALS         32
 #define PLBC_STACK_DEPTH        32
 #define PLBC_MAX_NAME           24
 #define PLBC_MAX_DESC           96

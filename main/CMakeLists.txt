@@ -52,4 +52,8 @@ idf_component_register(
         "../portal/noop.js"
         "../portal/fade.js"
         "../portal/plasma.js"
+        "../portal/breath.js"
+        "../portal/heartbeat.js"
+        "../portal/shootingstar.js"
+        "../portal/particles.js"
 )
