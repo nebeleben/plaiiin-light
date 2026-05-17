@@ -20,6 +20,7 @@ idf_component_register(
         "factory_reset.c"
         "ai_key_api.c"
         "pairing.c"
+        "form_prompt.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_http_server

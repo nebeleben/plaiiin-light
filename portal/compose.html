@@ -155,6 +155,14 @@ fetch('/api?_='+Date.now()).then(function(r){return r.json()}).then(function(d){
   document.getElementById('ledInfo').textContent='API unavailable: '+e.message;
 });
 
+// Phase 26 — physical-form descriptor fetched from the device and appended to
+// the AI system prompt so generated shade() scripts match the lamp's real
+// shape. Edited under /config ▸ Form Context, not here.
+var formPromptEffective='';
+fetch('/api/form-prompt?_='+Date.now()).then(function(r){return r.json()}).then(function(d){
+  formPromptEffective=d.effective||d.default||'';
+}).catch(function(){});
+
 // Mode toggle
 
 // System prompt
@@ -177,7 +185,8 @@ function getSystemPrompt(){
   'Declare tunable knobs as `// @param NAME MIN..MAX = DEFAULT description` lines before the function, and read them as params.NAME.\n'+
   'Language subset: numbers only (no strings/arrays/objects); `let` only (no var/const); if/else and for; operators + - * / % , < <= > >= == != , && || ! ; built-in functions sinLUT, cosLUT, floor, ceil, round, abs, sqrt, pow, min, max, clamp01, hash, random. No Math.*, no arrow functions, no return value.\n\n'+
   'Choose the best format: use generator code for gradients, waves, math patterns, long animations. Use pixel data for specific images or short sequences.\n'+
-  'Grid dimensions: '+gridW+' wide, '+gridH+' tall, '+total+' pixels total.';
+  'Grid dimensions: '+gridW+' wide, '+gridH+' tall, '+total+' pixels total.'+
+  (formPromptEffective.trim()?'\n\n'+formPromptEffective.trim():'');
 }
 
 // AI key — server-rendered into <meta name="plk-aikey"> when the page is

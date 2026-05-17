@@ -74,6 +74,12 @@
 //   "never"  — BT stack is not initialized at all.
 // Default "auto".
 #define CONFIG_KEY_BT_ENABLED    "bt_enabled"
+// Phase 26 — per-lamp physical-form descriptor. Optional free-text override
+// for the firmware-generated form description that clients inject into AI
+// compose prompts. Unset (the default) means "use the firmware default built
+// from lamp_form + geometry". Wiped by factory reset along with the rest of
+// the namespace. See form_prompt.{h,c}.
+#define CONFIG_KEY_FORM_PROMPT   "form_prompt"
 
 esp_err_t config_store_init(void);
 esp_err_t config_store_get_str(const char *key, char *out, size_t max_len);

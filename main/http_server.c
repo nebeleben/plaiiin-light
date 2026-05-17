@@ -8,6 +8,7 @@
 #include "led_control.h"
 #include "js_storage.h"
 #include "pairing.h"
+#include "form_prompt.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -116,6 +117,109 @@ static esp_err_t storage_info_handler(httpd_req_t *req)
         (unsigned)total, (unsigned)used, (unsigned)free_b, (unsigned)files);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, json);
+    return ESP_OK;
+}
+
+// Phase 26 — per-lamp physical-form descriptor injected into AI compose
+// prompts. GET returns {form, default, override, hasOverride, effective};
+// PUT replaces the editable override (empty body clears it); DELETE clears it.
+// All three sit behind pairing_http_check, consistent with /api/mqtt etc.
+
+// Append `in` to the JSON string already in `out`, escaping it as a JSON
+// string body. `out` must already be NUL-terminated; stays within out_len.
+static void json_escape_append(const char *in, char *out, size_t out_len)
+{
+    size_t o = strlen(out);
+    for (const char *p = in; *p && o + 7 < out_len; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '"' || c == '\\') { out[o++] = '\\'; out[o++] = (char)c; }
+        else if (c == '\n') { out[o++] = '\\'; out[o++] = 'n'; }
+        else if (c == '\r') { out[o++] = '\\'; out[o++] = 'r'; }
+        else if (c == '\t') { out[o++] = '\\'; out[o++] = 't'; }
+        else if (c < 0x20)  { o += snprintf(out + o, out_len - o, "\\u%04x", c); }
+        else out[o++] = (char)c;
+    }
+    out[o] = '\0';
+}
+
+// GET /api/form-prompt
+static esp_err_t form_prompt_get_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+
+    char lamp_form[32];
+    config_get_str_or(CONFIG_KEY_LAMP_FORM, lamp_form, sizeof(lamp_form), CONFIG_PLAIIIN_FORM);
+
+    char def[1024] = {0}, ovr[1024] = {0};
+    form_prompt_build_default(def, sizeof(def));
+    bool has_override =
+        (config_store_get_str(CONFIG_KEY_FORM_PROMPT, ovr, sizeof(ovr)) == ESP_OK && ovr[0]);
+
+    size_t cap = 6144;
+    char *json = malloc(cap);
+    if (!json) return ESP_FAIL;
+    json[0] = '\0';
+    strcat(json, "{\"form\":\"");
+    json_escape_append(lamp_form, json, cap);
+    strcat(json, "\",\"default\":\"");
+    json_escape_append(def, json, cap);
+    strcat(json, "\",\"override\":\"");
+    if (has_override) json_escape_append(ovr, json, cap);
+    strcat(json, has_override ? "\",\"hasOverride\":true,\"effective\":\""
+                              : "\",\"hasOverride\":false,\"effective\":\"");
+    json_escape_append(has_override ? ovr : def, json, cap);
+    strcat(json, "\"}");
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    free(json);
+    return ESP_OK;
+}
+
+// PUT /api/form-prompt — body is the raw override text (empty body clears it).
+static esp_err_t form_prompt_put_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    int content_len = req->content_len;
+    if (content_len < 0 || content_len > 2048) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad request");
+        return ESP_FAIL;
+    }
+    char *buf = malloc(content_len + 1);
+    if (!buf) return ESP_FAIL;
+    int received = 0;
+    while (received < content_len) {
+        int ret = httpd_req_recv(req, buf + received, content_len - received);
+        if (ret <= 0) { free(buf); return ESP_FAIL; }
+        received += ret;
+    }
+    buf[content_len] = '\0';
+
+    esp_err_t err;
+    if (content_len == 0) {
+        const char *keys[] = { CONFIG_KEY_FORM_PROMPT };
+        err = config_store_erase_keys(keys, 1);
+    } else {
+        err = config_store_set_str(CONFIG_KEY_FORM_PROMPT, buf);
+    }
+    free(buf);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "save failed");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    return ESP_OK;
+}
+
+// DELETE /api/form-prompt — clears the override, reverting to the default.
+static esp_err_t form_prompt_delete_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    const char *keys[] = { CONFIG_KEY_FORM_PROMPT };
+    config_store_erase_keys(keys, 1);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
     return ESP_OK;
 }
 
@@ -480,6 +584,13 @@ httpd_handle_t http_server_start(void)
     httpd_register_uri_handler(server, &mqtt_api);
     httpd_uri_t mqtt_save = { .uri = "/mqtt", .method = HTTP_POST, .handler = mqtt_save_handler };
     httpd_register_uri_handler(server, &mqtt_save);
+
+    httpd_uri_t form_prompt_get = { .uri = "/api/form-prompt", .method = HTTP_GET, .handler = form_prompt_get_handler };
+    httpd_register_uri_handler(server, &form_prompt_get);
+    httpd_uri_t form_prompt_put = { .uri = "/api/form-prompt", .method = HTTP_PUT, .handler = form_prompt_put_handler };
+    httpd_register_uri_handler(server, &form_prompt_put);
+    httpd_uri_t form_prompt_del = { .uri = "/api/form-prompt", .method = HTTP_DELETE, .handler = form_prompt_delete_handler };
+    httpd_register_uri_handler(server, &form_prompt_del);
 
     captive_portal_register(server);
     light_api_register(server);

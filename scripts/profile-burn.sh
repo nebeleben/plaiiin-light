@@ -163,16 +163,29 @@ if [ "$FULL" -eq 1 ]; then
     "$PYTHON" "$ESPTOOL" --chip esp32 --port "$PORT" --baud "$BAUD" \
         write_flash 0x0 "$FLASH_BIN"
 
-    # --- byForm effects: SPIFFS image of effects/<FORM>/*.js -----------------
-    # Phase 25 — form-specific effects ship per-device, not embedded in the
-    # firmware. We build a SPIFFS image of the form's .js files and flash it
-    # to the `storage` partition; the firmware compiles each to .bc on boot.
+    # --- byForm effects + form template: SPIFFS image -----------------------
+    # Phase 25/26 — form-specific effects and the AI form-prompt template ship
+    # per-device, not embedded in the firmware. We build one SPIFFS image of
+    # the form's .js files plus its prompt-inject template and flash it to the
+    # `storage` partition. The firmware compiles each .js to .bc on boot and
+    # serves the template via GET /api/form-prompt.
     FORM_VAL="$(get FORM)"
     EFFECTS_DIR="$PROJECT_DIR/effects/$FORM_VAL"
+    TEMPLATE_FILE="$PROJECT_DIR/form-template/$FORM_VAL.txt"
+    SPIFFS_SRC="$TMPDIR/effects_src"
+    mkdir -p "$SPIFFS_SRC"
     if [ -n "$FORM_VAL" ] && compgen -G "$EFFECTS_DIR/*.js" >/dev/null 2>&1; then
+        cp "$EFFECTS_DIR"/*.js "$SPIFFS_SRC/"
+    fi
+    # Phase 26 — the form's prompt-inject template, flashed as _form_template.txt.
+    if [ -n "$FORM_VAL" ] && [ -f "$TEMPLATE_FILE" ]; then
+        cp "$TEMPLATE_FILE" "$SPIFFS_SRC/_form_template.txt"
+    fi
+
+    if compgen -G "$SPIFFS_SRC/*" >/dev/null 2>&1; then
         [ -f "$SPIFFS_GEN" ] || { echo "no spiffsgen.py at $SPIFFS_GEN (set IDF_PATH)" >&2; exit 1; }
         # storage partition geometry — parsed from partitions.csv so a layout
-        # change doesn't silently flash effects to the wrong offset.
+        # change doesn't silently flash to the wrong offset.
         read -r ST_OFF ST_SIZE < <(awk -F, '
             { gsub(/[ \t]/,"",$1) }
             $1=="storage" { gsub(/[ \t]/,"",$4); gsub(/[ \t]/,"",$5); print $4, $5; exit }
@@ -180,20 +193,17 @@ if [ "$FULL" -eq 1 ]; then
         [ -n "${ST_OFF:-}" ] && [ -n "${ST_SIZE:-}" ] || {
             echo "could not parse 'storage' partition from partitions.csv" >&2; exit 1; }
 
-        echo "=== --full: byForm effects (form '$FORM_VAL') → SPIFFS @ $ST_OFF ==="
-        ls "$EFFECTS_DIR"/*.js | sed 's|.*/|  + |'
+        echo "=== --full: form '$FORM_VAL' → SPIFFS @ $ST_OFF ==="
+        ls "$SPIFFS_SRC" | sed 's|^|  + |'
 
-        SPIFFS_SRC="$TMPDIR/effects_src"
         SPIFFS_IMG="$TMPDIR/storage.bin"
-        mkdir -p "$SPIFFS_SRC"
-        cp "$EFFECTS_DIR"/*.js "$SPIFFS_SRC/"
         # spiffsgen.py's defaults (page 256 / block 4096 / magic) match the
         # firmware's esp_spiffs defaults — no extra flags needed.
         "$PYTHON" "$SPIFFS_GEN" "$((ST_SIZE))" "$SPIFFS_SRC" "$SPIFFS_IMG"
         "$PYTHON" "$ESPTOOL" --chip esp32 --port "$PORT" --baud "$BAUD" \
             write_flash "$ST_OFF" "$SPIFFS_IMG"
     else
-        echo "=== --full: no byForm effects for form '${FORM_VAL:-?}' (effects/$FORM_VAL absent or empty) ==="
+        echo "=== --full: no byForm effects or template for form '${FORM_VAL:-?}' ==="
     fi
 fi
 

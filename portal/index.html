@@ -146,6 +146,15 @@
 <p class="info">Describes how the matrix is wired and mounted. Rotation visually rotates the source image; origin is the corner where the chain begins; chain axis + serpentine describe the wiring path. Strips ignore these.</p>
 <div class="msg" id="orientMsg"></div>
 
+<h2>Form Context</h2>
+<p class="info">Physical-form description sent to the AI on the Compose page so generated scripts match this lamp's shape (cylinder seam, cube faces, rings, segments). Edit to tune it for this lamp; Reset reverts to the firmware default.</p>
+<textarea id="formPromptBox" rows="6" style="width:100%;box-sizing:border-box;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:.78rem;resize:vertical;font-family:inherit"></textarea>
+<div class="limits" style="margin-top:6px">
+<button type="button" id="btnFormSave">Save to device</button>
+<button type="button" id="btnFormReset">Reset to default</button>
+</div>
+<div class="msg" id="formMsg"></div>
+
 <!-- AI Settings (stored in browser, used by /compose) -->
 <h2>AI Integration</h2>
 <label>Provider</label>
@@ -294,6 +303,26 @@ document.getElementById('btnOrient').onclick=function(){
     })})
     .then(function(r){return r.json()}).then(function(){flashMsg(orientMsg,'Orientation applied',true);})
     .catch(function(e){flashMsg(orientMsg,'Failed: '+e.message,false);});
+};
+
+// Form context — physical-form descriptor injected into AI Compose prompts.
+// Edits the per-lamp override via /api/form-prompt; Reset clears it.
+var formBox=document.getElementById('formPromptBox');
+var formMsg=document.getElementById('formMsg');
+var _formDefault='';
+fetch('/api/form-prompt').then(function(r){return r.json()}).then(function(d){
+  _formDefault=d.default||'';
+  formBox.value=d.effective||d.default||'';
+}).catch(function(){});
+document.getElementById('btnFormSave').onclick=function(){
+  fetch('/api/form-prompt',{method:'PUT',headers:{'Content-Type':'text/plain'},body:formBox.value})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);flashMsg(formMsg,'Form context saved',true);})
+    .catch(function(e){flashMsg(formMsg,'Failed: '+e.message,false);});
+};
+document.getElementById('btnFormReset').onclick=function(){
+  fetch('/api/form-prompt',{method:'DELETE'})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);formBox.value=_formDefault;flashMsg(formMsg,'Reset to default',true);})
+    .catch(function(e){flashMsg(formMsg,'Failed: '+e.message,false);});
 };
 
 // AI key — device-side via /api/ai/key. NVS-backed, wiped by factory reset.

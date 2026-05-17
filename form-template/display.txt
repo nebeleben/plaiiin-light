@@ -1,0 +1,1 @@
+PHYSICAL FORM: display (flat wall). A flat rectangular {w}x{h} pixel matrix ({wh} pixels). x increases left-to-right (0..{wmax}), y increases top-to-bottom (0..{hmax}). All four edges are hard edges — nothing wraps around.
