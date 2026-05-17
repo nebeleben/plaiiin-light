@@ -182,6 +182,9 @@ void app_main(void)
         for (size_t i = 0; i < sizeof(defaults) / sizeof(defaults[0]); i++) {
             if (js_storage_exists(defaults[i].name)) continue;
             size_t src_len = defaults[i].end - defaults[i].start;
+            // EMBED_TXTFILES appends a NUL terminator — drop it so the stored
+            // .js is clean source and the compiler doesn't see a stray '\0'.
+            while (src_len > 0 && defaults[i].start[src_len - 1] == 0) src_len--;
             esp_err_t werr = js_storage_write(defaults[i].name,
                                               (const char *)defaults[i].start,
                                               src_len);
@@ -220,6 +223,53 @@ void app_main(void)
                 ESP_LOGI(TAG, "Installed default %s.js + .bc (%d B)", defaults[i].name, n);
             }
             free(bc);
+        }
+    }
+
+    // 6a-bis. Phase 25 — compile any stored .js that has no .bc yet. byForm
+    // effects are flashed into the storage partition as raw .js by
+    // scripts/profile-burn.sh (--full) and arrive without bytecode; the
+    // player only runs .bc. This pass also self-heals any script left
+    // .js-only by an older firmware. The general built-ins seeded above
+    // already have their .bc, so they're skipped here.
+    {
+        char (*names)[64] = (char (*)[64])malloc(32 * 64);
+        if (!names) {
+            ESP_LOGW(TAG, "OOM — skipping uncompiled-effect pass");
+        } else {
+            int n = js_storage_collect_sorted(names, 32);
+            for (int i = 0; i < n; i++) {
+                if (js_storage_bc_exists(names[i])) continue;
+                char *src = NULL;
+                size_t src_len = 0;
+                if (js_storage_read(names[i], &src, &src_len) != ESP_OK || !src) {
+                    ESP_LOGW(TAG, "compile pass: cannot read %s.js", names[i]);
+                    continue;
+                }
+                plbc_program_t *prog = (plbc_program_t *)calloc(1, sizeof(*prog));
+                if (!prog) { free(src); ESP_LOGW(TAG, "OOM compiling %s", names[i]); continue; }
+                char cerr[128] = {0};
+                if (plbc_compile(src, src_len, prog, cerr, sizeof(cerr)) != ESP_OK) {
+                    ESP_LOGW(TAG, "compile pass: %s.js rejected: %s", names[i], cerr);
+                    free(prog); free(src);
+                    continue;
+                }
+                free(src);
+                uint8_t *bc = (uint8_t *)malloc(8192);
+                if (!bc) { free(prog); ESP_LOGW(TAG, "OOM bc buf"); continue; }
+                int bn = plbc_serialize(prog, bc, 8192);
+                free(prog);
+                if (bn <= 0) {
+                    free(bc);
+                    ESP_LOGW(TAG, "serialize %s.bc failed", names[i]);
+                    continue;
+                }
+                if (js_storage_write_bc(names[i], bc, (size_t)bn) == ESP_OK) {
+                    ESP_LOGI(TAG, "Compiled %s.js -> .bc (%d B)", names[i], bn);
+                }
+                free(bc);
+            }
+            free(names);
         }
     }
 

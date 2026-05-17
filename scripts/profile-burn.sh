@@ -12,6 +12,9 @@
 #       — erase_flash + write_flash <flash.bin> + write NVS, for a brand-new
 #         chip. Implies that scripts/build.sh has been run; uses the latest
 #         build/dist/plaiiinlight_os-<ver>-flash.bin.
+#       — also installs the byForm effects for this device's FORM: a SPIFFS
+#         image of effects/<FORM>/*.js is flashed to the storage partition.
+#         (Plain non-full burns leave storage — and any user scripts — alone.)
 #
 #     ./scripts/profile-burn.sh --baud <rate> ...    (default: 460800)
 #
@@ -31,6 +34,7 @@ FULL=0
 PYTHON="${IDF_PYTHON:-/Users/$USER/.espressif/python_env/idf5.3_py3.12_env/bin/python}"
 ESPTOOL="${IDF_PYTHON_DIR:-$(dirname "$PYTHON")}/esptool.py"
 NVS_GEN="${IDF_PATH:-$HOME/esp/esp-idf}/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"
+SPIFFS_GEN="${IDF_PATH:-$HOME/esp/esp-idf}/components/spiffs/spiffsgen.py"
 
 # Partition layout from lampos/partitions.csv. If you ever resize NVS, update.
 NVS_OFFSET=0x9000
@@ -158,6 +162,39 @@ if [ "$FULL" -eq 1 ]; then
     echo "=== --full: write_flash 0x0 $(basename "$FLASH_BIN") ==="
     "$PYTHON" "$ESPTOOL" --chip esp32 --port "$PORT" --baud "$BAUD" \
         write_flash 0x0 "$FLASH_BIN"
+
+    # --- byForm effects: SPIFFS image of effects/<FORM>/*.js -----------------
+    # Phase 25 — form-specific effects ship per-device, not embedded in the
+    # firmware. We build a SPIFFS image of the form's .js files and flash it
+    # to the `storage` partition; the firmware compiles each to .bc on boot.
+    FORM_VAL="$(get FORM)"
+    EFFECTS_DIR="$PROJECT_DIR/effects/$FORM_VAL"
+    if [ -n "$FORM_VAL" ] && compgen -G "$EFFECTS_DIR/*.js" >/dev/null 2>&1; then
+        [ -f "$SPIFFS_GEN" ] || { echo "no spiffsgen.py at $SPIFFS_GEN (set IDF_PATH)" >&2; exit 1; }
+        # storage partition geometry — parsed from partitions.csv so a layout
+        # change doesn't silently flash effects to the wrong offset.
+        read -r ST_OFF ST_SIZE < <(awk -F, '
+            { gsub(/[ \t]/,"",$1) }
+            $1=="storage" { gsub(/[ \t]/,"",$4); gsub(/[ \t]/,"",$5); print $4, $5; exit }
+        ' "$PROJECT_DIR/partitions.csv")
+        [ -n "${ST_OFF:-}" ] && [ -n "${ST_SIZE:-}" ] || {
+            echo "could not parse 'storage' partition from partitions.csv" >&2; exit 1; }
+
+        echo "=== --full: byForm effects (form '$FORM_VAL') → SPIFFS @ $ST_OFF ==="
+        ls "$EFFECTS_DIR"/*.js | sed 's|.*/|  + |'
+
+        SPIFFS_SRC="$TMPDIR/effects_src"
+        SPIFFS_IMG="$TMPDIR/storage.bin"
+        mkdir -p "$SPIFFS_SRC"
+        cp "$EFFECTS_DIR"/*.js "$SPIFFS_SRC/"
+        # spiffsgen.py's defaults (page 256 / block 4096 / magic) match the
+        # firmware's esp_spiffs defaults — no extra flags needed.
+        "$PYTHON" "$SPIFFS_GEN" "$((ST_SIZE))" "$SPIFFS_SRC" "$SPIFFS_IMG"
+        "$PYTHON" "$ESPTOOL" --chip esp32 --port "$PORT" --baud "$BAUD" \
+            write_flash "$ST_OFF" "$SPIFFS_IMG"
+    else
+        echo "=== --full: no byForm effects for form '${FORM_VAL:-?}' (effects/$FORM_VAL absent or empty) ==="
+    fi
 fi
 
 # --- Write NVS partition (no app touch) --------------------------------------
@@ -166,5 +203,9 @@ echo "=== Writing NVS @ $NVS_OFFSET ==="
     --after hard_reset write_flash "$NVS_OFFSET" "$BIN"
 
 echo "=== Done — $DEVICE booted with profile applied. ==="
+if [ "$FULL" -eq 1 ]; then
+    echo "On first boot the firmware compiles every stored .js to .bc — the"
+    echo "general built-ins plus any byForm effects flashed above."
+fi
 echo "Next: do the WiFi/BLE onboarding step (BLE sheet on the tablet, or"
 echo "      connect to the lamp's AP and POST /network with SSID + password)."

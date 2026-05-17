@@ -223,6 +223,15 @@ bool js_storage_exists(const char *name)
     return stat(path, &st) == 0;
 }
 
+bool js_storage_bc_exists(const char *name)
+{
+    if (!name_is_valid(name)) return false;
+    char path[96];
+    full_path_bc(name, path, sizeof(path));
+    struct stat st;
+    return stat(path, &st) == 0;
+}
+
 static int cmp_names(const void *a, const void *b)
 {
     return strcmp((const char *)a, (const char *)b);

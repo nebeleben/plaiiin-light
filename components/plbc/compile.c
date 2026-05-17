@@ -921,6 +921,12 @@ esp_err_t plbc_compile(const char *source, size_t source_len,
     memset(out_prog, 0, sizeof(*out_prog));
     if (err_buf && err_buf_size) err_buf[0] = 0;
 
+    /* Tolerate trailing NUL terminators. EMBED_TXTFILES appends one to every
+     * embedded built-in, and a SPIFFS round-trip can carry it along; without
+     * this the tokenizer would hit the '\0' and report "unexpected
+     * character" at the final line. */
+    while (source_len > 0 && source[source_len - 1] == '\0') source_len--;
+
     ctx_t c = {0};
     c.src = source;
     c.src_len = source_len;

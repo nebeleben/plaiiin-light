@@ -30,6 +30,9 @@ esp_err_t js_storage_write_bc(const char *name, const void *buf, size_t len);
 esp_err_t js_storage_read_bc(const char *name, void **out, size_t *len_out);
 esp_err_t js_storage_remove_bc(const char *name);
 
+/** True if a compiled <name>.bc exists on disk. */
+bool js_storage_bc_exists(const char *name);
+
 /** Collect JS script names (without the .js suffix) into `out`, sorted
  *  alphabetically (strcmp). Caller supplies the buffer.
  *  Returns the number of names actually written, capped at `max_names`. */
