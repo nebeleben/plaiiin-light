@@ -58,8 +58,8 @@
 </div>
 <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
 <span style="font-size:.78rem;color:var(--text-dim);min-width:62px">FPS</span>
-<input type="range" id="fpsSlider" min="1" max="30" value="10" style="flex:1;accent-color:var(--accent)">
-<span id="fpsVal" style="font-size:.85rem;min-width:36px;text-align:right">10</span>
+<input type="range" id="fpsSlider" min="1" max="30" value="30" style="flex:1;accent-color:var(--accent)">
+<span id="fpsVal" style="font-size:.85rem;min-width:36px;text-align:right">30</span>
 </div>
 <div class="gen-controls" id="playBar" style="display:none">
 <button class="play-btn" id="btnPlay">Play</button>
@@ -73,13 +73,14 @@
 </div>
 <p class="copyright">&copy; <a href="https://plaiiin.com">plaiiin.com</a></p>
 
+<script src="/shade-runtime.js"></script>
 <script>
 var ledCount=64,gridW=8,gridH=8,isMatrix=true;
 var frames=[],frameIdx=0,playing=false,timer=null,ws=null,streaming=false;
-var fps=10,messages=[];
-var lastJsSource=null;  // raw JS body of the most recent generator response
+var fps=30,messages=[];
+var lastJsSource=null;  // raw shade() source of the most recent generator response
 // Latest base color from /api/state (set via /api/color, persisted in NVS).
-// Passed as the 4th arg to render() so previews match what the device will do.
+// Fed to the shade() emulator as `base` so previews match the device.
 var baseColor=[128,128,128];
 fetch('/api/state').then(function(r){return r.json()}).then(function(s){
   if(s&&Array.isArray(s.color)&&s.color.length===3) baseColor=s.color.slice(0,3);
@@ -163,8 +164,18 @@ function getSystemPrompt(){
   'Respond with ONLY a code block containing either JSON data or JavaScript code. No explanation outside the code block.\n\n'+
   'FORMAT 1 - Pixel data (for simple patterns or short animations):\n```json\n{"type":"static","pixels":["ff0000","00ff00",...]}\n```\nor:\n```json\n{"type":"animation","fps":10,"frames":[["ff0000","00ff00",...],["aabbcc",...]]}\n```\n'+
   'Pixels in row-major order (left-to-right, top-to-bottom). Each frame has exactly '+total+' hex colors (6 chars, no #).\n\n'+
-  'FORMAT 2 - Generator code (for complex patterns, gradients, waves, long animations):\n```js\nfunction render(frame, width, height, baseColor) {\n  var pixels = [];\n  for (var y = 0; y < height; y++)\n    for (var x = 0; x < width; x++)\n      pixels.push([r, g, b]); // 0-255 each\n  return pixels; // array of '+total+' [r,g,b] arrays\n}\n```\n'+
-  'render() receives: frame index (0,1,2,...), width ('+gridW+'), height ('+gridH+'), baseColor=[r,g,b] (the lamp current solid color set via /api/color, defaults to mid-grey). Return exactly '+total+' [r,g,b] arrays.\n\n'+
+  'FORMAT 2 - Generator code (for complex patterns, gradients, waves, long animations):\n```js\n'+
+  '// @param speed 0.05..2.0 = 0.4 Animation speed\n'+
+  'function shade(x, y, idx, frame, base, params) {\n'+
+  '  // Runs once per LED. Call emit() or emitBright() exactly once.\n'+
+  '  let v = (sinLUT(x * 0.6 + frame * params.speed * 0.05) + 1) * 0.5;\n'+
+  '  emitBright(v); // base color scaled to brightness v (0..1)\n'+
+  '}\n```\n'+
+  'shade() is a PER-PIXEL shader compiled on the device. It does NOT build or return an array — for each LED it calls exactly one output built-in.\n'+
+  'In scope: x, y (pixel coords), idx (0..'+(total-1)+'), frame (counter), w ('+gridW+'), h ('+gridH+'), base (base.r/base.g/base.b, 0..255, the lamp current solid color), time (wall-clock ms), params.\n'+
+  'Output per pixel: emit(r, g, b) with each channel 0..255, OR emitBright(b) with b in 0..1 (the base color scaled to brightness b).\n'+
+  'Declare tunable knobs as `// @param NAME MIN..MAX = DEFAULT description` lines before the function, and read them as params.NAME.\n'+
+  'Language subset: numbers only (no strings/arrays/objects); `let` only (no var/const); if/else and for; operators + - * / % , < <= > >= == != , && || ! ; built-in functions sinLUT, cosLUT, floor, ceil, round, abs, sqrt, pow, min, max, clamp01, hash, random. No Math.*, no arrow functions, no return value.\n\n'+
   'Choose the best format: use generator code for gradients, waves, math patterns, long animations. Use pixel data for specific images or short sequences.\n'+
   'Grid dimensions: '+gridW+' wide, '+gridH+' tall, '+total+' pixels total.';
 }
@@ -246,14 +257,18 @@ function parseResponse(text){
     try{
       var src=jsMatch[1];
       lastJsSource=src;
-      var renderFn=new Function('return ('+src+')')();
-      // Phase 21 — magic-comment params. The AI-generated script may include
-      // `// @param NAME MIN..MAX = DEFAULT DESC` lines (fade.js / plasma.js
-      // both do). Seed defaults here and pass as the 5th arg so render() can
-      // dereference `params.something` without throwing.
-      var params=parseScriptParams(src);
-      for(var f=0;f<300;f++){var px=renderFn(f,gridW,gridH,baseColor,params);if(!px||px.length<total)break;frames.push(rgbToImg(px,total));}
-      fps=parseInt(document.getElementById('fpsSlider').value)||10;
+      // shade() is the on-device contract — preview it with the shared
+      // emulator (shade-runtime.js), which compiles the script and runs it
+      // per-pixel exactly like the lamp's PLBC runtime.
+      var runner=PLShade.makeRunner(src);
+      fps=parseInt(document.getElementById('fpsSlider').value)||30;
+      var dt=1000/fps;
+      var rw=isMatrix?gridW:ledCount, rh=isMatrix?gridH:1;
+      var bc={r:baseColor[0],g:baseColor[1],b:baseColor[2]};
+      for(var f=0;f<300;f++){
+        var flat=runner.render({w:rw,h:rh,frame:f,time:f*dt,base:bc});
+        frames.push(flatToImg(flat,total));
+      }
     }catch(e){addChatMsg('ai','Code error: '+e.message);}
   }
   if(frames.length>0){
@@ -262,28 +277,6 @@ function parseResponse(text){
     renderFrame(0);document.getElementById('frameInfo').textContent=frames.length+' frame'+(frames.length>1?'s':'')+' generated';
   }
 }
-/// Phase 21 — mirror of `js_params_parse` (firmware) / `JSScriptParams.parse`
-/// (Swift). Returns `{name:default,...}` extracted from `// @param ...` lines.
-/// Defaults clamp into [min,max]. Same 8-param cap as the firmware.
-function parseScriptParams(src){
-  var out={};var n=0;
-  var lines=src.split('\n');
-  for(var i=0;i<lines.length&&n<8;i++){
-    var s=lines[i].replace(/^[ \t]+/,'');
-    if(s.indexOf('// @param')!==0)continue;
-    var body=s.substring(9).replace(/^[ \t]+/,'');
-    var m=body.match(/^(\S+)\s+(\S+)\s*=\s*(\S+)/);
-    if(!m)continue;
-    var dd=m[2].indexOf('..');if(dd<0)continue;
-    var lo=parseFloat(m[2].substring(0,dd));
-    var hi=parseFloat(m[2].substring(dd+2));
-    var def=parseFloat(m[3]);
-    if(!isFinite(lo)||!isFinite(hi)||!isFinite(def)||hi<=lo)continue;
-    out[m[1]]=Math.max(lo,Math.min(hi,def));n++;
-  }
-  return out;
-}
-
 function hexToImg(arr,total){
   var w=isMatrix?gridW:total,h=isMatrix?gridH:1;
   var c=document.createElement('canvas');c.width=w;c.height=h;var ctx=c.getContext('2d');
@@ -291,11 +284,12 @@ function hexToImg(arr,total){
   for(var i=0;i<total&&i<arr.length;i++){var hex=arr[i].replace('#','');d[i*4]=parseInt(hex.substr(0,2),16)||0;d[i*4+1]=parseInt(hex.substr(2,2),16)||0;d[i*4+2]=parseInt(hex.substr(4,2),16)||0;d[i*4+3]=255;}
   ctx.putImageData(img,0,0);return ctx.getImageData(0,0,w,h);
 }
-function rgbToImg(arr,total){
+// Flat [r,g,b,r,g,b,...] (as returned by the shade emulator) -> ImageData.
+function flatToImg(arr,total){
   var w=isMatrix?gridW:total,h=isMatrix?gridH:1;
   var c=document.createElement('canvas');c.width=w;c.height=h;var ctx=c.getContext('2d');
   var img=ctx.createImageData(w,h);var d=img.data;
-  for(var i=0;i<total&&i<arr.length;i++){var p=arr[i];d[i*4]=(p[0]||0)&255;d[i*4+1]=(p[1]||0)&255;d[i*4+2]=(p[2]||0)&255;d[i*4+3]=255;}
+  for(var i=0;i<total&&i*3<arr.length;i++){d[i*4]=arr[i*3]||0;d[i*4+1]=arr[i*3+1]||0;d[i*4+2]=arr[i*3+2]||0;d[i*4+3]=255;}
   ctx.putImageData(img,0,0);return ctx.getImageData(0,0,w,h);
 }
 
@@ -367,15 +361,15 @@ document.getElementById('fpsSlider').oninput=function(){fps=parseInt(this.value)
 // Manual stream toggle
 document.getElementById('btnStream').onclick=function(){if(streaming)stopStreaming();else ensureStreaming();};
 
-// Save generator JS to device (only works when response was JS-code, not frame data)
+// Save the generated shade() script to the device (only works when the
+// response was generator code, not frame data). The script already follows
+// the on-device contract, so it's PUT verbatim — no wrapping.
 document.getElementById('btnSaveJs').onclick=function(){
-  if(!lastJsSource){alert('No JS generator in the latest response (it was frame data).');return;}
+  if(!lastJsSource){alert('No shade() generator in the latest response (it was frame data).');return;}
   var name=prompt('Save as:','sparkle');
   if(!name)return;
   name=name.replace(/[^A-Za-z0-9_.-]/g,'_');
-  // Wrap anonymous function into `function render(frame,w,h,baseColor){...}` so the on-device player finds it.
-  var wrapped='function render(frame, w, h, baseColor) {\n  var __fn = ('+lastJsSource+');\n  return __fn(frame, w, h, baseColor);\n}\n';
-  fetch('/api/js/'+encodeURIComponent(name),{method:'PUT',headers:{'Content-Type':'text/plain'},body:wrapped})
+  fetch('/api/js/'+encodeURIComponent(name),{method:'PUT',headers:{'Content-Type':'text/plain'},body:lastJsSource})
     .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})})
     .then(function(x){
       if(!x.ok){alert('Save failed: '+(x.j.message||'unknown'));return;}

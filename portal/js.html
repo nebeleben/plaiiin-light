@@ -61,7 +61,7 @@
 </div>
 
 <div class="editor-area">
-<textarea id="srcInput" spellcheck="false" placeholder="function render(frame, w, h, baseColor) {&#10;  var out = [];&#10;  for (var y = 0; y < h; y++)&#10;    for (var x = 0; x < w; x++)&#10;      out.push(baseColor);&#10;  return out;&#10;}"></textarea>
+<textarea id="srcInput" spellcheck="false" placeholder="// @param brightness 0..1 = 1 Overall brightness&#10;function shade(x, y, idx, frame, base, params) {&#10;  // Runs once per LED — call emit(r,g,b) or emitBright(0..1).&#10;  emitBright(params.brightness);&#10;}"></textarea>
 </div>
 
 <div class="row-actions">
@@ -84,8 +84,8 @@
 
 <div class="slider-row">
 <span class="label">FPS</span>
-<input type="range" id="fpsSlider" min="1" max="30" value="10">
-<span class="val" id="fpsVal">10</span>
+<input type="range" id="fpsSlider" min="1" max="30" value="30">
+<span class="val" id="fpsVal">30</span>
 </div>
 
 <div class="row-actions" style="margin-top:4px">
@@ -100,6 +100,7 @@
 </div>
 <p class="copyright">&copy; <a href="https://plaiiin.com">plaiiin.com</a></p>
 
+<script src="/shade-runtime.js"></script>
 <script>
 var dark=localStorage.getItem('theme')!=='light';
 function applyTheme(){document.body.classList.toggle('light',!dark);document.getElementById('themeBtn').textContent=dark?'☀':'☾';}
@@ -114,7 +115,7 @@ var statusEl=document.getElementById('status');
 var listFooter=document.getElementById('listFooter');
 
 // baseColor reflects /api/state.color so the local preview tints match what
-// the lamp will paint when render() honors the 4th arg.
+// the lamp will paint — it's fed to the shade emulator as `base`.
 var baseColor=[128,128,128];
 fetch('/api/state').then(function(r){return r.json()}).then(function(s){
   if(s&&Array.isArray(s.color)&&s.color.length===3) baseColor=s.color.slice(0,3);
@@ -350,16 +351,16 @@ bSlider.oninput=function(){
 };
 
 // --- FPS slider (drives both upload Play and local preview cadence) ----
-var fps=10;
+var fps=30;
 var fSlider=document.getElementById('fpsSlider');
 var fVal=document.getElementById('fpsVal');
-fSlider.oninput=function(){fps=parseInt(this.value)||10;fVal.textContent=fps;};
+fSlider.oninput=function(){fps=parseInt(this.value)||30;fVal.textContent=fps;};
 
 // --- Local preview (browser-side; never streams to lamp) ---------------
 var gridEl=document.getElementById('previewGrid');
 var metaEl=document.getElementById('previewMeta');
 var previewW=1,previewH=1,previewCells=[];
-var previewTimer=null,previewFrame=0,previewFn=null;
+var previewTimer=null,previewFrame=0,previewRunner=null;
 // previewActive tracks the *intent* to preview (independent of having a
 // compiled function). Used by save-then-resume so an edit doesn't blank
 // the grid while the user is iterating.
@@ -395,7 +396,7 @@ fetch('/api').then(function(r){return r.json()}).then(function(d){
 
 function stopPreview(){
   if(previewTimer){clearTimeout(previewTimer);previewTimer=null;}
-  previewFn=null;
+  previewRunner=null;
   previewActive=false;
 }
 
@@ -403,30 +404,32 @@ function compilePreview(){
   var src=srcInput.value;
   if(!src) return false;
   try{
-    // Wrap so arrow functions and top-level statements both work: the user
-    // code defines `render`, then we return it.
-    previewFn=new Function(src+'\nreturn render;')();
-    if(typeof previewFn!=='function')throw new Error('render() not found');
+    // Build a shade() runner with the shared emulator (shade-runtime.js) —
+    // it compiles the script and runs it per-pixel like the lamp's PLBC VM.
+    previewRunner=PLShade.makeRunner(src);
     return true;
   }catch(e){
     showMsg('Preview compile error: '+e.message,false);
-    previewFn=null;return false;
+    previewRunner=null;return false;
   }
 }
 
 function renderPreviewFrame(){
-  if(!previewFn)return;
-  var pixels;
-  try{pixels=previewFn(previewFrame,previewW,previewH,baseColor,paramsValues);}
+  if(!previewRunner)return;
+  var rate=fps<1?1:fps;
+  var flat;
+  try{
+    flat=previewRunner.render({
+      w:previewW,h:previewH,frame:previewFrame,time:previewFrame*(1000/rate),
+      base:{r:baseColor[0],g:baseColor[1],b:baseColor[2]},
+      params:paramsValues
+    });
+  }
   catch(e){stopPreview();showMsg('Preview error: '+e.message,false);return;}
-  if(!Array.isArray(pixels)){stopPreview();showMsg('render() must return an array',false);return;}
-  for(var i=0;i<previewCells.length&&i<pixels.length;i++){
-    var p=pixels[i]||[0,0,0];
-    var r=(p[0]|0)&255,g=(p[1]|0)&255,b=(p[2]|0)&255;
-    previewCells[i].style.background='rgb('+r+','+g+','+b+')';
+  for(var i=0;i<previewCells.length&&i*3<flat.length;i++){
+    previewCells[i].style.background='rgb('+(flat[i*3]||0)+','+(flat[i*3+1]||0)+','+(flat[i*3+2]||0)+')';
   }
   previewFrame++;
-  var rate=fps<1?1:fps;
   previewTimer=setTimeout(renderPreviewFrame,1000/rate);
 }
 

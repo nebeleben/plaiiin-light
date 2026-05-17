@@ -15,6 +15,7 @@
  */
 
 #include "js_player.h"
+#include "js_api.h"
 #include "led_control.h"
 #include "js_storage.h"
 #include "plbc.h"
@@ -38,7 +39,7 @@ static const char *TAG = "js_player";
 static SemaphoreHandle_t s_lock = NULL;
 static TaskHandle_t s_task = NULL;
 static bool s_running = false;
-static int s_fps = 10;
+static int s_fps = JS_DEFAULT_FPS;
 static char s_current_name[64] = {0};
 static char s_last_err[160] = {0};
 
@@ -282,7 +283,7 @@ esp_err_t js_player_start(const char *source, int fps)
     if (!led_control_is_on()) led_control_enable();
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    s_fps = fps > 0 ? fps : 10;
+    s_fps = fps > 0 ? fps : JS_DEFAULT_FPS;
     fps_reset();
     s_running = true;
     xSemaphoreGive(s_lock);
@@ -448,7 +449,7 @@ esp_err_t js_player_start_cbench(int mode, int fps)
     js_player_stop();
     if (!led_control_is_on()) led_control_enable();
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    s_fps = fps > 0 ? fps : 10;
+    s_fps = fps > 0 ? fps : JS_DEFAULT_FPS;
     fps_reset();
     s_running = true;
     xSemaphoreGive(s_lock);

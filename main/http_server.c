@@ -122,6 +122,8 @@ static esp_err_t storage_info_handler(httpd_req_t *req)
 // Embedded static files
 extern const uint8_t style_css_start[] asm("_binary_style_css_start");
 extern const uint8_t style_css_end[]   asm("_binary_style_css_end");
+extern const uint8_t shade_runtime_js_start[] asm("_binary_shade_runtime_js_start");
+extern const uint8_t shade_runtime_js_end[]   asm("_binary_shade_runtime_js_end");
 extern const uint8_t control_html_start[] asm("_binary_control_html_start");
 extern const uint8_t control_html_end[]   asm("_binary_control_html_end");
 extern const uint8_t test_html_start[] asm("_binary_test_html_start");
@@ -300,6 +302,19 @@ static esp_err_t style_css_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* Shared shade() preview emulator — loaded by /compose and /js. */
+static esp_err_t shade_runtime_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/javascript");
+    // EMBED_TXTFILES appends a NUL terminator; `_end` points past it. Drop
+    // that byte — a trailing '\0' in a <script> source trips the JS parser
+    // ("SyntaxError: Invalid character"), unlike HTML/CSS which ignore it.
+    size_t len = (size_t)(shade_runtime_js_end - shade_runtime_js_start);
+    if (len > 0 && shade_runtime_js_start[len - 1] == 0) len--;
+    httpd_resp_send(req, (const char *)shade_runtime_js_start, len);
+    return ESP_OK;
+}
+
 static esp_err_t control_page_handler(httpd_req_t *req) { send_html(req, control_html_start, control_html_end); return ESP_OK; }
 static esp_err_t test_page_handler(httpd_req_t *req) { send_html(req, test_html_start, test_html_end); return ESP_OK; }
 static esp_err_t compose_page_handler(httpd_req_t *req) { send_html_for(req, compose_html_start, compose_html_end, "compose"); return ESP_OK; }
@@ -414,6 +429,13 @@ httpd_handle_t http_server_start(void)
         .handler = style_css_handler
     };
     httpd_register_uri_handler(server, &style);
+
+    httpd_uri_t shade_runtime = {
+        .uri = "/shade-runtime.js",
+        .method = HTTP_GET,
+        .handler = shade_runtime_handler
+    };
+    httpd_register_uri_handler(server, &shade_runtime);
 
     httpd_uri_t api_info = {
         .uri = "/api",
