@@ -29,3 +29,22 @@ The firmware substitutes these tokens with live geometry:
 | `{rings}`    | `count / 24` (wormhole)                |
 
 `bare`/unknown forms have no file here — they use the firmware fallback.
+
+## Two-mode templates (Phase 29)
+
+A template may carry two render-mode sections split by **line-leading
+markers** `@@strip` and `@@mirror`. The firmware extracts the section matching
+the lamp's current `wh_mode` (and `GET /api/form-prompt` returns both in a
+`byMode` object). `{placeholder}` substitution runs per section.
+
+```
+@@strip
+PHYSICAL FORM: wormhole (strip mode). {rings} stacked 24-LED rings …
+@@mirror
+PHYSICAL FORM: wormhole (mirror mode). Render ONE 24-LED ring …
+```
+
+A template with **no markers** is used whole for both modes — so every
+non-wormhole template is unaffected. Currently only `wormhole.txt` uses
+markers. In mirror mode the descriptor must tell the AI it is rendering a
+single 24-LED ring that firmware tiles onto every physical ring.

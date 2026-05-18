@@ -86,6 +86,24 @@
 // from lamp_form + geometry". Wiped by factory reset along with the rest of
 // the namespace. See form_prompt.{h,c}.
 #define CONFIG_KEY_FORM_PROMPT   "form_prompt"
+// Phase 29 — wormhole lamp render mode. Only meaningful when lamp_form ==
+// "wormhole"; ignored by every other form. Wiped by factory reset alongside
+// the rest of the namespace. See wormhole.{h,c} and docs/wormhole-api.md.
+//   wh_mode     — string, "strip" (default, out-of-the-box) or "mirror". In
+//                 strip mode the effect renders the whole construct; in
+//                 mirror mode it renders one 24-LED ring and firmware tiles
+//                 it onto every physical ring.
+//   wh_rings    — i32, explicit ring count. Default led_count / 24 (v1=2, v2=4).
+//   wh_phys     — JSON array string, one object per ring of set-once mounting
+//                 facts {"face","direction","offset"}. share_keys pattern —
+//                 a JSON array packed into one NVS string. Default all-zero.
+//   wh_creative — JSON array string, one object per ring of per-lamp creative
+//                 knobs {"reverse","offset","brightness"} (mirror mode only).
+//                 Default {reverse:false, offset:0, brightness:1.0} per ring.
+#define CONFIG_KEY_WH_MODE       "wh_mode"
+#define CONFIG_KEY_WH_RINGS      "wh_rings"
+#define CONFIG_KEY_WH_PHYS       "wh_phys"
+#define CONFIG_KEY_WH_CREATIVE   "wh_creative"
 
 esp_err_t config_store_init(void);
 esp_err_t config_store_get_str(const char *key, char *out, size_t max_len);

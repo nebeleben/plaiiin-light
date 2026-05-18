@@ -22,6 +22,7 @@ idf_component_register(
         "pairing.c"
         "form_prompt.c"
         "keys.c"
+        "wormhole.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_http_server

@@ -68,6 +68,9 @@ h2{margin-top:22px}
 <tr><td class="method">POST</td><td class="path">/api/orientation</td><td class="body">{"rotation":0|90|180|270, "origin":0..3, "serpentine":bool, "serpentineAxis":0|1}</td><td class="desc">Apply rotation, origin corner, and serpentine wiring (NVS).</td></tr>
 <tr><td class="method">GET</td><td class="path">/api/limits</td><td class="body">{maxBrightness, maxCurrentMa}</td><td class="desc">Hardware guardrails.</td></tr>
 <tr><td class="method">POST</td><td class="path">/api/limits</td><td class="body">{"maxBrightness":N, "maxCurrentMa":N}</td><td class="desc">Update guardrails (NVS).</td></tr>
+<tr><td class="method">GET</td><td class="path">/api/wormhole</td><td class="body">{mode, rings, mirrorAllowed, renderPixels, streamPixels, physical[], creative[]}</td><td class="desc">Wormhole render mode &amp; per-ring config. 404 if not a wormhole lamp.</td></tr>
+<tr><td class="method">POST</td><td class="path">/api/wormhole</td><td class="body">{"mode":"strip"|"mirror", "rings":N, "physical":[...]}</td><td class="desc">Set render mode &amp; physical per-ring config (NVS). 409 if mirror not allowed.</td></tr>
+<tr><td class="method">POST</td><td class="path">/api/wormhole/creative</td><td class="body">{"creative":[...]} or {"ring":N,...}</td><td class="desc">Set mirror-mode creative per-ring config (NVS).</td></tr>
 </table>
 
 <h2>Scripts</h2>

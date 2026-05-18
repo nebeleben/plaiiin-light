@@ -23,9 +23,16 @@
  */
 
 /** Build the firmware default form descriptor for the current lamp form,
- *  interpolating live geometry from led_control + config. NUL-terminates. */
+ *  interpolating live geometry from led_control + config. NUL-terminates.
+ *  For a wormhole lamp this returns the descriptor for the *current* wh_mode. */
 void form_prompt_build_default(char *out, size_t max_len);
 
 /** Return the effective descriptor: the NVS override if one is set and
  *  non-empty, otherwise the firmware default. NUL-terminates. */
 void form_prompt_get_effective(char *out, size_t max_len);
+
+/** Phase 29 — wormhole mode-aware descriptor. `mode` is 0 = strip, 1 = mirror
+ *  (matching wormhole_mode_t). For a wormhole lamp this produces the strip-
+ *  vs mirror-specific descriptor; for every other form `mode` is ignored and
+ *  the result is identical to form_prompt_build_default(). NUL-terminates. */
+void form_prompt_build_for_mode(int mode, char *out, size_t max_len);

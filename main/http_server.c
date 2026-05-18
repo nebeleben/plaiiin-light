@@ -9,6 +9,7 @@
 #include "js_storage.h"
 #include "pairing.h"
 #include "form_prompt.h"
+#include "wormhole.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -143,6 +144,13 @@ static void json_escape_append(const char *in, char *out, size_t out_len)
 }
 
 // GET /api/form-prompt
+//
+// Phase 29 — for form == "wormhole" the response gains a "mode" string and a
+// "byMode":{"strip":…,"mirror":…} object carrying both firmware default
+// descriptors so a client can preview/switch without a round-trip. "default"
+// and "effective" reflect the current wh_mode; a user override still applies
+// globally (it is "effective" for both modes). Non-wormhole responses are
+// unchanged from Phase 26.
 static esp_err_t form_prompt_get_handler(httpd_req_t *req)
 {
     if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
@@ -150,17 +158,23 @@ static esp_err_t form_prompt_get_handler(httpd_req_t *req)
     char lamp_form[32];
     config_get_str_or(CONFIG_KEY_LAMP_FORM, lamp_form, sizeof(lamp_form), CONFIG_PLAIIIN_FORM);
 
+    bool is_wormhole = wormhole_is_wormhole();
+
     char def[1024] = {0}, ovr[1024] = {0};
     form_prompt_build_default(def, sizeof(def));
     bool has_override =
         (config_store_get_str(CONFIG_KEY_FORM_PROMPT, ovr, sizeof(ovr)) == ESP_OK && ovr[0]);
 
-    size_t cap = 6144;
+    size_t cap = 8192;
     char *json = malloc(cap);
     if (!json) return ESP_FAIL;
     json[0] = '\0';
     strcat(json, "{\"form\":\"");
     json_escape_append(lamp_form, json, cap);
+    if (is_wormhole) {
+        strcat(json, "\",\"mode\":\"");
+        strcat(json, (wormhole_mode() == WORMHOLE_MODE_MIRROR) ? "mirror" : "strip");
+    }
     strcat(json, "\",\"default\":\"");
     json_escape_append(def, json, cap);
     strcat(json, "\",\"override\":\"");
@@ -168,7 +182,19 @@ static esp_err_t form_prompt_get_handler(httpd_req_t *req)
     strcat(json, has_override ? "\",\"hasOverride\":true,\"effective\":\""
                               : "\",\"hasOverride\":false,\"effective\":\"");
     json_escape_append(has_override ? ovr : def, json, cap);
-    strcat(json, "\"}");
+    strcat(json, "\"");
+    if (is_wormhole) {
+        // byMode always carries both firmware defaults regardless of override.
+        char strip_desc[1024] = {0}, mirror_desc[1024] = {0};
+        form_prompt_build_for_mode(0, strip_desc, sizeof(strip_desc));
+        form_prompt_build_for_mode(1, mirror_desc, sizeof(mirror_desc));
+        strcat(json, ",\"byMode\":{\"strip\":\"");
+        json_escape_append(strip_desc, json, cap);
+        strcat(json, "\",\"mirror\":\"");
+        json_escape_append(mirror_desc, json, cap);
+        strcat(json, "\"}");
+    }
+    strcat(json, "}");
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, json);

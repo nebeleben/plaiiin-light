@@ -15,6 +15,7 @@
 #include "ai_key_api.h"
 #include "pairing.h"
 #include "keys.h"
+#include "wormhole.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -152,6 +153,12 @@ void app_main(void)
         ESP_LOGW(TAG, "JS storage init failed — /api/js endpoints disabled");
     }
     js_player_init();
+
+    // Phase 29 — load the wormhole render mode + per-ring config. Applies the
+    // boot fallback (mirror -> strip when the geometry gate fails). A cheap
+    // no-op for every non-wormhole lamp. Must run after led_control_init so
+    // it sees the real led_count.
+    wormhole_reload();
 
     // 6a. Install the embedded default scripts if missing. Once on disk they
     // are NOT overwritten — the user is free to edit them in place, and a

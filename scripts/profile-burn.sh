@@ -88,6 +88,10 @@ fi
 # The encoding must match what the firmware reads (config_store_get_str vs
 # config_store_get_i32). All numeric fields go through i32 today; bools are
 # stored as i32(0|1) too, so SERPENTINE=y normalises to 1.
+#
+# Phase 29 wormhole: WH_MODE/WH_RINGS are flat keys handled by this table; the
+# per-ring physical config is carried as readable CONFIG_PLAIIIN_WH_RING<n>
+# lines in the profile and assembled into the wh_phys JSON string below.
 declare -a SCHEMA=(
     "NODE_NAME      node_name      string"
     "VENDOR_NAME    vendor_name    string"
@@ -106,6 +110,10 @@ declare -a SCHEMA=(
     "BTN_PWR_PIN    btn_pwr_pin    i32"
     "BTN_NEXT_PIN   btn_next_pin   i32"
     "BTN_PREV_PIN   btn_prev_pin   i32"
+    # Phase 29 wormhole render config — only present on wormhole profiles; for
+    # every other profile `get` returns empty and the row is skipped.
+    "WH_MODE        wh_mode        string"
+    "WH_RINGS       wh_rings       i32"
 )
 
 # Pull a CONFIG_PLAIIIN_<KEY> value from the .defaults file; strips quotes.
@@ -121,6 +129,18 @@ norm_bool() {
         y|Y|yes|true|TRUE) echo 1 ;;
         n|N|no|false|FALSE) echo 0 ;;
         *) echo "$1" ;;
+    esac
+}
+
+# Emit a value as a CSV field. nvs_partition_gen.py parses the CSV with
+# Python's csv module, so a value containing commas (the wh_phys JSON) must be
+# double-quoted with internal quotes doubled. Comma/quote-free values pass
+# through bare, so every existing profile produces byte-identical CSV.
+csv_field() {
+    local v="$1"
+    case "$v" in
+        *,*|*\"*) printf '"%s"' "${v//\"/\"\"}" ;;
+        *)        printf '%s' "$v" ;;
     esac
 }
 
@@ -142,8 +162,30 @@ BIN="$TMPDIR/nvs.bin"
         if [ "$enc" = "i32" ] || [ "$enc" = "u32" ] || [ "$enc" = "u8" ]; then
             val="$(norm_bool "$val")"
         fi
-        echo "$nvs_key,data,$enc,$val"
+        echo "$nvs_key,data,$enc,$(csv_field "$val")"
     done
+
+    # --- Wormhole physical per-ring config → wh_phys JSON (Phase 29) ---------
+    # The profile carries one readable "face,direction,offset" line per ring
+    # (CONFIG_PLAIIIN_WH_RING<n>); assemble them into the JSON array string the
+    # firmware's wormhole module reads from NVS (see docs/wormhole-api.md).
+    # Rings with no line default to all-zero, matching the firmware fallback.
+    if [ "$(get FORM)" = "wormhole" ]; then
+        wh_rings="$(get WH_RINGS)"
+        [ -z "$wh_rings" ] && wh_rings=0
+        phys_json="["
+        r=0
+        while [ "$r" -lt "$wh_rings" ]; do
+            ring="$(get "WH_RING$r")"
+            [ -z "$ring" ] && ring="0,0,0"
+            IFS=, read -r face dir off _ <<<"$ring"
+            [ "$r" -gt 0 ] && phys_json="$phys_json,"
+            phys_json="$phys_json{\"face\":${face:-0},\"direction\":${dir:-0},\"offset\":${off:-0}}"
+            r=$((r + 1))
+        done
+        phys_json="$phys_json]"
+        echo "wh_phys,data,string,$(csv_field "$phys_json")"
+    fi
 } > "$CSV"
 
 echo "--- profile $PROFILE → NVS ---"

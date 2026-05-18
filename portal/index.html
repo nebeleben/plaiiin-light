@@ -17,6 +17,15 @@
 .limits input{width:90px;margin-bottom:0}
 .limits input.small{width:60px}
 .limits button{padding:6px 12px;border:none;border-radius:6px;background:var(--card);color:var(--text-dim);border:1px solid var(--border)!important;cursor:pointer}
+.mode-strip{display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:6px}
+.mode-strip button{padding:6px 16px;font-size:.8rem;border:none;background:var(--card);color:var(--text-dim);cursor:pointer}
+.mode-strip button.on{background:var(--accent);color:#fff}
+.mode-strip button:disabled{cursor:not-allowed;opacity:.5}
+.ring-tbl{width:100%;border-collapse:collapse;font-size:.78rem;margin-top:6px}
+.ring-tbl th,.ring-tbl td{padding:4px 6px;text-align:left;border-bottom:1px solid var(--border)}
+.ring-tbl th{color:var(--text-dim);font-weight:600;text-transform:uppercase;letter-spacing:.03em;font-size:.68rem}
+.ring-tbl input,.ring-tbl select{margin-bottom:0;width:72px}
+.ring-tbl input[type=range]{width:90px;vertical-align:middle}
 </style>
 </head>
 <body>
@@ -145,6 +154,37 @@
 </div>
 <p class="info">Describes how the matrix is wired and mounted. Rotation visually rotates the source image; origin is the corner where the chain begins; chain axis + serpentine describe the wiring path. Strips ignore these.</p>
 <div class="msg" id="orientMsg"></div>
+
+<div id="whSection" style="display:none">
+<h2>Wormhole</h2>
+<p class="info">This lamp is a wormhole: <span id="whRings">—</span> rings of 24 LEDs. <b>Strip</b> mode renders an effect across the whole construct. <b>Mirror</b> mode renders one ring and tiles it onto every ring with per-ring transforms.</p>
+
+<label>Render mode</label>
+<div class="mode-strip" id="whModeStrip">
+<button type="button" id="whModeStripBtn" data-mode="strip">Strip</button>
+<button type="button" id="whModeMirrorBtn" data-mode="mirror">Mirror</button>
+</div>
+<p class="info" id="whMirrorNote" style="display:none">Mirror mode is unavailable for this geometry. It requires the lamp form to be <code>wormhole</code> with an LED count that is an exact multiple of 24 matching the ring count.</p>
+<p class="info" id="whRenderInfo"></p>
+
+<h3 style="margin-top:14px;font-size:.9rem;text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim)">Physical per-ring config</h3>
+<p class="info" style="margin:0 0 6px">Set-once mounting facts, applied in both modes. <b>Face</b> = the half-turn the ring is mounted at; <b>Direction</b> = the winding direction the LEDs were soldered in; <b>Offset</b> = the physical index at 12 o'clock (0–23).</p>
+<table class="ring-tbl" id="whPhysTbl"><thead><tr><th>Ring</th><th>Face</th><th>Direction</th><th>Offset</th></tr></thead><tbody></tbody></table>
+<div class="limits" style="margin-top:6px">
+<button type="button" id="btnWhPhys">Save mode &amp; physical config</button>
+</div>
+<div class="msg" id="whMsg"></div>
+
+<div id="whCreativeBox">
+<h3 style="margin-top:14px;font-size:.9rem;text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim)">Creative per-ring config</h3>
+<p class="info" style="margin:0 0 6px">Mirror-mode only, per-lamp. <b>Reverse</b> = extra reversal bit; <b>Offset</b> = extra index shift (0–23); <b>Brightness</b> = per-ring output scale (0–1).</p>
+<table class="ring-tbl" id="whCreativeTbl"><thead><tr><th>Ring</th><th>Reverse</th><th>Offset</th><th>Brightness</th></tr></thead><tbody></tbody></table>
+<div class="limits" style="margin-top:6px">
+<button type="button" id="btnWhCreative">Save creative config</button>
+</div>
+<div class="msg" id="whCreativeMsg"></div>
+</div>
+</div>
 
 <h2>Form Context</h2>
 <p class="info">Physical-form description sent to the AI on the Compose page so generated scripts match this lamp's shape (cylinder seam, cube faces, rings, segments). Edit to tune it for this lamp; Reset reverts to the firmware default.</p>
@@ -386,6 +426,138 @@ document.getElementById('btnShareAdd').onclick=function(){
     .then(function(){document.getElementById('shareLabel').value='';flashMsg(shareMsg,'Share created',true);loadShares();})
     .catch(function(e){flashMsg(shareMsg,'Create failed: '+e.message,false);});
 };
+
+// Wormhole — render-mode UI (Phase 29). The whole section is shown only when
+// GET /api/wormhole succeeds; a 404 means this lamp is not a wormhole.
+var whSection=document.getElementById('whSection');
+var whMsg=document.getElementById('whMsg');
+var whCreativeMsg=document.getElementById('whCreativeMsg');
+var whState=null;     // last GET /api/wormhole body
+var whMode='strip';   // pending (unsaved) mode selection
+
+function whRender(d){
+  whState=d;
+  whMode=d.mode||'strip';
+  document.getElementById('whRings').textContent=d.rings;
+  document.getElementById('whRenderInfo').textContent=
+    'Render buffer: '+d.renderPixels+' px · stream frame: '+d.streamPixels+' px.';
+  // Mode selector strip — mirror disabled when geometry doesn't allow it.
+  var mirrorBtn=document.getElementById('whModeMirrorBtn');
+  mirrorBtn.disabled=!d.mirrorAllowed;
+  document.getElementById('whMirrorNote').style.display=d.mirrorAllowed?'none':'';
+  whSyncModeStrip();
+  // Physical editor — one row per ring.
+  var pbody=document.querySelector('#whPhysTbl tbody');
+  pbody.innerHTML='';
+  for(var r=0;r<d.rings;r++){
+    var p=(d.physical&&d.physical[r])||{face:0,direction:0,offset:0};
+    var tr=document.createElement('tr');
+    tr.appendChild(whCell(String(r)));
+    tr.appendChild(whCellEl(whBinSel('phFace'+r,p.face)));
+    tr.appendChild(whCellEl(whBinSel('phDir'+r,p.direction)));
+    tr.appendChild(whCellEl(whNumInput('phOff'+r,p.offset,0,23)));
+    pbody.appendChild(tr);
+  }
+  // Creative editor — one row per ring (used in mirror mode).
+  var cbody=document.querySelector('#whCreativeTbl tbody');
+  cbody.innerHTML='';
+  for(var c=0;c<d.rings;c++){
+    var cv=(d.creative&&d.creative[c])||{reverse:false,offset:0,brightness:1.0};
+    var ctr=document.createElement('tr');
+    ctr.appendChild(whCell(String(c)));
+    var chk=document.createElement('input');chk.type='checkbox';chk.id='crRev'+c;
+    chk.checked=!!cv.reverse;chk.style.width='auto';
+    ctr.appendChild(whCellEl(chk));
+    ctr.appendChild(whCellEl(whNumInput('crOff'+c,cv.offset,0,23)));
+    ctr.appendChild(whCellEl(whBrightCell(c,cv.brightness)));
+    cbody.appendChild(ctr);
+  }
+}
+function whCell(txt){var td=document.createElement('td');td.textContent=txt;return td;}
+function whCellEl(el){var td=document.createElement('td');td.appendChild(el);return td;}
+function whBinSel(id,val){
+  var s=document.createElement('select');s.id=id;
+  ['0','1'].forEach(function(v){var o=document.createElement('option');o.value=v;o.textContent=v;s.appendChild(o);});
+  s.value=String(val||0);return s;
+}
+function whNumInput(id,val,min,max){
+  var i=document.createElement('input');i.type='number';i.id=id;
+  i.min=min;i.max=max;i.value=(val==null?0:val);return i;
+}
+function whBrightCell(idx,val){
+  var wrap=document.createElement('span');
+  var sl=document.createElement('input');sl.type='range';sl.id='crBrSl'+idx;
+  sl.min=0;sl.max=1;sl.step=0.01;sl.value=(val==null?1:val);
+  var num=document.createElement('input');num.type='number';num.id='crBr'+idx;
+  num.min=0;num.max=1;num.step=0.01;num.value=(val==null?1:val);
+  num.style.width='56px';num.style.marginLeft='4px';
+  sl.oninput=function(){num.value=sl.value;};
+  num.oninput=function(){
+    var v=parseFloat(num.value);if(isNaN(v))v=1;
+    if(v<0)v=0;if(v>1)v=1;sl.value=v;
+  };
+  wrap.appendChild(sl);wrap.appendChild(num);return wrap;
+}
+function whSyncModeStrip(){
+  document.getElementById('whModeStripBtn').classList.toggle('on',whMode==='strip');
+  document.getElementById('whModeMirrorBtn').classList.toggle('on',whMode==='mirror');
+}
+function whReadPhysical(){
+  var arr=[];
+  for(var r=0;r<whState.rings;r++){
+    arr.push({
+      face:parseInt(document.getElementById('phFace'+r).value)||0,
+      direction:parseInt(document.getElementById('phDir'+r).value)||0,
+      offset:parseInt(document.getElementById('phOff'+r).value)||0
+    });
+  }
+  return arr;
+}
+function whReadCreative(){
+  var arr=[];
+  for(var c=0;c<whState.rings;c++){
+    var b=parseFloat(document.getElementById('crBr'+c).value);
+    if(isNaN(b))b=1;if(b<0)b=0;if(b>1)b=1;
+    arr.push({
+      reverse:document.getElementById('crRev'+c).checked,
+      offset:parseInt(document.getElementById('crOff'+c).value)||0,
+      brightness:b
+    });
+  }
+  return arr;
+}
+document.getElementById('whModeStripBtn').onclick=function(){whMode='strip';whSyncModeStrip();};
+document.getElementById('whModeMirrorBtn').onclick=function(){
+  if(this.disabled)return;
+  whMode='mirror';whSyncModeStrip();
+};
+document.getElementById('btnWhPhys').onclick=function(){
+  fetch('/api/wormhole',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({mode:whMode,rings:whState.rings,physical:whReadPhysical()})})
+    .then(function(r){
+      if(r.status===409)return r.json().then(function(j){throw new Error(j.error||'mirror not allowed for this geometry');});
+      if(!r.ok)throw new Error('HTTP '+r.status);
+      return r.json();
+    })
+    .then(function(d){whRender(d);flashMsg(whMsg,'Wormhole config saved',true);})
+    .catch(function(e){flashMsg(whMsg,'Failed: '+e.message,false);});
+};
+document.getElementById('btnWhCreative').onclick=function(){
+  fetch('/api/wormhole/creative',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({creative:whReadCreative()})})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(function(d){whRender(d);flashMsg(whCreativeMsg,'Creative config saved',true);})
+    .catch(function(e){flashMsg(whCreativeMsg,'Failed: '+e.message,false);});
+};
+fetch('/api/wormhole').then(function(r){
+  if(r.status===404)return null;       // not a wormhole lamp — leave section hidden
+  if(!r.ok)throw new Error('HTTP '+r.status);
+  return r.json();
+}).then(function(d){
+  if(!d)return;
+  whSection.style.display='';
+  whRender(d);
+}).catch(function(){});
 
 // AI key — device-side via /api/ai/key. NVS-backed, wiped by factory reset.
 var _hasKey=false;

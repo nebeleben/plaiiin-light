@@ -18,6 +18,7 @@
 #include "js_api.h"
 #include "led_control.h"
 #include "js_storage.h"
+#include "wormhole.h"
 #include "plbc.h"
 
 #include "freertos/FreeRTOS.h"
@@ -102,6 +103,23 @@ static void get_grid(int *w, int *h)
     *h = lh > 0 ? lh : 1;
 }
 
+/* Phase 29 — render geometry. For a wormhole lamp the render grid is
+ * decoupled from the physical strip: the script renders a 24 x rings (strip)
+ * or 24 x 1 (mirror) grid, then wormhole_expand() tiles it onto led_count
+ * physical pixels. For every other form this is identical to get_grid(), so
+ * the non-wormhole code path is byte-for-byte unchanged. */
+static void get_render_grid(int *w, int *h, bool *is_wormhole)
+{
+    bool wh = wormhole_is_wormhole();
+    if (is_wormhole) *is_wormhole = wh;
+    if (wh) {
+        *w = 24;
+        *h = (wormhole_mode() == WORMHOLE_MODE_MIRROR) ? 1 : wormhole_rings();
+    } else {
+        get_grid(w, h);
+    }
+}
+
 /* ------------------------------------------------------------------------
  * Player task
  * ------------------------------------------------------------------------ */
@@ -138,8 +156,12 @@ static void player_task(void *arg)
     }
     free(bc_buf);
 
+    /* Render geometry — decoupled from the physical strip for a wormhole
+     * lamp (Phase 29). For every other form `is_wormhole` is false and the
+     * code path below is identical to before. */
+    bool is_wormhole = false;
     int w, h;
-    get_grid(&w, &h);
+    get_render_grid(&w, &h, &is_wormhole);
     int total = w * h;
     if (total > RENDER_MAX_PIXELS) total = RENDER_MAX_PIXELS;
 
@@ -148,6 +170,23 @@ static void player_task(void *arg)
         free(prog);
         s_running = false; s_task = NULL; vTaskDelete(NULL);
         return;
+    }
+
+    /* For a wormhole lamp the rendered `frame` is a render buffer; it must be
+     * tiled onto the physical strip via wormhole_expand() before going to
+     * led_control. `phys` holds the led_count physical pixels. */
+    int wh_rings = is_wormhole ? wormhole_rings() : 0;
+    bool wh_mirror = is_wormhole && (wormhole_mode() == WORMHOLE_MODE_MIRROR);
+    int phys_total = is_wormhole ? (wh_rings * 24) : 0;
+    led_color_t *phys = NULL;
+    if (is_wormhole) {
+        phys = (led_color_t *)calloc(phys_total > 0 ? phys_total : 1,
+                                     sizeof(led_color_t));
+        if (!phys) {
+            free(frame); free(prog);
+            s_running = false; s_task = NULL; vTaskDelete(NULL);
+            return;
+        }
     }
 
     plbc_runtime_t rt;
@@ -210,7 +249,14 @@ static void player_task(void *arg)
         }
 
         if (frame_ok) {
-            led_control_set_logical(frame, w, h);
+            if (is_wormhole) {
+                /* Tile the render buffer onto the physical strip — the SAME
+                 * wormhole_expand() the WebSocket stream path uses. */
+                wormhole_expand(frame, total, phys, wh_rings, wh_mirror);
+                led_control_set_all(phys, phys_total);
+            } else {
+                led_control_set_logical(frame, w, h);
+            }
             xSemaphoreTake(s_lock, portMAX_DELAY);
             fps_tick(esp_log_timestamp());
             xSemaphoreGive(s_lock);
@@ -229,6 +275,7 @@ static void player_task(void *arg)
 
     plbc_runtime_free(&rt);
     free(frame);
+    free(phys);
     free(prog);
     ESP_LOGI(TAG, "Player task stopped");
     s_running = false;

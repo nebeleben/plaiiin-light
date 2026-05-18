@@ -80,6 +80,13 @@ esp_err_t factory_reset_full(bool reboot)
         CONFIG_KEY_PAIR_TOKEN,
         CONFIG_KEY_PAIR_MODE,
         CONFIG_KEY_SHARE_KEYS,
+        // Phase 29 — wormhole render mode + per-ring config. Wiped on a full
+        // reset so a wormhole lamp returns to its default strip mode with the
+        // firmware-derived ring count and all-zero physical/creative config.
+        CONFIG_KEY_WH_MODE,
+        CONFIG_KEY_WH_RINGS,
+        CONFIG_KEY_WH_PHYS,
+        CONFIG_KEY_WH_CREATIVE,
     };
     config_store_erase_keys(keys, sizeof(keys) / sizeof(keys[0]));
     confirm_blink(0, 100, 255);   // blue

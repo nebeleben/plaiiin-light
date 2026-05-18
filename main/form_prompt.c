@@ -1,6 +1,7 @@
 #include "form_prompt.h"
 #include "config_store.h"
 #include "led_control.h"
+#include "wormhole.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -22,10 +23,11 @@ static int panel_side(const char *lamp_type)
 }
 
 // Hardcoded fallback descriptor — geometry interpolated directly. Used when no
-// burned template file is present.
+// burned template file is present. `mode` is the wormhole render mode (0 =
+// strip, 1 = mirror); it is ignored for every non-wormhole form.
 static void build_hardcoded(char *out, size_t max_len,
                             const char *lamp_form, const char *lamp_type,
-                            int w, int h, int count)
+                            int w, int h, int count, int mode)
 {
     if (strcmp(lamp_form, "tower") == 0) {
         snprintf(out, max_len,
@@ -51,16 +53,33 @@ static void build_hardcoded(char *out, size_t max_len,
             "cross faces — the x/y grid is meaningful per-face only.",
             faces, n, n, count, per, per, n, n);
     } else if (strcmp(lamp_form, "wormhole") == 0) {
-        int rings = count / 24;
+        int rings = wormhole_is_wormhole() ? wormhole_rings() : count / 24;
         if (rings < 1) rings = 1;
-        snprintf(out, max_len,
-            "PHYSICAL FORM: wormhole. %d stacked 24-LED rings (%d LEDs total) "
-            "form a tunnel. ring = floor(idx / 24); position-on-ring = idx mod "
-            "24 (0..23, wraps seamlessly — derive an angle as (idx mod 24) / "
-            "24). Rings alternate physical facing: even rings face one way, odd "
-            "rings the opposite — mirror odd rings for symmetric tunnel "
-            "effects. Depth runs along the ring axis from ring 0 outward.",
-            rings, count);
+        if (mode == 1) {
+            // Mirror mode — the script renders ONE 24-LED ring; firmware tiles
+            // it onto every physical ring.
+            snprintf(out, max_len,
+                "PHYSICAL FORM: wormhole (mirror mode). Render ONE 24-LED ring "
+                "only — the grid is 24x1, idx is 0..23 = position-on-ring "
+                "(wraps seamlessly — derive an angle as idx / 24). The firmware "
+                "tiles your single ring onto all %d physical rings, applying "
+                "each ring's mount orientation automatically. Write a "
+                "self-contained single-ring effect; do NOT think about ring "
+                "index or depth — there is only one ring from the script's "
+                "point of view.",
+                rings);
+        } else {
+            // Strip mode — the script renders the whole construct.
+            snprintf(out, max_len,
+                "PHYSICAL FORM: wormhole (strip mode). %d stacked 24-LED rings "
+                "(%d LEDs total) form a tunnel. ring = floor(idx / 24); "
+                "position-on-ring = idx mod 24 (0..23, wraps seamlessly — "
+                "derive an angle as (idx mod 24) / 24). Rings alternate "
+                "physical facing: even rings face one way, odd rings the "
+                "opposite — mirror odd rings for symmetric tunnel effects. "
+                "Depth runs along the ring axis from ring 0 outward.",
+                rings, count);
+        }
     } else if (strcmp(lamp_form, "rocket") == 0) {
         snprintf(out, max_len,
             "PHYSICAL FORM: rocket. A single %d-LED strip wired as stacked "
@@ -112,6 +131,77 @@ static bool read_template_file(char *buf, size_t max)
     return n > 0;
 }
 
+// Phase 29 — a two-mode template (wormhole) splits its content with the
+// line-leading markers `@@strip` and `@@mirror`. Extract the section for the
+// requested mode (0 = strip, 1 = mirror) out of `tpl` into `out`.
+//
+// Rule: if `tpl` contains a `@@strip` / `@@mirror` marker at the start of a
+// line, the section running from the requested marker up to the next marker
+// (or EOF) is copied. If there are no markers the whole template is copied —
+// so non-wormhole templates are unaffected. Returns true if a section was
+// produced (always true here, just for symmetry with read_template_file).
+static bool template_section(const char *tpl, int mode, char *out, size_t max)
+{
+    const char *want = (mode == 1) ? "@@mirror" : "@@strip";
+    size_t want_len = strlen(want);
+
+    // Is this a marker-bearing template at all? A marker counts only when it
+    // sits at the start of the buffer or right after a newline.
+    bool has_markers = false;
+    for (const char *p = tpl; *p; p++) {
+        if ((p == tpl || p[-1] == '\n') &&
+            (strncmp(p, "@@strip", 7) == 0 || strncmp(p, "@@mirror", 8) == 0)) {
+            has_markers = true;
+            break;
+        }
+    }
+    if (!has_markers) {
+        snprintf(out, max, "%s", tpl);
+        return true;
+    }
+
+    // Find the requested marker at a line start.
+    const char *start = NULL;
+    for (const char *p = tpl; *p; p++) {
+        if ((p == tpl || p[-1] == '\n') && strncmp(p, want, want_len) == 0) {
+            start = p + want_len;
+            break;
+        }
+    }
+    if (!start) {
+        // Requested mode's section is missing — fall back to the whole file
+        // minus any markers would be messy; safest is an empty section so
+        // build_hardcoded is used by the caller. Signal "nothing".
+        out[0] = '\0';
+        return false;
+    }
+    // Skip the rest of the marker line (whitespace + the newline).
+    while (*start == ' ' || *start == '\t' || *start == '\r') start++;
+    if (*start == '\n') start++;
+
+    // The section ends at the next line-leading marker, or EOF.
+    const char *end = start;
+    for (const char *p = start; *p; p++) {
+        if (p[-1] == '\n' &&
+            (strncmp(p, "@@strip", 7) == 0 || strncmp(p, "@@mirror", 8) == 0)) {
+            end = p;
+            break;
+        }
+        end = p + 1;
+    }
+    size_t n = (size_t)(end - start);
+    if (n >= max) n = max - 1;
+    memcpy(out, start, n);
+    out[n] = '\0';
+    // Trim trailing whitespace/newlines, matching read_template_file().
+    while (n > 0) {
+        char c = out[n - 1];
+        if (c == '\n' || c == '\r' || c == ' ' || c == '\t') out[--n] = '\0';
+        else break;
+    }
+    return n > 0;
+}
+
 typedef struct { const char *key; char val[24]; } subst_t;
 
 // Expand {token} placeholders in `tpl` against `tbl`, writing into `out`.
@@ -143,7 +233,7 @@ static void apply_subst(const char *tpl, char *out, size_t max,
     out[o] = '\0';
 }
 
-void form_prompt_build_default(char *out, size_t max_len)
+void form_prompt_build_for_mode(int mode, char *out, size_t max_len)
 {
     char lamp_type[32], lamp_form[32];
     config_get_str_or(CONFIG_KEY_LAMP_TYPE, lamp_type, sizeof(lamp_type), CONFIG_PLAIIIN_LAMP_TYPE);
@@ -153,32 +243,52 @@ void form_prompt_build_default(char *out, size_t max_len)
     int w = led_control_get_logical_w();
     int h = led_control_get_logical_h();
 
+    // For a wormhole lamp the ring count comes from wormhole config (explicit
+    // wh_rings, not just count/24). Other forms ignore `mode` entirely.
+    int rings = wormhole_is_wormhole() ? wormhole_rings()
+                                       : (count / 24 > 0 ? count / 24 : 1);
+
     // Prefer the burned template file; fall back to the hardcoded descriptor.
     char tpl[1024];
     if (read_template_file(tpl, sizeof(tpl))) {
-        int n = panel_side(lamp_type);
-        if (n <= 0) n = 8;
-        int per = n * n;
-        subst_t tbl[] = {
-            { "w", {0} }, { "h", {0} }, { "wmax", {0} }, { "hmax", {0} },
-            { "wh", {0} }, { "count", {0} }, { "panel", {0} },
-            { "panelsq", {0} }, { "faces", {0} }, { "rings", {0} },
-        };
-        snprintf(tbl[0].val, sizeof(tbl[0].val), "%d", w);
-        snprintf(tbl[1].val, sizeof(tbl[1].val), "%d", h);
-        snprintf(tbl[2].val, sizeof(tbl[2].val), "%d", w - 1);
-        snprintf(tbl[3].val, sizeof(tbl[3].val), "%d", h - 1);
-        snprintf(tbl[4].val, sizeof(tbl[4].val), "%d", w * h);
-        snprintf(tbl[5].val, sizeof(tbl[5].val), "%d", count);
-        snprintf(tbl[6].val, sizeof(tbl[6].val), "%d", n);
-        snprintf(tbl[7].val, sizeof(tbl[7].val), "%d", per);
-        snprintf(tbl[8].val, sizeof(tbl[8].val), "%d", per > 0 ? count / per : 5);
-        snprintf(tbl[9].val, sizeof(tbl[9].val), "%d", count / 24 > 0 ? count / 24 : 1);
-        apply_subst(tpl, out, max_len, tbl, (int)(sizeof(tbl) / sizeof(tbl[0])));
-        return;
+        // Phase 29 — pick the @@strip / @@mirror section for the requested
+        // mode. Markerless templates yield the whole file (non-wormhole forms
+        // are unaffected). A missing section falls through to build_hardcoded.
+        char section[1024];
+        if (template_section(tpl, mode, section, sizeof(section))) {
+            int n = panel_side(lamp_type);
+            if (n <= 0) n = 8;
+            int per = n * n;
+            subst_t tbl[] = {
+                { "w", {0} }, { "h", {0} }, { "wmax", {0} }, { "hmax", {0} },
+                { "wh", {0} }, { "count", {0} }, { "panel", {0} },
+                { "panelsq", {0} }, { "faces", {0} }, { "rings", {0} },
+            };
+            snprintf(tbl[0].val, sizeof(tbl[0].val), "%d", w);
+            snprintf(tbl[1].val, sizeof(tbl[1].val), "%d", h);
+            snprintf(tbl[2].val, sizeof(tbl[2].val), "%d", w - 1);
+            snprintf(tbl[3].val, sizeof(tbl[3].val), "%d", h - 1);
+            snprintf(tbl[4].val, sizeof(tbl[4].val), "%d", w * h);
+            snprintf(tbl[5].val, sizeof(tbl[5].val), "%d", count);
+            snprintf(tbl[6].val, sizeof(tbl[6].val), "%d", n);
+            snprintf(tbl[7].val, sizeof(tbl[7].val), "%d", per);
+            snprintf(tbl[8].val, sizeof(tbl[8].val), "%d", per > 0 ? count / per : 5);
+            snprintf(tbl[9].val, sizeof(tbl[9].val), "%d", rings);
+            apply_subst(section, out, max_len, tbl, (int)(sizeof(tbl) / sizeof(tbl[0])));
+            return;
+        }
     }
 
-    build_hardcoded(out, max_len, lamp_form, lamp_type, w, h, count);
+    build_hardcoded(out, max_len, lamp_form, lamp_type, w, h, count, mode);
+}
+
+void form_prompt_build_default(char *out, size_t max_len)
+{
+    // The "default" descriptor reflects the current wormhole render mode.
+    // Non-wormhole lamps ignore the mode argument.
+    int mode = (wormhole_is_wormhole() && wormhole_mode() == WORMHOLE_MODE_MIRROR)
+                   ? 1 : 0;
+    form_prompt_build_for_mode(mode, out, max_len);
 }
 
 void form_prompt_get_effective(char *out, size_t max_len)

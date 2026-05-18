@@ -5,6 +5,7 @@
 #include "js_player.h"
 #include "js_storage.h"
 #include "js_api.h"
+#include "wormhole.h"
 #include "pairing.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -602,6 +603,281 @@ static esp_err_t mode_set_handler(httpd_req_t *req)
 static esp_err_t bt_get_handler(httpd_req_t *req);
 static esp_err_t bt_set_handler(httpd_req_t *req);
 
+// --- Phase 29 — wormhole render mode -----------------------------------------
+//
+// Three endpoints, all 404 for non-wormhole lamps. JSON style matches
+// /api/grid and /api/orientation. See docs/wormhole-api.md.
+
+// Build the shared GET /api/wormhole body into `out`. The physical/creative
+// arrays carry one object per ring (wormhole_rings()). Always NUL-terminates.
+static void wormhole_build_json(char *out, size_t max_len)
+{
+    int rings = wormhole_rings();
+    int render_px = wormhole_render_pixels();
+    const char *mode = (wormhole_mode() == WORMHOLE_MODE_MIRROR) ? "mirror" : "strip";
+
+    size_t o = 0;
+    o += snprintf(out + o, max_len - o,
+                  "{\"mode\":\"%s\",\"rings\":%d,\"mirrorAllowed\":%s,"
+                  "\"renderPixels\":%d,\"streamPixels\":%d,\"physical\":[",
+                  mode, rings, wormhole_mirror_allowed() ? "true" : "false",
+                  render_px, render_px);
+    for (int r = 0; r < rings && o + 1 < max_len; r++) {
+        int face = 0, dir = 0, off = 0;
+        wormhole_get_phys(r, &face, &dir, &off);
+        o += snprintf(out + o, max_len - o,
+                      "%s{\"face\":%d,\"direction\":%d,\"offset\":%d}",
+                      r ? "," : "", face, dir, off);
+    }
+    o += snprintf(out + o, max_len - o, "],\"creative\":[");
+    for (int r = 0; r < rings && o + 1 < max_len; r++) {
+        bool rev = false; int coff = 0; float br = 1.0f;
+        wormhole_get_creative(r, &rev, &coff, &br);
+        o += snprintf(out + o, max_len - o,
+                      "%s{\"reverse\":%s,\"offset\":%d,\"brightness\":%.3f}",
+                      r ? "," : "", rev ? "true" : "false", coff, br);
+    }
+    snprintf(out + o, max_len - o, "]}");
+}
+
+// Send the GET /api/wormhole body — shared by GET and the two POST handlers.
+static esp_err_t wormhole_send_state(httpd_req_t *req)
+{
+    char *json = malloc(2048);
+    if (!json) return ESP_FAIL;
+    wormhole_build_json(json, 2048);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    free(json);
+    return ESP_OK;
+}
+
+// GET /api/wormhole — role: user. 404 for non-wormhole lamps.
+static esp_err_t wormhole_get_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
+    if (!wormhole_is_wormhole()) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "not a wormhole lamp");
+        return ESP_FAIL;
+    }
+    return wormhole_send_state(req);
+}
+
+// POST /api/wormhole — role: admin. Body: any subset of {mode,rings,physical}.
+// A mode/rings change re-inits the player and bumps the WS stream generation.
+static esp_err_t wormhole_post_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
+    if (!wormhole_is_wormhole()) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "not a wormhole lamp");
+        return ESP_FAIL;
+    }
+    int content_len = req->content_len;
+    if (content_len <= 0 || content_len > 2048) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad body");
+        return ESP_FAIL;
+    }
+    char *buf = malloc(content_len + 1);
+    if (!buf) return ESP_FAIL;
+    int received = 0;
+    while (received < content_len) {
+        int ret = httpd_req_recv(req, buf + received, content_len - received);
+        if (ret <= 0) { free(buf); return ESP_FAIL; }
+        received += ret;
+    }
+    buf[content_len] = '\0';
+
+    bool topology_changed = false;
+    char *p;
+
+    // mode — "strip" | "mirror". Mirror gated on the geometry check.
+    if ((p = strstr(buf, "\"mode\"")) != NULL && (p = strchr(p, ':')) != NULL
+        && (p = strchr(p, '"')) != NULL) {
+        p++;
+        const char *end = strchr(p, '"');
+        char mode[16] = {0};
+        if (end && (size_t)(end - p) < sizeof(mode)) {
+            memcpy(mode, p, end - p);
+            if (strcmp(mode, "mirror") != 0 && strcmp(mode, "strip") != 0) {
+                free(buf);
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "mode must be strip|mirror");
+                return ESP_FAIL;
+            }
+            if (strcmp(mode, "mirror") == 0 && !wormhole_mirror_allowed()) {
+                free(buf);
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_set_status(req, "409 Conflict");
+                httpd_resp_sendstr(req, "{\"error\":\"mirror not allowed for this geometry\"}");
+                return ESP_FAIL;
+            }
+            char cur[16] = {0};
+            config_get_str_or(CONFIG_KEY_WH_MODE, cur, sizeof(cur), "strip");
+            if (strcmp(cur, mode) != 0) topology_changed = true;
+            config_store_set_str(CONFIG_KEY_WH_MODE, mode);
+        }
+    }
+
+    // rings — i32 >= 1.
+    if ((p = strstr(buf, "\"rings\"")) != NULL && (p = strchr(p, ':')) != NULL) {
+        int rings = atoi(p + 1);
+        if (rings < 1) {
+            free(buf);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "rings must be >= 1");
+            return ESP_FAIL;
+        }
+        int32_t cur = 0;
+        config_store_get_i32(CONFIG_KEY_WH_RINGS, &cur);
+        if ((int)cur != rings) topology_changed = true;
+        config_store_set_i32(CONFIG_KEY_WH_RINGS, rings);
+    }
+
+    // physical — full JSON array, stored verbatim under wh_phys.
+    if ((p = strstr(buf, "\"physical\"")) != NULL) {
+        const char *start = strchr(p, '[');
+        if (start) {
+            int depth = 0;
+            const char *end = start;
+            for (; *end; end++) {
+                if (*end == '[') depth++;
+                else if (*end == ']') { depth--; if (depth == 0) { end++; break; } }
+            }
+            if (depth == 0 && end > start) {
+                size_t alen = (size_t)(end - start);
+                char *arr = malloc(alen + 1);
+                if (arr) {
+                    memcpy(arr, start, alen);
+                    arr[alen] = '\0';
+                    config_store_set_str(CONFIG_KEY_WH_PHYS, arr);
+                    free(arr);
+                }
+            }
+        }
+    }
+
+    free(buf);
+
+    // Re-read config so wormhole_*() reflect the new values, and bump the
+    // WS stream generation (an active stream then closes with 4002).
+    wormhole_reload();
+
+    // A mode/rings change alters the render geometry — re-init the player by
+    // restarting the active script cleanly. A brief flicker is acceptable.
+    if (topology_changed && js_player_is_running()) {
+        const char *name = js_player_current_name();
+        if (name && name[0]) {
+            char nm[64] = {0};
+            snprintf(nm, sizeof(nm), "%s", name);
+            js_player_stop();
+            js_player_set_current_name(nm);
+            js_player_start(nm, JS_DEFAULT_FPS);
+        }
+    }
+
+    return wormhole_send_state(req);
+}
+
+// POST /api/wormhole/creative — role: creator. Body: {"creative":[…]} (full
+// array) or {"ring":N,"reverse":…,"offset":…,"brightness":…} (single patch).
+// Stored regardless of mode; no player re-init, no stream close.
+static esp_err_t wormhole_creative_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_CREATOR) != ESP_OK) return ESP_FAIL;
+    if (!wormhole_is_wormhole()) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "not a wormhole lamp");
+        return ESP_FAIL;
+    }
+    int content_len = req->content_len;
+    if (content_len <= 0 || content_len > 2048) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad body");
+        return ESP_FAIL;
+    }
+    char *buf = malloc(content_len + 1);
+    if (!buf) return ESP_FAIL;
+    int received = 0;
+    while (received < content_len) {
+        int ret = httpd_req_recv(req, buf + received, content_len - received);
+        if (ret <= 0) { free(buf); return ESP_FAIL; }
+        received += ret;
+    }
+    buf[content_len] = '\0';
+
+    char *p;
+    if ((p = strstr(buf, "\"creative\"")) != NULL) {
+        // Full-array form — store wh_creative verbatim.
+        const char *start = strchr(p, '[');
+        if (start) {
+            int depth = 0;
+            const char *end = start;
+            for (; *end; end++) {
+                if (*end == '[') depth++;
+                else if (*end == ']') { depth--; if (depth == 0) { end++; break; } }
+            }
+            if (depth == 0 && end > start) {
+                size_t alen = (size_t)(end - start);
+                char *arr = malloc(alen + 1);
+                if (arr) {
+                    memcpy(arr, start, alen);
+                    arr[alen] = '\0';
+                    config_store_set_str(CONFIG_KEY_WH_CREATIVE, arr);
+                    free(arr);
+                }
+            }
+        }
+    } else if ((p = strstr(buf, "\"ring\"")) != NULL) {
+        // Single-ring patch — merge into the stored array, rebuild it whole.
+        char *rp = strchr(p, ':');
+        int ring = rp ? atoi(rp + 1) : -1;
+        int rings = wormhole_rings();
+        if (ring >= 0 && ring < rings) {
+            // The patch only mentions some fields; missing ones keep the
+            // ring's current value (read back via the accessor).
+            bool rev = false; int coff = 0; float br = 1.0f;
+            wormhole_get_creative(ring, &rev, &coff, &br);
+            char *q;
+            if ((q = strstr(buf, "\"reverse\"")) != NULL && (q = strchr(q, ':')) != NULL) {
+                q++;
+                while (*q == ' ') q++;
+                if (!strncmp(q, "true", 4)) rev = true;
+                else if (!strncmp(q, "false", 5)) rev = false;
+                else rev = atoi(q) != 0;
+            }
+            if ((q = strstr(buf, "\"offset\"")) != NULL && (q = strchr(q, ':')) != NULL) {
+                coff = ((atoi(q + 1) % 24) + 24) % 24;
+            }
+            if ((q = strstr(buf, "\"brightness\"")) != NULL && (q = strchr(q, ':')) != NULL) {
+                br = (float)atof(q + 1);
+                if (br < 0.0f) br = 0.0f;
+                if (br > 1.0f) br = 1.0f;
+            }
+            // Rebuild the full creative array — every ring read via the
+            // accessor, the patched ring overridden.
+            char *arr = malloc(2048);
+            if (arr) {
+                size_t o = 0;
+                o += snprintf(arr + o, 2048 - o, "[");
+                for (int r = 0; r < rings; r++) {
+                    bool rr = false; int ro = 0; float rb = 1.0f;
+                    if (r == ring) { rr = rev; ro = coff; rb = br; }
+                    else wormhole_get_creative(r, &rr, &ro, &rb);
+                    o += snprintf(arr + o, 2048 - o,
+                                  "%s{\"reverse\":%s,\"offset\":%d,\"brightness\":%.3f}",
+                                  r ? "," : "", rr ? "true" : "false", ro, rb);
+                }
+                snprintf(arr + o, 2048 - o, "]");
+                config_store_set_str(CONFIG_KEY_WH_CREATIVE, arr);
+                free(arr);
+            }
+        }
+    }
+
+    free(buf);
+    // Creative knobs take effect on the next frame — just re-read config.
+    // No player re-init, no stream close (the render geometry is unchanged):
+    // wormhole_reload_creative() deliberately does not bump the stream gen.
+    wormhole_reload_creative();
+    return wormhole_send_state(req);
+}
+
 esp_err_t light_api_register(httpd_handle_t server)
 {
     httpd_uri_t power = {
@@ -715,6 +991,21 @@ esp_err_t light_api_register(httpd_handle_t server)
     httpd_register_uri_handler(server, &bt_get);
     httpd_uri_t bt_put = {.uri = "/api/bt", .method = HTTP_PUT, .handler = bt_set_handler};
     httpd_register_uri_handler(server, &bt_put);
+
+    // Phase 29 — wormhole render mode. GET is user, POST is admin, the
+    // creative patch is creator. All three 404 for non-wormhole lamps.
+    httpd_uri_t wormhole_get = {
+        .uri = "/api/wormhole", .method = HTTP_GET, .handler = wormhole_get_handler
+    };
+    httpd_register_uri_handler(server, &wormhole_get);
+    httpd_uri_t wormhole_post = {
+        .uri = "/api/wormhole", .method = HTTP_POST, .handler = wormhole_post_handler
+    };
+    httpd_register_uri_handler(server, &wormhole_post);
+    httpd_uri_t wormhole_creative = {
+        .uri = "/api/wormhole/creative", .method = HTTP_POST, .handler = wormhole_creative_handler
+    };
+    httpd_register_uri_handler(server, &wormhole_creative);
 
     return ESP_OK;
 }
