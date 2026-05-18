@@ -145,7 +145,7 @@ int light_api_apply_mode(const char *mode)
 // POST /api/power  body: {"on":true} or {"on":false}
 static esp_err_t power_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     char buf[64] = {0};
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
@@ -167,7 +167,7 @@ static esp_err_t power_handler(httpd_req_t *req)
  */
 static esp_err_t color_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     int content_len = req->content_len;
     if (content_len <= 0 || content_len > 8192) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid content length");
@@ -283,7 +283,7 @@ static esp_err_t color_handler(httpd_req_t *req)
 // GET /api/brightness -> {"brightness":255}
 static esp_err_t brightness_get_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     char resp[32];
     snprintf(resp, sizeof(resp), "{\"brightness\":%d}", led_control_get_brightness());
     httpd_resp_set_type(req, "application/json");
@@ -294,7 +294,7 @@ static esp_err_t brightness_get_handler(httpd_req_t *req)
 // POST /api/brightness  body: {"brightness":128}
 static esp_err_t brightness_set_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     char buf[64] = {0};
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
@@ -322,7 +322,7 @@ static esp_err_t brightness_set_handler(httpd_req_t *req)
 // GET /api/limits -> {"maxBrightness":N,"maxCurrentMa":N}
 static esp_err_t limits_get_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     char resp[96];
     snprintf(resp, sizeof(resp),
              "{\"maxBrightness\":%u,\"maxCurrentMa\":%lu}",
@@ -336,7 +336,7 @@ static esp_err_t limits_get_handler(httpd_req_t *req)
 // POST /api/limits {"maxBrightness":N,"maxCurrentMa":N}
 static esp_err_t limits_set_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
     char buf[128] = {0};
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
@@ -366,7 +366,7 @@ static esp_err_t limits_set_handler(httpd_req_t *req)
 // GET /api/grid -> {"pixelGroupW":N,"pixelGroupH":N,"physicalW":N,"physicalH":N,"logicalW":N,"logicalH":N}
 static esp_err_t grid_get_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     char resp[192];
     snprintf(resp, sizeof(resp),
              "{\"pixelGroupW\":%d,\"pixelGroupH\":%d,"
@@ -386,7 +386,7 @@ static esp_err_t grid_get_handler(httpd_req_t *req)
 // POST /api/grid {"pixelGroupW":N,"pixelGroupH":N}
 static esp_err_t grid_set_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
     char buf[128] = {0};
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
@@ -412,7 +412,7 @@ static esp_err_t grid_set_handler(httpd_req_t *req)
 // GET /api/orientation -> {"rotation":N,"origin":N,"serpentine":bool,"serpentineAxis":N}
 static esp_err_t orientation_get_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     char resp[128];
     snprintf(resp, sizeof(resp),
              "{\"rotation\":%d,\"origin\":%d,\"serpentine\":%s,\"serpentineAxis\":%d}",
@@ -429,7 +429,7 @@ static esp_err_t orientation_get_handler(httpd_req_t *req)
 // rotation: 0|90|180|270  origin: 0..3 (TL/TR/BL/BR)  serpentineAxis: 0|1
 static esp_err_t orientation_set_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
     char buf[160] = {0};
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
@@ -488,7 +488,7 @@ static esp_err_t orientation_set_handler(httpd_req_t *req)
 // JS player — 0 when no script is producing frames.
 static esp_err_t state_get_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     // `color` was historically the *last painted* color. In js / stream modes
     // that flips every frame, so client-side color pickers couldn't sync
     // sensibly — the picker chased the latest frame's first pixel. Return
@@ -530,7 +530,7 @@ static esp_err_t state_get_handler(httpd_req_t *req)
 // per frame in js / stream mode and was never useful for clients.
 static esp_err_t base_color_get_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     uint8_t r = 0, g = 0, b = 0;
     js_player_get_base_color(&r, &g, &b);
     char resp[40];
@@ -544,7 +544,7 @@ static esp_err_t base_color_get_handler(httpd_req_t *req)
 // PUT /api/mode  body: {"mode":"api"|"js"}
 static esp_err_t mode_get_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     char persistent[16] = {0};
     get_persistent_mode(persistent, sizeof(persistent));
     const char *effective = (ws_server_get_mode() == LAMP_MODE_STREAM) ? "stream" : persistent;
@@ -566,7 +566,7 @@ static esp_err_t mode_get_handler(httpd_req_t *req)
 
 static esp_err_t mode_set_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     char buf[96] = {0};
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
@@ -721,7 +721,7 @@ esp_err_t light_api_register(httpd_handle_t server)
 
 static esp_err_t bt_get_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     char policy[16] = {0};
     config_get_str_or(CONFIG_KEY_BT_ENABLED, policy, sizeof(policy), "auto");
     extern bool bt_service_is_running(void);
@@ -735,7 +735,7 @@ static esp_err_t bt_get_handler(httpd_req_t *req)
 
 static esp_err_t bt_set_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
     char buf[96] = {0};
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {

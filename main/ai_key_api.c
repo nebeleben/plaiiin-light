@@ -16,7 +16,7 @@ static const char *TAG = "ai_key_api";
 
 static esp_err_t key_get_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
     // Phase 9 — never return the raw key over the network. The on-device
     // /compose page reads it from a server-injected <meta> tag instead, so
     // a snooper getting on the WiFi can no longer just GET /api/ai/key to
@@ -34,7 +34,7 @@ static esp_err_t key_get_handler(httpd_req_t *req)
 
 static esp_err_t key_put_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
     int n = req->content_len;
     if (n <= 0 || n > AI_KEY_MAX_LEN - 1) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "key length 1..255");
@@ -67,7 +67,7 @@ static esp_err_t key_put_handler(httpd_req_t *req)
 
 static esp_err_t key_delete_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
     config_store_set_str(CONFIG_KEY_AI_API_KEY, "");
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
@@ -109,7 +109,7 @@ static esp_err_t pair_post_handler(httpd_req_t *req)
         }
         // Auth header present — let pairing_http_check validate it (rotates
         // for legitimate holders, 401 for impostors who guessed wrong).
-        if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+        if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
     }
     char tok[64] = {0};
     if (pairing_pair(tok, sizeof(tok)) != ESP_OK) {
@@ -126,7 +126,7 @@ static esp_err_t pair_post_handler(httpd_req_t *req)
 
 static esp_err_t pair_delete_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
     pairing_unpair();
     mdns_service_set_paired(false);
     httpd_resp_set_type(req, "application/json");
@@ -137,7 +137,7 @@ static esp_err_t pair_delete_handler(httpd_req_t *req)
 // /api/reset POST {"scope":"wifi"|"full"}
 static esp_err_t reset_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
     char buf[96] = {0};
     int r = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (r <= 0) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body"); return ESP_FAIL; }
@@ -158,7 +158,7 @@ static esp_err_t reset_handler(httpd_req_t *req)
 // flip a toggle. Both verbs require the bearer when paired.
 static esp_err_t mqtt_get_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
     int32_t enabled = config_get_i32_or(CONFIG_KEY_MQTT_ACTIVE, 0);
     char host[128] = {0};
     config_get_str_or(CONFIG_KEY_MQTT_HOST, host, sizeof(host), "");
@@ -190,7 +190,7 @@ static bool extract_string_field(const char *body, const char *key, char *out, s
 
 static esp_err_t mqtt_post_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
     int n = req->content_len;
     if (n <= 0 || n > 1024) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "body length 1..1024");

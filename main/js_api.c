@@ -72,7 +72,7 @@ static esp_err_t send_err_json(httpd_req_t *req, int status, const char *msg)
 // GET /api/js -> {"scripts":[...],"playing":"name"|null}
 static esp_err_t list_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     char scripts[768];
     esp_err_t err = js_storage_list(scripts, sizeof(scripts));
     if (err != ESP_OK) return send_err_json(req, 500, "list failed");
@@ -93,7 +93,7 @@ static esp_err_t list_handler(httpd_req_t *req)
 // GET /api/js/<name>/params     -> {"items":[{"name":..,"min":..,...}]}
 static esp_err_t read_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     char name[64];
     bool is_params = false;
     if (!split_uri(req->uri, name, sizeof(name), &is_params)) {
@@ -216,7 +216,7 @@ int js_api_write_script(const char *name, const char *body, size_t len,
 // PUT /api/js/<name>/params     body: {"name":value,...} — partial OK
 static esp_err_t write_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_CREATOR) != ESP_OK) return ESP_FAIL;
     char name[64];
     bool is_params = false;
     if (!split_uri(req->uri, name, sizeof(name), &is_params)) {
@@ -283,7 +283,7 @@ static esp_err_t write_handler(httpd_req_t *req)
  * run new scripts in its Swift VM without round-tripping a save. */
 static esp_err_t compile_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_CREATOR) != ESP_OK) return ESP_FAIL;
     char *body = NULL; size_t body_len = 0;
     esp_err_t err = receive_body(req, &body, &body_len);
     if (err != ESP_OK) return send_err_json(req, 400, "bad body");
@@ -317,7 +317,7 @@ static esp_err_t compile_handler(httpd_req_t *req)
 // no client should save it or run it locally.
 static esp_err_t validate_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_CREATOR) != ESP_OK) return ESP_FAIL;
     char *body = NULL; size_t body_len = 0;
     esp_err_t err = receive_body(req, &body, &body_len);
     if (err != ESP_OK) return send_err_json(req, 400, "bad body");
@@ -339,7 +339,7 @@ static esp_err_t validate_handler(httpd_req_t *req)
 // DELETE /api/js/<name>
 static esp_err_t delete_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_CREATOR) != ESP_OK) return ESP_FAIL;
     const char *name = name_from_uri(req->uri);
     if (!name) return send_err_json(req, 400, "missing name");
     esp_err_t err = js_storage_remove(name);
@@ -376,7 +376,7 @@ esp_err_t js_api_play(const char *name, int fps)
 // POST /api/play  body: {"file":"sparkle","fps":10}
 static esp_err_t play_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     char buf[192] = {0};
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) return send_err_json(req, 400, "no body");
@@ -466,7 +466,7 @@ void js_api_stop(void)
 // POST /api/play/next  → advance one script alphabetically and play it.
 static esp_err_t play_next_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     char chosen[64] = {0};
     esp_err_t err = js_api_play_next(chosen, sizeof(chosen));
     if (err == ESP_ERR_NOT_FOUND) return send_err_json(req, 404, "no scripts on device");
@@ -481,7 +481,7 @@ static esp_err_t play_next_handler(httpd_req_t *req)
 // POST /api/play/prev  → step one script back alphabetically and play it.
 static esp_err_t play_prev_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     char chosen[64] = {0};
     esp_err_t err = js_api_play_prev(chosen, sizeof(chosen));
     if (err == ESP_ERR_NOT_FOUND) return send_err_json(req, 404, "no scripts on device");
@@ -498,7 +498,7 @@ static esp_err_t play_prev_handler(httpd_req_t *req)
 //   "playing" is what's actually running right now (may differ if mode=api).
 static esp_err_t play_current_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     char persisted[64] = {0};
     config_get_str_or(CONFIG_KEY_CURRENT_JS, persisted, sizeof(persisted), "");
     const char *playing = js_player_current_name();
@@ -523,7 +523,7 @@ static esp_err_t play_current_handler(httpd_req_t *req)
 // POST /api/stop
 static esp_err_t stop_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     js_api_stop();
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
@@ -535,7 +535,7 @@ static esp_err_t stop_handler(httpd_req_t *req)
 // directly to JS scripts.
 static esp_err_t bench_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_CREATOR) != ESP_OK) return ESP_FAIL;
     char buf[128] = {0};
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) return send_err_json(req, 400, "no body");

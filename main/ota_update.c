@@ -40,7 +40,7 @@ static esp_err_t ota_info_handler(httpd_req_t *req)
 // POST /api/ota - receive firmware binary and flash
 static esp_err_t ota_upload_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
     ESP_LOGI(TAG, "OTA update started, content length: %d", req->content_len);
 
     const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);

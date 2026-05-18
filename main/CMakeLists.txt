@@ -21,9 +21,11 @@ idf_component_register(
         "ai_key_api.c"
         "pairing.c"
         "form_prompt.c"
+        "keys.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_http_server
+        json
         esp_wifi
         esp_event
         esp_netif

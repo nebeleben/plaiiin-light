@@ -66,6 +66,12 @@
 // 32-byte secret rendered as URL-safe base64. Wiped by factory_reset_full.
 #define CONFIG_KEY_PAIR_MODE     "pair_mode"
 #define CONFIG_KEY_PAIR_TOKEN    "pair_token"
+// Phase 27 — role-based sharing. JSON array of share-key entries
+// [{"id","key","role":"user|creator","label","revoked","created"}], stored
+// as one NVS string. The admin key stays in CONFIG_KEY_PAIR_TOKEN; these are
+// the additional limited-role keys an admin hands out. Wiped by factory
+// reset alongside the pair token. See keys.{h,c}.
+#define CONFIG_KEY_SHARE_KEYS    "share_keys"
 // Bluetooth lifecycle policy:
 //   "auto"   — BT advertises only when WiFi is unconfigured or fails to
 //              associate within ~15s after boot. Once WiFi is up, BT shuts

@@ -51,6 +51,7 @@ esp_err_t factory_reset_wifi(bool reboot)
         CONFIG_KEY_WIFI_PASS,
         CONFIG_KEY_PAIR_TOKEN,
         CONFIG_KEY_PAIR_MODE,
+        CONFIG_KEY_SHARE_KEYS,
     };
     config_store_erase_keys(keys, sizeof(keys) / sizeof(keys[0]));
     confirm_blink(0, 200, 0);   // green
@@ -78,6 +79,7 @@ esp_err_t factory_reset_full(bool reboot)
         // device returns to its default unpaired state for the next owner.
         CONFIG_KEY_PAIR_TOKEN,
         CONFIG_KEY_PAIR_MODE,
+        CONFIG_KEY_SHARE_KEYS,
     };
     config_store_erase_keys(keys, sizeof(keys) / sizeof(keys[0]));
     confirm_blink(0, 100, 255);   // blue

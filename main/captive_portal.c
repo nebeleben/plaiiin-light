@@ -90,7 +90,7 @@ static esp_err_t network_page_get_handler(httpd_req_t *req)
 
 static esp_err_t config_save_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
     char *buf = recv_body(req);
     if (!buf) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad request");
@@ -129,7 +129,7 @@ static esp_err_t config_save_handler(httpd_req_t *req)
 
 static esp_err_t network_save_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
     char *buf = recv_body(req);
     if (!buf) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad request");

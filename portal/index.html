@@ -155,6 +155,22 @@
 </div>
 <div class="msg" id="formMsg"></div>
 
+<h2 id="shareHdr">Share</h2>
+<div id="shareGate" class="info" style="display:none">Sharing is admin-only. Your access level: <span id="shareRoleName">—</span>.</div>
+<div id="shareBox">
+<p class="info">Hand out limited access to this lamp. Each share is a key — open its link in another browser, or scan it in the app, to use the lamp at that role.</p>
+<div id="shareList"></div>
+<div class="limits" style="margin-top:8px">
+<select id="shareRole">
+<option value="user">User — on/off, color, play scripts</option>
+<option value="creator">Creator — + compose &amp; edit scripts</option>
+</select>
+<input id="shareLabel" type="text" placeholder="Label (optional)">
+<button type="button" id="btnShareAdd">Create share</button>
+</div>
+<div class="msg" id="shareMsg"></div>
+</div>
+
 <!-- AI Settings (stored in browser, used by /compose) -->
 <h2>AI Integration</h2>
 <label>Provider</label>
@@ -323,6 +339,52 @@ document.getElementById('btnFormReset').onclick=function(){
   fetch('/api/form-prompt',{method:'DELETE'})
     .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);formBox.value=_formDefault;flashMsg(formMsg,'Reset to default',true);})
     .catch(function(e){flashMsg(formMsg,'Failed: '+e.message,false);});
+};
+
+// Share — role-based share keys (admin only). Phase 27.
+var shareList=document.getElementById('shareList');
+var shareMsg=document.getElementById('shareMsg');
+function shareUrl(key){return location.protocol+'//'+location.host+'/config?t='+encodeURIComponent(key);}
+function loadShares(){
+  fetch('/api/keys').then(function(r){return r.json()}).then(function(d){
+    shareList.innerHTML='';
+    var keys=d.keys||[];
+    keys.forEach(function(k){
+      var row=document.createElement('div');
+      row.style.cssText='border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:6px;font-size:.8rem';
+      var head=document.createElement('b');
+      head.textContent=(k.label||'(unnamed)')+' · '+k.role+(k.revoked?' · REVOKED':'');
+      var url=document.createElement('div');
+      url.textContent=shareUrl(k.key);
+      url.style.cssText='word-break:break-all;color:var(--text-dim);margin:4px 0';
+      var revBtn=document.createElement('button');revBtn.type='button';
+      revBtn.textContent=k.revoked?'Revoked':'Revoke';revBtn.disabled=!!k.revoked;
+      revBtn.onclick=function(){fetch('/api/keys/'+k.id+'/revoke',{method:'POST'}).then(function(){loadShares();});};
+      var remBtn=document.createElement('button');remBtn.type='button';
+      remBtn.textContent='Remove';remBtn.style.marginLeft='6px';
+      remBtn.onclick=function(){fetch('/api/keys/'+k.id,{method:'DELETE'}).then(function(){loadShares();});};
+      row.appendChild(head);row.appendChild(url);row.appendChild(revBtn);row.appendChild(remBtn);
+      shareList.appendChild(row);
+    });
+    if(!keys.length) shareList.innerHTML='<p class="info">No shares yet.</p>';
+  }).catch(function(e){flashMsg(shareMsg,'Load failed: '+e.message,false);});
+}
+fetch('/api/whoami').then(function(r){return r.json()}).then(function(d){
+  if(d.role==='admin'){ loadShares(); }
+  else {
+    document.getElementById('shareBox').style.display='none';
+    document.getElementById('shareGate').style.display='';
+    document.getElementById('shareRoleName').textContent=d.role||'none';
+  }
+}).catch(function(){});
+document.getElementById('btnShareAdd').onclick=function(){
+  var role=document.getElementById('shareRole').value;
+  var label=document.getElementById('shareLabel').value;
+  fetch('/api/keys',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({role:role,label:label})})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(function(){document.getElementById('shareLabel').value='';flashMsg(shareMsg,'Share created',true);loadShares();})
+    .catch(function(e){flashMsg(shareMsg,'Create failed: '+e.message,false);});
 };
 
 // AI key — device-side via /api/ai/key. NVS-backed, wiped by factory reset.

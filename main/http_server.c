@@ -101,7 +101,7 @@ static esp_err_t api_info_handler(httpd_req_t *req)
 // GET /api/storage -> {"total":N,"used":N,"free":N,"files":N}
 static esp_err_t storage_info_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     size_t total = 0, used = 0, files = 0;
     esp_err_t err = js_storage_info(&total, &used, &files);
     if (err != ESP_OK) {
@@ -145,7 +145,7 @@ static void json_escape_append(const char *in, char *out, size_t out_len)
 // GET /api/form-prompt
 static esp_err_t form_prompt_get_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
 
     char lamp_form[32];
     config_get_str_or(CONFIG_KEY_LAMP_FORM, lamp_form, sizeof(lamp_form), CONFIG_PLAIIIN_FORM);
@@ -179,7 +179,7 @@ static esp_err_t form_prompt_get_handler(httpd_req_t *req)
 // PUT /api/form-prompt — body is the raw override text (empty body clears it).
 static esp_err_t form_prompt_put_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_CREATOR) != ESP_OK) return ESP_FAIL;
     int content_len = req->content_len;
     if (content_len < 0 || content_len > 2048) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad request");
@@ -215,7 +215,7 @@ static esp_err_t form_prompt_put_handler(httpd_req_t *req)
 // DELETE /api/form-prompt — clears the override, reverting to the default.
 static esp_err_t form_prompt_delete_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_CREATOR) != ESP_OK) return ESP_FAIL;
     const char *keys[] = { CONFIG_KEY_FORM_PROMPT };
     config_store_erase_keys(keys, 1);
     httpd_resp_set_type(req, "application/json");
@@ -428,7 +428,7 @@ static esp_err_t js_page_handler(httpd_req_t *req) { send_html(req, js_html_star
 // GET /api/mqtt - MQTT config
 static esp_err_t mqtt_api_get_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
     char host[128] = {0};
     char node[64] = {0};
     config_get_str_or(CONFIG_KEY_MQTT_HOST, host, sizeof(host), "");
@@ -449,7 +449,7 @@ static esp_err_t mqtt_api_get_handler(httpd_req_t *req)
 // POST /mqtt - save MQTT config
 static esp_err_t mqtt_save_handler(httpd_req_t *req)
 {
-    if (pairing_http_check(req) != ESP_OK) return ESP_FAIL;
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
     int content_len = req->content_len;
     if (content_len <= 0 || content_len > 512) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad request");
@@ -515,7 +515,7 @@ httpd_handle_t http_server_start(void)
     // Sized with headroom: every page + REST endpoint costs one slot, so this
     // grows whenever we add an /api/* route. Hitting the cap causes silent
     // failures in late registrations (e.g. /api/stop returning 404).
-    config.max_uri_handlers = 64;
+    config.max_uri_handlers = 80;
     config.uri_match_fn = httpd_uri_match_wildcard;
     // JS validation runs mjs_exec on the request thread — needs more stack than default 4 KB.
     config.stack_size = 16 * 1024;

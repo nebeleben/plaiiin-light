@@ -14,6 +14,7 @@
 #include "buttons.h"
 #include "ai_key_api.h"
 #include "pairing.h"
+#include "keys.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -28,6 +29,7 @@ void app_main(void)
     // 1. Init NVS config store (must be first)
     ESP_ERROR_CHECK(config_store_init());
     pairing_init();   // reads pair_mode + caches; safe before WiFi/HTTP.
+    keys_init();      // logs the stored share-key count.
 
     // 1b. Seed NVS from Kconfig for keys that are still unset. This freezes
     // the values reported by /api into NVS, so subsequent OTAs (which only
@@ -315,6 +317,7 @@ void app_main(void)
     } else {
         js_api_register(server);
         ai_key_api_register(server);
+        keys_api_register(server);
     }
 
     // 7b. Hardware buttons (no-op when no pins configured).

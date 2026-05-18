@@ -83,7 +83,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
     if (req->method == HTTP_GET) {
         // WebSocket handshake — auth happens here (only chance to set HTTP
         // status before the upgrade), token comes via ?token= query.
-        if (pairing_ws_check(req) != ESP_OK) return ESP_FAIL;
+        if (pairing_ws_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
         ESP_LOGI(TAG, "WebSocket client connected");
         return ESP_OK;
     }
