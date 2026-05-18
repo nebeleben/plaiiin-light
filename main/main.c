@@ -179,6 +179,10 @@ void app_main(void)
         extern const uint8_t shootingstar_js_end[]   asm("_binary_shootingstar_js_end");
         extern const uint8_t particles_js_start[]    asm("_binary_particles_js_start");
         extern const uint8_t particles_js_end[]      asm("_binary_particles_js_end");
+        extern const uint8_t sinwave_js_start[]      asm("_binary_sinwave_js_start");
+        extern const uint8_t sinwave_js_end[]        asm("_binary_sinwave_js_end");
+        extern const uint8_t blaze_js_start[]        asm("_binary_blaze_js_start");
+        extern const uint8_t blaze_js_end[]          asm("_binary_blaze_js_end");
         struct { const char *name; const uint8_t *start; const uint8_t *end; } defaults[] = {
             { "noop",         noop_js_start,         noop_js_end },
             { "fade",         fade_js_start,         fade_js_end },
@@ -187,6 +191,8 @@ void app_main(void)
             { "heartbeat",    heartbeat_js_start,    heartbeat_js_end },
             { "shootingstar", shootingstar_js_start, shootingstar_js_end },
             { "particles",    particles_js_start,    particles_js_end },
+            { "sinwave",      sinwave_js_start,      sinwave_js_end },
+            { "blaze",        blaze_js_start,        blaze_js_end },
         };
         for (size_t i = 0; i < sizeof(defaults) / sizeof(defaults[0]); i++) {
             if (js_storage_exists(defaults[i].name)) continue;

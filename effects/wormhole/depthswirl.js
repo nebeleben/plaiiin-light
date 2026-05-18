@@ -4,12 +4,13 @@
 // around each ring as it sinks from one ring to the next, and speeding up
 // the deeper it falls. The angular position advances continuously while the
 // depth marches discretely ring-to-ring, so you see one glowing bead corkscrew
-// down the construct and the deeper rings get a colder, dimmer cast.
+// down the construct and the deeper rings get a dimmer cast.
 //
 // On the lamp: one lit dot orbits ring 0, then drops to ring 1 and keeps
 // orbiting (faster), then ring 2, and so on to the throat — then it restarts
-// at the mouth. Rings deeper than the marble keep a faint depth-shaded glow
-// so the tunnel always has a sense of distance.
+// at the mouth. Rings deeper than the marble keep a faint glow so the tunnel
+// always has a sense of distance. Everything is drawn in the lamp's base
+// colour.
 //
 // Strip mode: x = position-on-ring (0..23), y = ring index. The orbit angle
 // is derived from x/24 so the dot wraps cleanly across the x 0/23 seam.
@@ -55,16 +56,13 @@ function shade(x, y, idx, frame, base, params) {
     }
   }
 
-  // Depth-shaded tunnel wall: a faint glow on every ring, dimmer + cooler
-  // the deeper it sits.
+  // Depth-shaded tunnel wall: a faint glow on every ring, dimmer the deeper
+  // it sits.
   let depthFrac = y / h;
   let wall = params.glow * (1 - depthFrac * 0.7);
   if (wall > bright) { bright = wall; }
 
-  // Colour: marble is warm-white near the mouth, cooling to blue at depth.
-  let cold = depthFrac;
-  let r = (255 - cold * 200) * bright;
-  let g = (220 - cold * 120) * bright;
-  let b = (150 + cold * 105) * bright;
-  emit(r, g, b);
+  // Drawn in the lamp's base colour, scaled by brightness. Depth still reads
+  // through the wall-brightness gradient and the marble's ring position.
+  emitBright(bright);
 }

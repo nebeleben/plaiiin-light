@@ -8,20 +8,18 @@
 // On the lamp every physical ring (a 24-LED circle) flashes whole, in order,
 // faster and faster, then the pull restarts from the mouth. A soft trailing
 // glow lingers on the rings the front has already passed, so you see a comet
-// of rings rather than a single hard flash.
+// of rings rather than a single hard flash. Drawn in the lamp's base colour.
 //
 // Strip mode: x = position-on-ring (0..23, wraps at the seam), y = ring index
 // (0 = wormhole mouth, h-1 = throat). The whole ring shares one brightness,
 // so the seam at x 0/23 is automatically continuous.
 //
 // `speed` sets the base fall rate; `accel` is how much faster the front gets
-// per ring of depth; `trail` is how long the glow lingers behind the front;
-// `hue` tints the front (0 = blue throat-light, 1 = warm amber).
+// per ring of depth; `trail` is how long the glow lingers behind the front.
 
 // @param speed 0.1..3 = 0.7 Base rings-per-second the front falls
 // @param accel 0..2 = 0.8 Extra fall speed gained per ring of depth
 // @param trail 0.1..4 = 1.4 Length of the lingering glow behind the front (rings)
-// @param hue 0..1 = 0.15 Front colour, 0 = cold blue, 1 = warm amber
 
 function shade(x, y, idx, frame, base, params) {
   // Wall-clock seconds since playback start drives the pull.
@@ -55,9 +53,6 @@ function shade(x, y, idx, frame, base, params) {
     bright = (behind + 0.6) / 0.6 * 0.25;
   }
 
-  // Colour: lerp cold-blue -> warm-amber by `hue`, scaled by brightness.
-  let r = (40 + params.hue * 215) * bright;
-  let g = (90 + params.hue * 110) * bright;
-  let b = (255 - params.hue * 235) * bright;
-  emit(r, g, b);
+  // Drawn in the lamp's base colour, scaled by the front brightness.
+  emitBright(bright);
 }

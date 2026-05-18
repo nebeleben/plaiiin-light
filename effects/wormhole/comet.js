@@ -7,18 +7,17 @@
 //
 // On the lamp: one bright dot races around the circle, dragging a comet tail
 // that fades behind it. Clean and hypnotic — the wormhole looks like it is
-// slowly rotating.
+// slowly rotating. The comet is drawn in the lamp's base colour.
 //
 // Mirror mode: the script only ever sees a 24×1 grid — x = 0..23 around the
 // ring, y always 0. The head position and every pixel angle are derived from
 // x/24, so the comet wraps seamlessly across the x 0/23 seam.
 //
 // `speed` is revolutions per second; `tail` is how far the tail stretches
-// behind the head (in ring fractions); `hue` tints the comet.
+// behind the head (in ring fractions).
 
 // @param speed 0.05..2 = 0.4 Revolutions per second
 // @param tail 0.05..0.9 = 0.4 Tail length as a fraction of the ring
-// @param hue 0..1 = 0.55 Comet colour, 0 = magenta, 1 = cyan
 
 function shade(x, y, idx, frame, base, params) {
   let t = time * 0.001;
@@ -41,9 +40,6 @@ function shade(x, y, idx, frame, base, params) {
     bright = bright * bright * bright;   // cubic → punchy head, soft tail
   }
 
-  // Colour lerp magenta -> cyan, scaled by brightness.
-  let r = (255 - params.hue * 255) * bright;
-  let g = (params.hue * 220) * bright;
-  let b = (255 - params.hue * 40) * bright;
-  emit(r, g, b);
+  // Drawn in the lamp's base colour, scaled by the comet brightness.
+  emitBright(bright);
 }

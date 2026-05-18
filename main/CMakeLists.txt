@@ -60,5 +60,7 @@ idf_component_register(
         "../portal/heartbeat.js"
         "../portal/shootingstar.js"
         "../portal/particles.js"
+        "../portal/sinwave.js"
+        "../portal/blaze.js"
         "../portal/shade-runtime.js"
 )

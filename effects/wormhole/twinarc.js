@@ -8,18 +8,17 @@
 //
 // On the lamp: two soft crescents of light orbit the circle in opposite
 // directions; twice a lap they cross and briefly bloom into a single bright
-// flash, then separate again — a slow, breathing scissor of light.
+// flash, then separate again — a slow, breathing scissor of light, drawn in
+// the lamp's base colour.
 //
 // Mirror mode: the script only sees a 24×1 grid — x = 0..23, y always 0. Both
 // arc centres and every pixel angle come from x/24 via sin/cos, so the arcs
 // wrap seamlessly across the x 0/23 seam.
 //
-// `speed` is revolutions per second; `width` is each arc's angular half-width;
-// `hue` tints the pair.
+// `speed` is revolutions per second; `width` is each arc's angular half-width.
 
 // @param speed 0.03..1.5 = 0.25 Revolutions per second (each arc)
 // @param width 0.1..1.4 = 0.6 Angular half-width of each arc (radians)
-// @param hue 0..1 = 0.3 Arc colour, 0 = deep blue, 1 = warm gold
 
 function shade(x, y, idx, frame, base, params) {
   let t = time * 0.001;
@@ -52,9 +51,6 @@ function shade(x, y, idx, frame, base, params) {
   let bright = bA + bB;
   if (bright > 1) { bright = 1; }
 
-  // Colour lerp deep-blue -> warm-gold, scaled by brightness.
-  let r = (30 + params.hue * 225) * bright;
-  let g = (60 + params.hue * 150) * bright;
-  let b = (255 - params.hue * 215) * bright;
-  emit(r, g, b);
+  // Drawn in the lamp's base colour, scaled by brightness.
+  emitBright(bright);
 }
