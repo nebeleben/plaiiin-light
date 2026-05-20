@@ -359,6 +359,77 @@ static esp_err_t fade_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// GET /api/ap_js -> {"name":"ap-wormhole"}
+// POST /api/ap_js {"name":"..."}  — set the script played while the lamp
+// is in AP / onboarding mode. Empty name => clear (falls back to the
+// built-in blue pulse). Persisted to NVS; takes effect on next boot.
+// USER may read; CREATOR may write — same pattern as /api/fade. Pairing
+// is enforced when the device is paired; in AP mode itself the device is
+// unpaired so both verbs are open.
+static esp_err_t ap_js_get_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
+    char name[64] = {0};
+    config_get_str_or(CONFIG_KEY_AP_JS, name, sizeof(name), "");
+    char resp[128];
+    snprintf(resp, sizeof(resp), "{\"name\":\"%s\"}", name);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, resp);
+    return ESP_OK;
+}
+
+// Permissive script-name validator. Same rule we apply to JS storage:
+// non-empty, alphanumeric + dash/underscore/dot, <= 63 chars. Empty IS
+// allowed here (it means "disable, use fallback").
+static bool ap_js_name_valid(const char *s)
+{
+    size_t n = strlen(s);
+    if (n == 0) return true;
+    if (n > 63) return false;
+    for (size_t i = 0; i < n; i++) {
+        char c = s[i];
+        bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                  (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+static esp_err_t ap_js_set_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_CREATOR) != ESP_OK) return ESP_FAIL;
+    char buf[160] = {0};
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
+        return ESP_FAIL;
+    }
+    // Tiny hand-parse: locate "name" : "...".
+    char name[64] = {0};
+    char *p = strstr(buf, "\"name\"");
+    if (p) p = strchr(p, ':');
+    if (p) p = strchr(p, '"');
+    if (p) {
+        p++;
+        char *end = strchr(p, '"');
+        if (end) {
+            size_t n = (size_t)(end - p);
+            if (n >= sizeof(name)) n = sizeof(name) - 1;
+            memcpy(name, p, n);
+            name[n] = '\0';
+        }
+    } else {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing name");
+        return ESP_FAIL;
+    }
+    if (!ap_js_name_valid(name)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid name (allowed: a-z A-Z 0-9 - _ .)");
+        return ESP_FAIL;
+    }
+    config_store_set_str(CONFIG_KEY_AP_JS, name);
+    return ap_js_get_handler(req);
+}
+
 // GET /api/fade/debug -> live fade-engine snapshot. Used during Phase 33
 // bring-up to observe what the fade machinery is actually doing without
 // access to serial logs. Safe to leave in (admin-gated, small response).
@@ -1038,6 +1109,20 @@ esp_err_t light_api_register(httpd_handle_t server)
         .handler = fade_debug_handler
     };
     httpd_register_uri_handler(server, &fade_debug);
+
+    httpd_uri_t ap_js_get = {
+        .uri = "/api/ap_js",
+        .method = HTTP_GET,
+        .handler = ap_js_get_handler
+    };
+    httpd_register_uri_handler(server, &ap_js_get);
+
+    httpd_uri_t ap_js_set = {
+        .uri = "/api/ap_js",
+        .method = HTTP_POST,
+        .handler = ap_js_set_handler
+    };
+    httpd_register_uri_handler(server, &ap_js_set);
 
     httpd_uri_t limits_get = {
         .uri = "/api/limits",

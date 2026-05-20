@@ -48,6 +48,14 @@ led_color_t led_control_get_last_color(void);
 void led_control_set_brightness(uint8_t brightness);
 uint8_t led_control_get_brightness(void);
 
+/** Transient brightness override — caps the final brightness without touching
+ *  the persisted s_brightness in NVS. Used by AP-mode onboarding to enforce
+ *  a soft cap (~30 %) so the lamp doesn't run at full blast for hours during
+ *  WiFi setup. 0 clears the override; otherwise the smaller of (saved
+ *  brightness, override) wins. */
+void    led_control_set_brightness_override(uint8_t cap);
+uint8_t led_control_get_brightness_override(void);
+
 /** Upper bound the user can request. 0 = no cap (full 255). */
 void led_control_set_max_brightness(uint8_t max_brightness);
 uint8_t led_control_get_max_brightness(void);

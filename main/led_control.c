@@ -38,6 +38,9 @@ static led_color_t *s_frame_buffer = NULL;
 static bool s_has_frame_buffer = false;
 static uint8_t s_brightness = 255;
 static uint8_t s_max_brightness = 255;
+// AP-mode (or other transient) cap. 0 = no override. When set, the smaller of
+// (s_brightness, s_brightness_override) wins. Never persisted.
+static uint8_t s_brightness_override = 0;
 static uint32_t s_max_current_ma = 0; // 0 = unlimited
 static int s_phys_w = 0;
 static int s_phys_h = 0;
@@ -142,6 +145,7 @@ static uint8_t compute_effective_brightness(const led_color_t *colors, int count
 {
     uint8_t cap = s_brightness;
     if (s_max_brightness < cap) cap = s_max_brightness;
+    if (s_brightness_override > 0 && s_brightness_override < cap) cap = s_brightness_override;
     if (s_max_current_ma == 0 || count == 0 || colors == NULL) return cap;
     uint32_t at_cap = estimate_current_ma(colors, count, cap);
     if (at_cap <= s_max_current_ma) return cap;
@@ -221,6 +225,7 @@ static void apply_last_color(void)
     uint32_t sum = (uint32_t)s_led_count * (s_last_color.r + s_last_color.g + s_last_color.b);
     uint8_t cap = s_brightness;
     if (s_max_brightness < cap) cap = s_max_brightness;
+    if (s_brightness_override > 0 && s_brightness_override < cap) cap = s_brightness_override;
     uint8_t effective = cap;
     if (s_max_current_ma > 0 && sum > 0) {
         uint32_t at_cap = (uint32_t)(((uint64_t)sum * LED_CHANNEL_MA_AT_255 * cap) / (255ULL * 255ULL));
@@ -498,6 +503,7 @@ esp_err_t led_control_set_pixel(int index, uint8_t r, uint8_t g, uint8_t b)
         ? compute_effective_brightness(s_frame_buffer, s_led_count)
         : s_brightness;
     if (s_max_brightness < effective) effective = s_max_brightness;
+    if (s_brightness_override > 0 && s_brightness_override < effective) effective = s_brightness_override;
     uint16_t fade_q16 = fade_observe_scale_q16(NULL);
     backend_set_pixel(index,
         fade_apply(r, fade_q16),
@@ -741,6 +747,21 @@ uint8_t led_control_get_brightness(void)
     uint8_t cap = s_brightness;
     if (s_max_brightness < cap) cap = s_max_brightness;
     return cap;
+}
+
+void led_control_set_brightness_override(uint8_t cap)
+{
+    s_brightness_override = cap;
+    ESP_LOGI(TAG, "Brightness override %s (cap %u)",
+             cap == 0 ? "cleared" : "set", cap);
+    if (s_power_on && backend_ready()) {
+        apply_frame_buffer();
+    }
+}
+
+uint8_t led_control_get_brightness_override(void)
+{
+    return s_brightness_override;
 }
 
 void led_control_set_max_brightness(uint8_t max_brightness)

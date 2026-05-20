@@ -86,6 +86,13 @@
 // from lamp_form + geometry". Wiped by factory reset along with the rest of
 // the namespace. See form_prompt.{h,c}.
 #define CONFIG_KEY_FORM_PROMPT   "form_prompt"
+// Phase 33 — name of the JS script played on the LEDs while the lamp is in
+// AP / onboarding mode (no WiFi credentials). Defined per profile so each
+// lamp form ships its own onboarding-look. Empty (the default) means
+// "fall back to the built-in blue pulse on the first 3 LEDs". See main.c's
+// AP-mode branch. The configured script is loaded from SPIFFS and played
+// looped; if missing or won't compile the fallback also kicks in.
+#define CONFIG_KEY_AP_JS         "ap_js"
 // Phase 29 — wormhole lamp render mode. Only meaningful when lamp_form ==
 // "wormhole"; ignored by every other form. Wiped by factory reset alongside
 // the rest of the namespace. See wormhole.{h,c} and docs/wormhole-api.md.

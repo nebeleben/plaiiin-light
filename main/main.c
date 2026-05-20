@@ -131,12 +131,10 @@ void app_main(void)
     // 4. Init error light system
     error_light_init();
 
-    // 5. Init WiFi (STA or AP based on saved config)
+    // 5. Init WiFi (STA or AP based on saved config). AP-mode LED setup is
+    //    deferred to step 6a — it needs js_player_init to have run so we can
+    //    try to play the configured onboarding script.
     ESP_ERROR_CHECK(wifi_init());
-
-    if (wifi_get_mode() == PLAIIIN_WIFI_AP) {
-        error_light_set(ERROR_LIGHT_AP_MODE);
-    }
 
     // 5b. Bring up BLE. Lifecycle policy is read from NVS:
     //     "auto"   → starts now, gets torn down once WiFi associates;
@@ -159,6 +157,37 @@ void app_main(void)
     // no-op for every non-wormhole lamp. Must run after led_control_init so
     // it sees the real led_count.
     wormhole_reload();
+
+    // Phase 33 — AP-mode onboarding indicator. If we're in AP mode try to
+    // play the configured ap_js script; on success we also cap brightness
+    // to ~30 % so the lamp doesn't run at full blast for hours during
+    // onboarding. If no script is configured, the script is missing, or it
+    // won't compile, fall back to the built-in blue pulse on LEDs 0..2.
+    if (wifi_get_mode() == PLAIIIN_WIFI_AP) {
+        char ap_js_name[64] = {0};
+        config_get_str_or(CONFIG_KEY_AP_JS, ap_js_name, sizeof(ap_js_name), "");
+        bool played = false;
+        if (ap_js_name[0]) {
+            char *src = NULL;
+            size_t src_len = 0;
+            if (js_storage_read(ap_js_name, &src, &src_len) == ESP_OK && src) {
+                if (js_player_start(src, JS_DEFAULT_FPS) == ESP_OK) {
+                    js_player_set_current_name(ap_js_name);
+                    led_control_set_brightness_override(75); // ~30 % of 255
+                    played = true;
+                    ESP_LOGI(TAG, "AP mode: playing '%s' as onboarding indicator", ap_js_name);
+                } else {
+                    ESP_LOGW(TAG, "AP mode: ap_js '%s' won't start — using fallback", ap_js_name);
+                }
+                free(src);
+            } else {
+                ESP_LOGW(TAG, "AP mode: ap_js '%s' not found on SPIFFS — using fallback", ap_js_name);
+            }
+        }
+        if (!played) {
+            error_light_set(ERROR_LIGHT_AP_MODE);
+        }
+    }
 
     // 6a. Install the embedded default scripts if missing. Once on disk they
     // are NOT overwritten — the user is free to edit them in place, and a

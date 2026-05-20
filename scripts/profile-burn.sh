@@ -118,6 +118,11 @@ declare -a SCHEMA=(
     # let the firmware fall back to its defaults (600 / 800). 0 = instant snap.
     "FADE_ON_MS     fade_on_ms     i32"
     "FADE_OFF_MS    fade_off_ms    i32"
+    # Phase 33 AP-mode JS script name (script on SPIFFS played while the
+    # lamp is in onboarding/captive-portal mode). Omit to keep the built-in
+    # blue-pulse-on-first-3-LEDs fallback. Pair with a corresponding
+    # effects/<FORM>/<NAME>.js that --full will flash into the byForm image.
+    "AP_JS          ap_js          string"
 )
 
 # Pull a CONFIG_PLAIIIN_<KEY> value from the .defaults file; strips quotes.
