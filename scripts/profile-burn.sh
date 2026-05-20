@@ -114,6 +114,10 @@ declare -a SCHEMA=(
     # every other profile `get` returns empty and the row is skipped.
     "WH_MODE        wh_mode        string"
     "WH_RINGS       wh_rings       i32"
+    # Phase 33 on/off fade durations (ms). Optional — omit from a profile to
+    # let the firmware fall back to its defaults (600 / 800). 0 = instant snap.
+    "FADE_ON_MS     fade_on_ms     i32"
+    "FADE_OFF_MS    fade_off_ms    i32"
 )
 
 # Pull a CONFIG_PLAIIIN_<KEY> value from the .defaults file; strips quotes.

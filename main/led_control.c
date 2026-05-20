@@ -3,7 +3,12 @@
 #include "led_strip.h"
 #include "driver/spi_master.h"
 #include "esp_log.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -51,6 +56,71 @@ static int  s_serp_axis  = 0;     // 0 horizontal, 1 vertical
 #define NVS_KEY_MAX_CURR_MA "max_curr_ma"
 #define NVS_KEY_PX_GROUP_W  "px_group_w"
 #define NVS_KEY_PX_GROUP_H  "px_group_h"
+#define NVS_KEY_FADE_ON_MS  "fade_on_ms"
+#define NVS_KEY_FADE_OFF_MS "fade_off_ms"
+
+// --- On/off fade animation ---------------------------------------------------
+// A multiplicative scale (Q16 fixed-point, 0..65535 = 0..1) is folded into the
+// final RGB just before the WS2812/APA102 backend write, so JS-mode frames and
+// API-mode static colours dim through the same path. The user-configured
+// brightness (s_brightness) is never touched — only this output multiplier is.
+//
+// State machine, driven by led_control_power():
+//   on  : flip s_power_on=true, arm dir=+1, fade_scale ramps current→FULL
+//   off : flip s_power_on=false IMMEDIATELY (so /api/state and BLE read off),
+//         arm dir=-1, set s_painting_active so the strip keeps being painted
+//         while the scale ramps current→0; on completion the fade task
+//         performs the real strip clear and drops s_painting_active.
+// The painting-active flag lets set_all_impl() (which normally rejects writes
+// when s_power_on==false) keep accepting frames during a fade-out, so JS-mode
+// fades the live animation rather than freezing on the last frame.
+#define FADE_Q16_FULL       65535
+#define FADE_TICK_MS        20      // ~50 Hz repaint during fades — smooth
+#define FADE_DEFAULT_ON_MS  600
+#define FADE_DEFAULT_OFF_MS 800
+#define FADE_MAX_MS         5000
+
+static uint16_t s_fade_on_ms  = FADE_DEFAULT_ON_MS;
+static uint16_t s_fade_off_ms = FADE_DEFAULT_OFF_MS;
+static volatile uint16_t s_fade_scale_q16 = FADE_Q16_FULL;
+static volatile int8_t   s_fade_dir = 0;          // +1 fading in, -1 fading out, 0 idle
+static volatile uint16_t s_fade_start_scale = FADE_Q16_FULL;
+static volatile uint32_t s_fade_start_ms = 0;
+static volatile uint16_t s_fade_duration_ms = 0;
+static volatile bool     s_painting_active = false;
+static TaskHandle_t      s_fade_task_handle = NULL;
+// Last wall-time some *external* writer (JS player, API color set, stream
+// frame) called into the paint API. The fade task uses this to stay out of
+// the way: in JS mode an animator is repainting ~30 Hz, so the fade task
+// should NOT paint — each JS frame already picks up the latest scale and
+// dims itself. Only when nothing has painted for a while (api-mode static
+// colour) does the fade task drive its own repaints.
+static volatile uint32_t s_last_external_paint_ms = 0;
+static volatile uint32_t s_fade_arm_count = 0;
+static volatile uint32_t s_external_paint_count = 0;
+static led_fade_complete_cb_t s_fade_done_cb = NULL;
+
+// Serialises full-frame writes between the JS player, API-color setters and
+// the fade task. Recursive so apply_frame_buffer can fall through to
+// apply_last_color (or callers can wrap larger transactions) without
+// self-deadlocking. NULL until init completes — early callers (which run
+// single-threaded before tasks exist) just skip the lock.
+static SemaphoreHandle_t s_render_mutex = NULL;
+static inline void render_lock(void)
+{
+    if (s_render_mutex) xSemaphoreTakeRecursive(s_render_mutex, portMAX_DELAY);
+}
+static inline void render_unlock(void)
+{
+    if (s_render_mutex) xSemaphoreGiveRecursive(s_render_mutex);
+}
+
+// Forward decls — definitions live below led_control_init() so the fade
+// machinery groups visually with led_control_power().
+static void fade_task(void *arg);
+static void fade_arm(int8_t dir, uint16_t duration_ms);
+static uint16_t fade_observe_scale_q16(int8_t *out_completed_dir);
+static inline uint32_t now_ms(void);
 
 static inline uint8_t scale_with(uint8_t val, uint8_t effective)
 {
@@ -135,9 +205,18 @@ static inline bool backend_ready(void)
     return s_backend == LED_BACKEND_APA102 ? (s_spi != NULL) : (s_strip != NULL);
 }
 
+static inline uint8_t fade_apply(uint8_t v, uint16_t fade_q16)
+{
+    if (fade_q16 == FADE_Q16_FULL) return v;
+    if (fade_q16 == 0) return 0;
+    return (uint8_t)(((uint32_t)v * fade_q16) >> 16);
+}
+
 static void apply_last_color(void)
 {
-    if (!backend_ready() || s_led_count == 0) return;
+    render_lock();
+    if (!backend_ready() || s_led_count == 0) { render_unlock(); return; }
+    uint16_t fade_q16 = fade_observe_scale_q16(NULL);
     // Build a temporary uniform buffer so the current cap sees the full draw.
     uint32_t sum = (uint32_t)s_led_count * (s_last_color.r + s_last_color.g + s_last_color.b);
     uint8_t cap = s_brightness;
@@ -149,25 +228,35 @@ static void apply_last_color(void)
             effective = (uint8_t)(((uint32_t)cap * s_max_current_ma) / at_cap);
         }
     }
+    uint8_t r = fade_apply(s_last_color.r, fade_q16);
+    uint8_t g = fade_apply(s_last_color.g, fade_q16);
+    uint8_t b = fade_apply(s_last_color.b, fade_q16);
     for (int i = 0; i < s_led_count; i++) {
-        backend_set_pixel(i, s_last_color.r, s_last_color.g, s_last_color.b, effective);
+        backend_set_pixel(i, r, g, b, effective);
     }
     backend_refresh();
-    ESP_LOGI(TAG, "Restored color #%02x%02x%02x cap=%u effective=%u",
-             s_last_color.r, s_last_color.g, s_last_color.b, cap, effective);
+    render_unlock();
 }
 
 static void apply_frame_buffer(void)
 {
+    render_lock();
     if (!s_has_frame_buffer || s_frame_buffer == NULL) {
         apply_last_color();
+        render_unlock();
         return;
     }
+    uint16_t fade_q16 = fade_observe_scale_q16(NULL);
     uint8_t effective = compute_effective_brightness(s_frame_buffer, s_led_count);
     for (int i = 0; i < s_led_count; i++) {
-        backend_set_pixel(i, s_frame_buffer[i].r, s_frame_buffer[i].g, s_frame_buffer[i].b, effective);
+        backend_set_pixel(i,
+            fade_apply(s_frame_buffer[i].r, fade_q16),
+            fade_apply(s_frame_buffer[i].g, fade_q16),
+            fade_apply(s_frame_buffer[i].b, fade_q16),
+            effective);
     }
     backend_refresh();
+    render_unlock();
 }
 
 /** Set up led_strip SPI backend for WS2812 / SK6812(W). */
@@ -256,6 +345,13 @@ static void apa102_set_pixel(int idx, uint8_t r, uint8_t g, uint8_t b, uint8_t e
 
 esp_err_t led_control_init(int gpio_pin, int clk_pin, int led_count, const char *led_type)
 {
+    if (!s_render_mutex) {
+        s_render_mutex = xSemaphoreCreateRecursiveMutex();
+        if (!s_render_mutex) {
+            ESP_LOGE(TAG, "Failed to create render mutex");
+            return ESP_ERR_NO_MEM;
+        }
+    }
     s_led_count = led_count;
     load_last_color();
     s_brightness = (uint8_t)config_get_i32_or(NVS_KEY_BRIGHTNESS, 255);
@@ -274,6 +370,13 @@ esp_err_t led_control_init(int gpio_pin, int clk_pin, int led_count, const char 
     s_serpentine = config_get_i32_or(CONFIG_KEY_SERPENTINE, 1) != 0;
     s_serp_axis  = (int)config_get_i32_or(CONFIG_KEY_SERP_AXIS, 0);
     if (s_serp_axis != 0 && s_serp_axis != 1) s_serp_axis = 0;
+
+    int32_t on_ms  = config_get_i32_or(NVS_KEY_FADE_ON_MS,  FADE_DEFAULT_ON_MS);
+    int32_t off_ms = config_get_i32_or(NVS_KEY_FADE_OFF_MS, FADE_DEFAULT_OFF_MS);
+    if (on_ms  < 0) on_ms  = 0; else if (on_ms  > FADE_MAX_MS) on_ms  = FADE_MAX_MS;
+    if (off_ms < 0) off_ms = 0; else if (off_ms > FADE_MAX_MS) off_ms = FADE_MAX_MS;
+    s_fade_on_ms  = (uint16_t)on_ms;
+    s_fade_off_ms = (uint16_t)off_ms;
 
     s_frame_buffer = (led_color_t *)calloc(led_count, sizeof(led_color_t));
     if (!s_frame_buffer) {
@@ -302,17 +405,29 @@ esp_err_t led_control_init(int gpio_pin, int clk_pin, int led_count, const char 
         return err;
     }
 
+    // Spawn the fade-driver task before any fade is armed. It sleeps on its
+    // own notification when idle, so the cost is one suspended task slot.
+    xTaskCreate(fade_task, "led_fade", 2048, NULL, 5, &s_fade_task_handle);
+
+    // Boot: lamp comes up powered, fading in from black to the saved colour.
     s_power_on = true;
-    apply_last_color();
-    ESP_LOGI(TAG, "LED driver '%s' initialized: %d LEDs on GPIO %d (clk %d), brightness=%d max_bright=%d max_ma=%lu",
+    s_painting_active = true;
+    s_fade_scale_q16 = 0;
+    fade_arm(+1, s_fade_on_ms);
+    ESP_LOGI(TAG, "LED driver '%s' initialized: %d LEDs on GPIO %d (clk %d), brightness=%d max_bright=%d max_ma=%lu fade=%u/%u ms",
              s_led_type, led_count, gpio_pin, clk_pin,
-             s_brightness, s_max_brightness, (unsigned long)s_max_current_ma);
+             s_brightness, s_max_brightness, (unsigned long)s_max_current_ma,
+             s_fade_on_ms, s_fade_off_ms);
     return ESP_OK;
 }
 
 static esp_err_t set_all_impl(const led_color_t *colors, int count)
 {
-    if (!backend_ready() || !s_power_on) return ESP_ERR_INVALID_STATE;
+    if (!backend_ready()) return ESP_ERR_INVALID_STATE;
+    // While a fade-out is in progress we keep accepting writes even after
+    // s_power_on flips false — that's what lets a JS-mode fade-out dim the
+    // live animation instead of freezing on the last frame.
+    if (!s_power_on && !s_painting_active) return ESP_ERR_INVALID_STATE;
     if (colors == NULL || count <= 0) return ESP_ERR_INVALID_ARG;
 
     if (count != s_led_count) {
@@ -320,6 +435,7 @@ static esp_err_t set_all_impl(const led_color_t *colors, int count)
         if (count > s_led_count) count = s_led_count;
     }
 
+    render_lock();
     if (s_frame_buffer) {
         memcpy(s_frame_buffer, colors, count * sizeof(led_color_t));
         for (int i = count; i < s_led_count; i++) {
@@ -331,11 +447,20 @@ static esp_err_t set_all_impl(const led_color_t *colors, int count)
     }
 
     uint8_t effective = compute_effective_brightness(colors, count);
+    uint16_t fade_q16 = fade_observe_scale_q16(NULL);
     for (int i = 0; i < count; i++) {
-        backend_set_pixel(i, colors[i].r, colors[i].g, colors[i].b, effective);
+        backend_set_pixel(i,
+            fade_apply(colors[i].r, fade_q16),
+            fade_apply(colors[i].g, fade_q16),
+            fade_apply(colors[i].b, fade_q16),
+            effective);
     }
 
-    return backend_refresh();
+    esp_err_t err = backend_refresh();
+    s_last_external_paint_ms = now_ms();
+    s_external_paint_count++;
+    render_unlock();
+    return err;
 }
 
 esp_err_t led_control_set_all(const led_color_t *colors, int count)
@@ -355,9 +480,11 @@ esp_err_t led_control_set_all_transient(const led_color_t *colors, int count)
 
 esp_err_t led_control_set_pixel(int index, uint8_t r, uint8_t g, uint8_t b)
 {
-    if (!backend_ready() || !s_power_on) return ESP_ERR_INVALID_STATE;
+    if (!backend_ready()) return ESP_ERR_INVALID_STATE;
+    if (!s_power_on && !s_painting_active) return ESP_ERR_INVALID_STATE;
     if (index < 0 || index >= s_led_count) return ESP_ERR_INVALID_ARG;
 
+    render_lock();
     // Track the pixel in the frame buffer so brightness/current re-apply sees it,
     // and so max_current_ma is enforced against the whole buffer (not just this pixel).
     if (s_frame_buffer) {
@@ -371,20 +498,34 @@ esp_err_t led_control_set_pixel(int index, uint8_t r, uint8_t g, uint8_t b)
         ? compute_effective_brightness(s_frame_buffer, s_led_count)
         : s_brightness;
     if (s_max_brightness < effective) effective = s_max_brightness;
-    backend_set_pixel(index, r, g, b, effective);
+    uint16_t fade_q16 = fade_observe_scale_q16(NULL);
+    backend_set_pixel(index,
+        fade_apply(r, fade_q16),
+        fade_apply(g, fade_q16),
+        fade_apply(b, fade_q16),
+        effective);
+    s_last_external_paint_ms = now_ms();
+    s_external_paint_count++;
+    render_unlock();
     return ESP_OK;
 }
 
 esp_err_t led_control_refresh(void)
 {
     if (!backend_ready()) return ESP_ERR_INVALID_STATE;
-    return backend_refresh();
+    render_lock();
+    esp_err_t err = backend_refresh();
+    render_unlock();
+    return err;
 }
 
 esp_err_t led_control_clear(void)
 {
     if (!backend_ready()) return ESP_ERR_INVALID_STATE;
-    return backend_clear();
+    render_lock();
+    esp_err_t err = backend_clear();
+    render_unlock();
+    return err;
 }
 
 void led_control_enable(void)
@@ -392,16 +533,181 @@ void led_control_enable(void)
     s_power_on = true;
 }
 
+// Fade scale at progress 0..1 — *linear* for now. The sin curve we tried
+// front-loaded the change (fade-out dropped 39 % in the first 200 ms,
+// reading as a snap; fade-in flashed to 30 % in 120 ms, reading as a blink).
+// Linear feels smoother end-to-end; we can re-introduce a non-linear curve
+// once the whole pipeline reads cleanly.
+static inline uint16_t ramp_q16(float p)
+{
+    if (p <= 0.f) return 0;
+    if (p >= 1.f) return FADE_Q16_FULL;
+    int v = (int)(p * (float)FADE_Q16_FULL + 0.5f);
+    if (v < 0) v = 0; else if (v > FADE_Q16_FULL) v = FADE_Q16_FULL;
+    return (uint16_t)v;
+}
+
+static inline uint32_t now_ms(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000);
+}
+
+// Lazy scale read: computes the eased scale at NOW based on the armed fade
+// state. Painters call this on every frame so each render uses an up-to-date
+// scale (no separate ticker fighting the JS player). When the fade reaches
+// its rail this function settles the rail and clears s_fade_dir; the dir
+// observed at completion is reported via *out_completed_dir so the fade task
+// can do the post-fade cleanup (strip clear, callback) exactly once. Most
+// callers pass NULL — they don't care about completion events.
+static uint16_t fade_observe_scale_q16(int8_t *out_completed_dir)
+{
+    if (out_completed_dir) *out_completed_dir = 0;
+    int8_t dir = s_fade_dir;
+    if (dir == 0) return s_fade_scale_q16;
+
+    uint32_t elapsed = now_ms() - s_fade_start_ms;
+    uint16_t dur = s_fade_duration_ms;
+    int32_t start = s_fade_start_scale;
+    int32_t target = (dir > 0) ? FADE_Q16_FULL : 0;
+
+    if (dur == 0 || elapsed >= dur) {
+        // Landed on the rail. Settle exactly once.
+        uint16_t final = (uint16_t)target;
+        s_fade_scale_q16 = final;
+        s_fade_dir = 0;
+        if (out_completed_dir) *out_completed_dir = dir;
+        return final;
+    }
+
+    float p = (float)elapsed / (float)dur;
+    uint16_t eased = ramp_q16(p);
+    // Q16 lerp must be done in int64 — (FULL - 0) * (eased near FULL) is
+    // ~4.3 billion, which overflows int32 and wraps the result negative,
+    // which then makes `start - negative` clamp to FULL (visible bug: scale
+    // jumped back to bright mid fade-out, jumped down to 0 mid fade-in).
+    int64_t delta_e16 = (int64_t)(target - start) * (int64_t)eased;
+    int32_t scale = start + (int32_t)(delta_e16 >> 16);
+    if (scale < 0) scale = 0;
+    if (scale > FADE_Q16_FULL) scale = FADE_Q16_FULL;
+    s_fade_scale_q16 = (uint16_t)scale;
+    return (uint16_t)scale;
+}
+
+// Fade driver. Sleeps on its own notification when idle. While a fade is
+// armed:
+//   - In JS mode (something painting recently): does NOT paint — every JS
+//     frame picks up the lazily-computed scale from fade_observe_scale_q16
+//     and dims itself. We just poll for completion.
+//   - In API mode (no recent external write): repaints from the saved frame
+//     so the static colour visibly dims.
+// On fade-OUT completion: clears the strip and fires s_fade_done_cb so
+// light_api can stop the JS player AFTER the live animation has finished
+// dimming (rather than killing it the instant the off command lands).
+static void fade_task(void *arg)
+{
+    (void)arg;
+    while (1) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        while (1) {
+            int8_t completed_dir = 0;
+            fade_observe_scale_q16(&completed_dir);
+            if (completed_dir != 0) {
+                if (completed_dir < 0) {
+                    // Fade-OUT done — clear strip, drop painting flag, notify.
+                    // Also drop the cached frame buffer: the next fade-in's
+                    // pre-JS window (the few ms before the new JS task spawns
+                    // and starts painting) should fall through to a uniform
+                    // last_color paint, NOT replay the stale last JS frame.
+                    render_lock();
+                    s_painting_active = false;
+                    s_has_frame_buffer = false;
+                    backend_clear();
+                    render_unlock();
+                    if (s_fade_done_cb) s_fade_done_cb(true);
+                } else {
+                    if (s_fade_done_cb) s_fade_done_cb(false);
+                }
+                break;
+            }
+            // Mid-fade. Repaint only if no external writer has touched the
+            // strip recently — JS player paints ~30 ms apart, so a 60 ms gate
+            // keeps us out of its way while still driving API-mode fades.
+            uint32_t since_ext = now_ms() - s_last_external_paint_ms;
+            if (since_ext > 60) {
+                apply_frame_buffer();
+            }
+            vTaskDelay(pdMS_TO_TICKS(FADE_TICK_MS));
+        }
+    }
+}
+
+static void fade_arm(int8_t dir, uint16_t duration_ms)
+{
+    if (duration_ms == 0) {
+        // Snap path through the fade machinery: jump to target, paint once.
+        s_fade_scale_q16 = (dir > 0) ? FADE_Q16_FULL : 0;
+        s_fade_dir = 0;
+        if (dir > 0) {
+            apply_frame_buffer();
+        } else {
+            render_lock();
+            s_painting_active = false;
+            backend_clear();
+            render_unlock();
+        }
+        return;
+    }
+    s_fade_start_scale = s_fade_scale_q16;
+    s_fade_start_ms = now_ms();
+    s_fade_duration_ms = duration_ms;
+    s_fade_dir = dir;
+    s_fade_arm_count++;
+    if (s_fade_task_handle) {
+        xTaskNotifyGive(s_fade_task_handle);
+    }
+}
+
 esp_err_t led_control_power(bool on)
 {
     if (!backend_ready()) return ESP_ERR_INVALID_STATE;
+    if (on) {
+        // If we were mid-fade-out, the strip is still being painted (scale > 0)
+        // and s_power_on is already false — flipping back to on cancels the
+        // clear and reverses direction from the current scale.
+        s_power_on = true;
+        s_painting_active = true;
+        fade_arm(+1, s_fade_on_ms);
+    } else {
+        // Per Phase 33 spec: /api/state and BLE flip to off the instant the
+        // command lands; the fade just animates the visual.
+        s_power_on = false;
+        s_painting_active = true;
+        fade_arm(-1, s_fade_off_ms);
+    }
+    ESP_LOGI(TAG, "Power %s (fade %ums)", on ? "ON" : "OFF",
+             on ? s_fade_on_ms : s_fade_off_ms);
+    return ESP_OK;
+}
+
+esp_err_t led_control_power_snap(bool on)
+{
+    if (!backend_ready()) return ESP_ERR_INVALID_STATE;
+    // Cancel any in-flight fade and pin scale at the target. System flashes
+    // (factory-reset confirm, long-press warning, stream-mode auto-wake) need
+    // the visual to land immediately, not animate.
+    s_fade_dir = 0;
+    s_fade_scale_q16 = FADE_Q16_FULL;
     s_power_on = on;
     if (on) {
+        s_painting_active = true;
         apply_frame_buffer();
     } else {
+        render_lock();
+        s_painting_active = false;
         backend_clear();
+        render_unlock();
     }
-    ESP_LOGI(TAG, "Power %s", on ? "ON" : "OFF");
+    ESP_LOGI(TAG, "Power %s (snap)", on ? "ON" : "OFF");
     return ESP_OK;
 }
 
@@ -612,3 +918,37 @@ int  led_control_get_rotation(void)  { return s_rotation; }
 int  led_control_get_origin(void)    { return s_origin; }
 bool led_control_get_serpentine(void){ return s_serpentine; }
 int  led_control_get_serp_axis(void) { return s_serp_axis; }
+
+void led_control_set_fade_durations(uint16_t on_ms, uint16_t off_ms)
+{
+    if (on_ms  > FADE_MAX_MS) on_ms  = FADE_MAX_MS;
+    if (off_ms > FADE_MAX_MS) off_ms = FADE_MAX_MS;
+    s_fade_on_ms  = on_ms;
+    s_fade_off_ms = off_ms;
+    config_store_set_i32(NVS_KEY_FADE_ON_MS,  (int32_t)on_ms);
+    config_store_set_i32(NVS_KEY_FADE_OFF_MS, (int32_t)off_ms);
+    ESP_LOGI(TAG, "Fade durations set: on=%ums off=%ums", on_ms, off_ms);
+}
+
+uint16_t led_control_get_fade_on_ms(void)  { return s_fade_on_ms; }
+uint16_t led_control_get_fade_off_ms(void) { return s_fade_off_ms; }
+
+void led_control_set_fade_complete_cb(led_fade_complete_cb_t cb)
+{
+    s_fade_done_cb = cb;
+}
+
+void led_control_fade_debug(led_fade_debug_t *out)
+{
+    if (!out) return;
+    int8_t dir = s_fade_dir;
+    out->scale_q16 = s_fade_scale_q16;
+    out->dir = dir;
+    out->duration_ms = s_fade_duration_ms;
+    out->elapsed_ms = (dir != 0) ? (now_ms() - s_fade_start_ms) : 0;
+    out->power_on = s_power_on;
+    out->painting_active = s_painting_active;
+    out->since_external_paint_ms = now_ms() - s_last_external_paint_ms;
+    out->arm_count = s_fade_arm_count;
+    out->external_paint_count = s_external_paint_count;
+}

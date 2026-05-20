@@ -64,6 +64,13 @@ static esp_err_t start_current_js(void)
     char name[64] = {0};
     config_get_str_or(CONFIG_KEY_CURRENT_JS, name, sizeof(name), "");
     if (!name[0]) return ESP_ERR_NOT_FOUND;
+    // Already playing this script — skip the restart so we don't bin the
+    // animation's running state (jumpy's head, depthswirl's phase, etc.)
+    // when the user toggles on mid-fade-out.
+    const char *cur = js_player_current_name();
+    if (js_player_is_running() && cur && strcmp(cur, name) == 0) {
+        return ESP_OK;
+    }
     char *src = NULL;
     size_t len = 0;
     esp_err_t err = js_storage_read(name, &src, &len);
@@ -80,6 +87,20 @@ static esp_err_t start_current_js(void)
 // file and the BLE GATT layer in bt_service.c. Keeping them here means there's
 // exactly one place that decides what "set color" or "switch to js mode" mean.
 
+// Fires from led_control's fade task once a power-fade completes. On a
+// fade-OUT we stop the JS player here — NOT synchronously in apply_power(false)
+// — so the live animation keeps running and dimming naturally for the whole
+// fade window instead of freezing on a single frame at t=0.
+static void on_fade_complete(bool was_off)
+{
+    if (!was_off) return;
+    char mode[16] = {0};
+    get_persistent_mode(mode, sizeof(mode));
+    if (strcmp(mode, "js") == 0) {
+        js_player_stop();
+    }
+}
+
 void light_api_apply_power(bool on)
 {
     char mode[16] = {0};
@@ -87,9 +108,13 @@ void light_api_apply_power(bool on)
     if (strcmp(mode, "js") == 0) {
         if (on) {
             led_control_power(true);
+            // start_current_js is idempotent — safe to call when the player
+            // is already running (e.g. user toggled on mid-fade-out, before
+            // the fade-completion callback got a chance to stop it).
             (void)start_current_js();
         } else {
-            js_player_stop();
+            // JS player keeps running through the fade-out. on_fade_complete()
+            // will stop it once led_control's fade task finishes the ramp.
             led_control_power(false);
         }
     } else {
@@ -318,6 +343,73 @@ static esp_err_t brightness_set_handler(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, resp);
     return ESP_OK;
+}
+
+// GET /api/fade -> {"onMs":N,"offMs":N}
+static esp_err_t fade_get_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
+    char resp[48];
+    snprintf(resp, sizeof(resp),
+             "{\"onMs\":%u,\"offMs\":%u}",
+             (unsigned)led_control_get_fade_on_ms(),
+             (unsigned)led_control_get_fade_off_ms());
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, resp);
+    return ESP_OK;
+}
+
+// GET /api/fade/debug -> live fade-engine snapshot. Used during Phase 33
+// bring-up to observe what the fade machinery is actually doing without
+// access to serial logs. Safe to leave in (admin-gated, small response).
+static esp_err_t fade_debug_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
+    led_fade_debug_t d;
+    led_control_fade_debug(&d);
+    char resp[256];
+    snprintf(resp, sizeof(resp),
+             "{\"scaleQ16\":%u,\"dir\":%d,\"durationMs\":%u,\"elapsedMs\":%lu,"
+             "\"powerOn\":%s,\"paintingActive\":%s,"
+             "\"sinceExternalPaintMs\":%lu,\"armCount\":%lu,\"externalPaintCount\":%lu}",
+             (unsigned)d.scale_q16, (int)d.dir, (unsigned)d.duration_ms,
+             (unsigned long)d.elapsed_ms,
+             d.power_on ? "true" : "false",
+             d.painting_active ? "true" : "false",
+             (unsigned long)d.since_external_paint_ms,
+             (unsigned long)d.arm_count,
+             (unsigned long)d.external_paint_count);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, resp);
+    return ESP_OK;
+}
+
+// POST /api/fade {"onMs":N,"offMs":N} — either field optional; 0 = instant snap,
+// upper bound 5000 ms (firmware clamp). Creator role to match brightness.
+static esp_err_t fade_set_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_CREATOR) != ESP_OK) return ESP_FAIL;
+    char buf[96] = {0};
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
+        return ESP_FAIL;
+    }
+    uint16_t on_ms  = led_control_get_fade_on_ms();
+    uint16_t off_ms = led_control_get_fade_off_ms();
+    char *p;
+    if ((p = strstr(buf, "onMs")) != NULL && (p = strchr(p, ':')) != NULL) {
+        int v = atoi(p + 1);
+        if (v < 0) v = 0; else if (v > 5000) v = 5000;
+        on_ms = (uint16_t)v;
+    }
+    if ((p = strstr(buf, "offMs")) != NULL && (p = strchr(p, ':')) != NULL) {
+        int v = atoi(p + 1);
+        if (v < 0) v = 0; else if (v > 5000) v = 5000;
+        off_ms = (uint16_t)v;
+    }
+    led_control_set_fade_durations(on_ms, off_ms);
+    return fade_get_handler(req);
 }
 
 // GET /api/limits -> {"maxBrightness":N,"maxCurrentMa":N}
@@ -880,6 +972,10 @@ static esp_err_t wormhole_creative_handler(httpd_req_t *req)
 
 esp_err_t light_api_register(httpd_handle_t server)
 {
+    // Hook into the LED fade lifecycle so we can stop the JS player AFTER a
+    // fade-out finishes (rather than synchronously on the off command).
+    led_control_set_fade_complete_cb(on_fade_complete);
+
     httpd_uri_t power = {
         .uri = "/api/power",
         .method = HTTP_POST,
@@ -921,6 +1017,27 @@ esp_err_t light_api_register(httpd_handle_t server)
         .handler = base_color_get_handler
     };
     httpd_register_uri_handler(server, &base_color_get);
+
+    httpd_uri_t fade_get = {
+        .uri = "/api/fade",
+        .method = HTTP_GET,
+        .handler = fade_get_handler
+    };
+    httpd_register_uri_handler(server, &fade_get);
+
+    httpd_uri_t fade_set = {
+        .uri = "/api/fade",
+        .method = HTTP_POST,
+        .handler = fade_set_handler
+    };
+    httpd_register_uri_handler(server, &fade_set);
+
+    httpd_uri_t fade_debug = {
+        .uri = "/api/fade/debug",
+        .method = HTTP_GET,
+        .handler = fade_debug_handler
+    };
+    httpd_register_uri_handler(server, &fade_debug);
 
     httpd_uri_t limits_get = {
         .uri = "/api/limits",

@@ -30,7 +30,14 @@ esp_err_t led_control_set_all_transient(const led_color_t *colors, int count);
 esp_err_t led_control_set_pixel(int index, uint8_t r, uint8_t g, uint8_t b);
 esp_err_t led_control_refresh(void);
 esp_err_t led_control_clear(void);
+/** User-facing power toggle. Runs the configured on/off fade animation.
+ *  Fade duration is per-direction (see led_control_set_fade_durations);
+ *  duration == 0 makes that direction instant. */
 esp_err_t led_control_power(bool on);
+/** Instant on/off — bypasses the fade. Use for system indicator flashes
+ *  (factory-reset confirm, long-press warning) and other places where the
+ *  visual must snap, not animate. */
+esp_err_t led_control_power_snap(bool on);
 void led_control_enable(void);  // power on without restoring last color
 bool led_control_is_on(void);
 int led_control_get_count(void);
@@ -84,3 +91,32 @@ int  led_control_get_rotation(void);
 int  led_control_get_origin(void);
 bool led_control_get_serpentine(void);
 int  led_control_get_serp_axis(void);
+
+/** On/off fade durations in milliseconds. 0 disables the fade in that
+ *  direction. Persisted to NVS. The transient indicator path
+ *  (led_control_set_all_transient + led_control_power_snap) bypasses this. */
+void     led_control_set_fade_durations(uint16_t on_ms, uint16_t off_ms);
+uint16_t led_control_get_fade_on_ms(void);
+uint16_t led_control_get_fade_off_ms(void);
+
+/** Fade-completion callback. Fires from the fade task once a power-fade
+ *  finishes. was_off==true means a fade-OUT just completed and the strip
+ *  has been cleared — light_api uses this to stop the JS player only
+ *  after the live animation has finished dimming. NULL clears the cb. */
+typedef void (*led_fade_complete_cb_t)(bool was_off);
+void led_control_set_fade_complete_cb(led_fade_complete_cb_t cb);
+
+/** Diagnostic snapshot of fade-engine state. Used by /api/fade/debug to
+ *  observe what's actually happening during a fade without serial logs. */
+typedef struct {
+    uint16_t scale_q16;
+    int8_t   dir;
+    uint16_t duration_ms;
+    uint32_t elapsed_ms;
+    bool     power_on;
+    bool     painting_active;
+    uint32_t since_external_paint_ms;
+    uint32_t arm_count;
+    uint32_t external_paint_count;
+} led_fade_debug_t;
+void led_control_fade_debug(led_fade_debug_t *out);

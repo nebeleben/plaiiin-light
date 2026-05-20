@@ -37,7 +37,9 @@ static void paint_solid(uint8_t r, uint8_t g, uint8_t b)
     if (!frame) return;
     led_color_t c = {r, g, b};
     for (int i = 0; i < n; i++) frame[i] = c;
-    led_control_power(true);
+    // Snap power-on (bypass the on/off fade) — the warning indicator must
+    // appear the instant the press registers, not fade in.
+    led_control_power_snap(true);
     // Transient: this is a long-press warning indicator, not a user-set color,
     // so it must not stomp last_color in NVS — otherwise the next boot
     // restores green/blue across the whole strip.

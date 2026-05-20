@@ -24,11 +24,13 @@ static void confirm_blink(uint8_t r, uint8_t g, uint8_t b)
     if (!frame) return;
     for (int i = 0; i < n; i++) frame[i] = color;
     for (int i = 0; i < 2; i++) {
-        led_control_power(true);
+        // Snap power on/off so the flash reads as a sharp blink, not a 600 ms
+        // ramp inside a 160 ms window.
+        led_control_power_snap(true);
         // Transient: confirmation flash, not a user color — see paint_solid().
         led_control_set_all_transient(frame, n);
         vTaskDelay(pdMS_TO_TICKS(160));
-        led_control_power(false);
+        led_control_power_snap(false);
         vTaskDelay(pdMS_TO_TICKS(120));
     }
     free(frame);
