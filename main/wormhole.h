@@ -10,8 +10,9 @@
  * A wormhole lamp is N rings of 24 LEDs. The physical chain places `ring r`
  * at physical indices `r*24 .. r*24+23`. Two render modes:
  *
- *  - strip  — the effect renders the whole construct. Render grid =
- *             24 x ringCount; a script sees x = position-on-ring, y = ring.
+ *  - strip  — the effect renders the whole construct as a flat strip. Render
+ *             grid = (24 * ringCount) x 1; a script sees idx 0..N-1 and, if it
+ *             wants ring structure, derives ring = floor(idx/24) itself.
  *             The default, out-of-the-box mode.
  *  - mirror — the effect renders ONE 24-LED ring; firmware tiles that ring
  *             onto every physical ring with per-ring transforms. Firmware-only;

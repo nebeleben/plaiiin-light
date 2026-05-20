@@ -72,13 +72,14 @@ static void build_hardcoded(char *out, size_t max_len,
             // Strip mode — the script renders the whole construct.
             snprintf(out, max_len,
                 "PHYSICAL FORM: wormhole (strip mode). %d stacked 24-LED rings "
-                "(%d LEDs total) form a tunnel. ring = floor(idx / 24); "
+                "(%d LEDs total) form a tunnel. The grid is one flat strip — "
+                "use idx (0..%d); x = idx and y = 0. ring = floor(idx / 24); "
                 "position-on-ring = idx mod 24 (0..23, wraps seamlessly — "
                 "derive an angle as (idx mod 24) / 24). Rings alternate "
                 "physical facing: even rings face one way, odd rings the "
                 "opposite — mirror odd rings for symmetric tunnel effects. "
                 "Depth runs along the ring axis from ring 0 outward.",
-                rings, count);
+                rings, count, count - 1);
         }
     } else if (strcmp(lamp_form, "rocket") == 0) {
         snprintf(out, max_len,

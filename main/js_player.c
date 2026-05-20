@@ -103,18 +103,22 @@ static void get_grid(int *w, int *h)
     *h = lh > 0 ? lh : 1;
 }
 
-/* Phase 29 — render geometry. For a wormhole lamp the render grid is
- * decoupled from the physical strip: the script renders a 24 x rings (strip)
- * or 24 x 1 (mirror) grid, then wormhole_expand() tiles it onto led_count
- * physical pixels. For every other form this is identical to get_grid(), so
- * the non-wormhole code path is byte-for-byte unchanged. */
+/* Phase 29/30 — render geometry. For a wormhole lamp the render grid is
+ * decoupled from the physical strip:
+ *   strip  — a flat (24 * rings) x 1 strip. The script sees idx 0..N-1 and,
+ *            if it wants ring structure, derives ring = floor(idx/24) itself.
+ *   mirror — a single 24 x 1 ring; wormhole_expand() tiles it onto every
+ *            physical ring.
+ * Either way wormhole_expand() maps the render buffer onto led_count physical
+ * pixels. h is always 1 for a wormhole. For every other form this is identical
+ * to get_grid(), so the non-wormhole code path is byte-for-byte unchanged. */
 static void get_render_grid(int *w, int *h, bool *is_wormhole)
 {
     bool wh = wormhole_is_wormhole();
     if (is_wormhole) *is_wormhole = wh;
     if (wh) {
-        *w = 24;
-        *h = (wormhole_mode() == WORMHOLE_MODE_MIRROR) ? 1 : wormhole_rings();
+        *w = (wormhole_mode() == WORMHOLE_MODE_MIRROR) ? 24 : (24 * wormhole_rings());
+        *h = 1;
     } else {
         get_grid(w, h);
     }

@@ -13,8 +13,10 @@
 // no ring is ever permanently lit. Everything is drawn in the lamp's base
 // colour.
 //
-// Strip mode: x = position-on-ring (0..23), y = ring index. The orbit angle
-// is derived from x/24 so the dot wraps cleanly across the x 0/23 seam.
+// Strip mode hands the script one flat strip (idx 0..N-1). A wormhole ring is
+// always 24 LEDs, so this effect derives the ring count, the current ring and
+// the position-within-ring from idx itself. If it is accidentally played in
+// mirror mode (w == 24) `rings` collapses to 1 and it just runs on one ring.
 //
 // `speed` is the marble's average descent rate; `swirl` is orbits-per-ring;
 // `spin` accelerates the orbit with depth; `glow` is the brightness of the
@@ -28,10 +30,17 @@
 function shade(x, y, idx, frame, base, params) {
   let t = time * 0.001;
 
-  // The marble covers `span` rings per cycle (span > h so it fully exits).
-  let span = h + 1;
+  // Wormhole geometry derived from idx — 24 LEDs per ring. In mirror mode
+  // w == 24, so rings becomes 1 and the effect degrades to a single ring.
+  let rings = floor(w / 24);
+  if (rings < 1) { rings = 1; }
+  let ring = floor(idx / 24);
+  let xr = idx - ring * 24;            // 0..23 within this ring
+
+  // The marble covers `span` rings per cycle (span > rings so it fully exits).
+  let span = rings + 1;
   let cycleT = span / params.speed;
-  let p = (t % cycleT) / cycleT;          // cycle phase 0..1
+  let p = (t % cycleT) / cycleT;       // cycle phase 0..1
 
   // Non-linear depth: slow at the mouth, ludicrous through the centre, slow
   // again at the end. Passing the phase through sin twice concentrates the
@@ -43,8 +52,8 @@ function shade(x, y, idx, frame, base, params) {
   let g = 0.5 * (1 + q);
   let depth = span * (0.12 * p + 0.88 * g);
 
-  // This pixel's angle around its ring, 0..2π, from x/24 (seam-safe).
-  let ang = x / w * 6.28318;
+  // This pixel's angle around its ring, 0..2π, from xr/24 (seam-safe).
+  let ang = xr / 24 * 6.28318;
 
   // Marble's orbit angle: base swirl plus a depth-dependent spin-up — the
   // corkscrew naturally whips around fastest during the centre pass.
@@ -56,7 +65,7 @@ function shade(x, y, idx, frame, base, params) {
   da = da - 6.28318 * floor(da / 6.28318 + 0.5);
 
   // Depth distance from this ring to the marble's current ring.
-  let dy = y - depth;
+  let dy = ring - depth;
 
   let bright = 0;
   // The marble: a tight blob localised in both angle and depth.

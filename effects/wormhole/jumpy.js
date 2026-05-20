@@ -12,9 +12,11 @@
 // shrinks away. The result is a restless point of light hopping all over the
 // construct. Drawn in the lamp's base colour.
 //
-// Strip mode: x = position-on-ring (0..23), y = ring index. The head jumps
-// among ALL rings (0..h-1). With h == 1 it just keeps running on the single
-// ring without jumping (degrades gracefully).
+// Strip mode hands the script one flat strip (idx 0..N-1). A wormhole ring is
+// always 24 LEDs, so this effect derives the ring count, the current ring and
+// the position-within-ring from idx itself. If it is accidentally played in
+// mirror mode (w == 24) `rings` collapses to 1 and the head simply never jumps
+// — it just keeps orbiting the single ring.
 //
 // Ported from WormholeJumpyPatternV1.cpp. The C++ `computeTravel` sub-step
 // integration is simplified to one Euler step per frame; one decaying tail is
@@ -49,7 +51,13 @@
 // @state prevHas: 0
 
 function shade(x, y, idx, frame, base, params) {
-  let ringW = w;                 // positions around one ring (24)
+  let ringW = 24;                       // a wormhole ring is always 24 LEDs
+
+  // Wormhole geometry derived from idx. In mirror mode w == 24 so rings == 1.
+  let rings = floor(w / 24);
+  if (rings < 1) { rings = 1; }
+  let ring = floor(idx / 24);
+  let xr = idx - ring * 24;             // 0..23 within this ring
 
   // ---------- Per-frame simulation (runs once, before pixel 0) ----------
   if (idx == 0) {
@@ -100,15 +108,15 @@ function shade(x, y, idx, frame, base, params) {
     // Jump check. Only one jump per frame is resolved (per-frame dt is tiny
     // relative to jump distances, so multi-jump is not needed).
     if (distSinceJump >= nextJump) {
-      if (h > 1) {
+      if (rings > 1) {
         // Freeze a decaying tail on the ring being vacated.
         prevRing = activeRing;
         prevHead = headPos;
         prevLen = params.tail;
         prevHas = 1;
-        // Pick a different ring at random — uniform among the h-1 others.
-        let nr = activeRing + 1 + floor(random() * (h - 1));
-        nr = nr - floor(nr / h) * h;
+        // Pick a different ring at random — uniform among the rings-1 others.
+        let nr = activeRing + 1 + floor(random() * (rings - 1));
+        nr = nr - floor(nr / rings) * rings;
         activeRing = nr;
       }
       distSinceJump = 0;
@@ -121,9 +129,9 @@ function shade(x, y, idx, frame, base, params) {
   let bright = 0;
 
   // Active ring: bright head core plus a live decaying tail.
-  if (y == activeRing) {
+  if (ring == activeRing) {
     // Signed gap from head BACK to this pixel, wrapped into [0, ringW).
-    let gap = headPos - x;
+    let gap = headPos - xr;
     gap = gap - floor(gap / ringW) * ringW;
 
     // Head core — a cosine bump ~1.5 px wide either side of the head.
@@ -146,8 +154,8 @@ function shade(x, y, idx, frame, base, params) {
   }
 
   // Vacated ring: render its frozen, shrinking tail.
-  if (y == prevRing && prevHas > 0) {
-    let g0 = prevHead - x;
+  if (ring == prevRing && prevHas > 0) {
+    let g0 = prevHead - xr;
     g0 = g0 - floor(g0 / ringW) * ringW;
     if (g0 <= prevLen && prevLen > 0) {
       let lin0 = 1 - g0 / params.tail;

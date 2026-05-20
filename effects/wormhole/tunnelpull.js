@@ -1,19 +1,22 @@
 // @mode strip
 //
 // Tunnel Pull — light dragged along the depth axis of the wormhole. A bright
-// ring-front travels ring-to-ring along `y` and *accelerates* as it goes, so
-// each ring lights a little sooner than the last — the construct reads as
-// matter being sucked through the wormhole. Each cycle the pull direction is
-// chosen at random, so the light is sometimes drawn toward the throat and
-// sometimes back out toward the mouth.
+// ring-front travels ring-to-ring and *accelerates* as it goes, so each ring
+// lights a little sooner than the last — the construct reads as matter being
+// sucked through the wormhole. Each cycle the pull direction is chosen at
+// random, so the light is sometimes drawn toward the throat and sometimes
+// back out toward the mouth.
 //
 // On the lamp every physical ring (a 24-LED circle) flashes whole, in order,
 // faster and faster, then the pull restarts in a (possibly new) direction. A
 // soft trailing glow lingers on the rings the front has already passed.
 // Drawn in the lamp's base colour.
 //
-// Strip mode: x = position-on-ring (0..23, wraps at the seam), y = ring index.
-// The whole ring shares one brightness, so the seam at x 0/23 is continuous.
+// Strip mode hands the script one flat strip (idx 0..N-1). A wormhole ring is
+// always 24 LEDs, so this effect derives the ring count and the current ring
+// from idx itself; the whole ring shares one brightness. If it is accidentally
+// played in mirror mode (w == 24) `rings` collapses to 1 and it runs on a
+// single ring.
 //
 // `speed` sets the base fall rate; `accel` is how much faster the front gets
 // per ring travelled; `trail` is how long the glow lingers behind the front.
@@ -26,9 +29,15 @@ function shade(x, y, idx, frame, base, params) {
   // Wall-clock seconds since playback start drives the pull.
   let t = time * 0.001;
 
+  // Wormhole geometry from idx — 24 LEDs per ring. In mirror mode w == 24 so
+  // rings collapses to 1.
+  let rings = floor(w / 24);
+  if (rings < 1) { rings = 1; }
+  let ring = floor(idx / 24);
+
   // The accelerating front covers `span` rings per cycle. Solve
   // depth(t) = speed*t + accel*t*t = span for the cycle duration.
-  let span = h + params.trail;
+  let span = rings + params.trail;
   let cycleT = (-params.speed + sqrt(params.speed * params.speed
               + 4 * (params.accel + 0.0001) * span))
               / (2 * (params.accel + 0.0001));
@@ -47,9 +56,9 @@ function shade(x, y, idx, frame, base, params) {
   // How far THIS ring sits behind the front (positive = front has passed it).
   let behind = 0;
   if (dir > 0) {
-    behind = front - y;                  // front runs mouth -> throat
+    behind = front - ring;               // front runs mouth -> throat
   } else {
-    behind = y - (h - 1 - front);        // front runs throat -> mouth
+    behind = ring - (rings - 1 - front); // front runs throat -> mouth
   }
 
   let bright = 0;
