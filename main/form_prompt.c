@@ -45,13 +45,15 @@ static void build_hardcoded(char *out, size_t max_len,
         int faces = (per > 0) ? count / per : 5;
         snprintf(out, max_len,
             "PHYSICAL FORM: cube. %d square %dx%d panels (%d LEDs total) form a "
-            "5-sided cube. Faces in wiring order: A=front, B=right, C=back, "
-            "D=left, E=top. From the flat index: face = floor(idx / %d); within "
-            "a face row = floor((idx mod %d) / %d) and col = idx mod %d. Faces "
-            "A,B,C,D form a horizontal band around the cube (B,C,D continue on "
-            "from A); E caps the top. Prefer idx-based math for effects that "
-            "cross faces — the x/y grid is meaningful per-face only.",
-            faces, n, n, count, per, per, n, n);
+            "5-sided cube wired as ONE %d-LED chain. The render grid is the "
+            "full chain as a strip: w=%d, h=1, idx 0..%d. Faces in wiring "
+            "order: A=front, B=right, C=back, D=left, E=top. From the flat "
+            "index: face = floor(idx / %d); within a face row = floor((idx mod "
+            "%d) / %d) and col = idx mod %d. Faces A,B,C,D form a horizontal "
+            "band around the cube (B,C,D continue on from A); E caps the top. "
+            "Always use idx-based math — x/y are NOT spatial here (h=1). "
+            "Derive per-face position via face/row/col yourself.",
+            faces, n, n, count, count, count, count - 1, per, per, n, n);
     } else if (strcmp(lamp_form, "wormhole") == 0) {
         int rings = wormhole_is_wormhole() ? wormhole_rings() : count / 24;
         if (rings < 1) rings = 1;

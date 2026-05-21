@@ -16,6 +16,7 @@
  */
 
 #include "hardcoded_effects.h"
+#include "config_store.h"
 #include "led_control.h"
 #include "wormhole.h"
 #include "esp_log.h"
@@ -29,6 +30,8 @@ static const char *TAG = "hc_runtime";
 
 #define HC_TASK_PRIORITY     5
 #define HC_TASK_STACK_BYTES  4096
+/* Upper bound on logical render-grid pixels. Cube uses the chain-direct path
+ * (one LED per cell) so its limit scales with led_count, not this constant. */
 #define HC_RENDER_MAX_PIXELS 1024
 #define HC_FPS_WINDOW_MS     5000
 #define HC_FPS_WINDOW_SLOTS  256
@@ -80,12 +83,31 @@ static void get_grid(int *w, int *h)
     *h = lh > 0 ? lh : 1;
 }
 
-static void get_render_grid(int *w, int *h, bool *is_wormhole)
+/* The cube wires 5 panels (front/right/back/left/top) back-to-back into one
+ * 320-LED chain, while led_control_set_logical only writes a single panel.
+ * For cube effects we therefore allocate a chain-sized buffer, pass it as
+ * (w=led_count, h=1), and bypass set_logical with led_control_set_all. The
+ * effect uses the form-prompt idx convention (face = idx/64) to draw across
+ * faces. Tower and other matrix forms keep the per-panel logical-grid path. */
+static bool is_cube_form(void)
+{
+    char lamp_form[32];
+    config_get_str_or(CONFIG_KEY_LAMP_FORM, lamp_form, sizeof(lamp_form),
+                      CONFIG_PLAIIIN_FORM);
+    return strcmp(lamp_form, "cube") == 0;
+}
+
+static void get_render_grid(int *w, int *h, bool *is_wormhole, bool *is_cube)
 {
     bool wh = wormhole_is_wormhole();
+    bool cu = !wh && is_cube_form();
     if (is_wormhole) *is_wormhole = wh;
+    if (is_cube) *is_cube = cu;
     if (wh) {
         *w = (wormhole_mode() == WORMHOLE_MODE_MIRROR) ? 24 : (24 * wormhole_rings());
+        *h = 1;
+    } else if (cu) {
+        *w = led_control_get_count();
         *h = 1;
     } else {
         get_grid(w, h);
@@ -97,11 +119,13 @@ static void hc_player_task(void *arg)
     (void)arg;
     ESP_LOGI(TAG, "Hardcoded player started for '%s'", s_current_name);
 
-    bool is_wormhole = false;
+    bool is_wormhole = false, is_cube = false;
     int w, h;
-    get_render_grid(&w, &h, &is_wormhole);
+    get_render_grid(&w, &h, &is_wormhole, &is_cube);
     int total = w * h;
-    if (total > HC_RENDER_MAX_PIXELS) total = HC_RENDER_MAX_PIXELS;
+    /* Cube uses chain-space directly (one LED per cell), so its buffer must
+     * scale with led_count and not be clipped by HC_RENDER_MAX_PIXELS. */
+    if (!is_cube && total > HC_RENDER_MAX_PIXELS) total = HC_RENDER_MAX_PIXELS;
 
     led_color_t *frame = (led_color_t *)calloc(total, sizeof(led_color_t));
     int wh_rings = is_wormhole ? wormhole_rings() : 0;
@@ -147,6 +171,8 @@ static void hc_player_task(void *arg)
             if (is_wormhole) {
                 wormhole_expand(frame, total, phys, wh_rings, wh_mirror);
                 led_control_set_all(phys, phys_total);
+            } else if (is_cube) {
+                led_control_set_all(frame, total);
             } else {
                 led_control_set_logical(frame, w, h);
             }

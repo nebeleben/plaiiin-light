@@ -20,6 +20,7 @@
 #include "js_storage.h"
 #include "wormhole.h"
 #include "plbc.h"
+#include "config_store.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -103,21 +104,34 @@ static void get_grid(int *w, int *h)
     *h = lh > 0 ? lh : 1;
 }
 
-/* Phase 29/30 — render geometry. For a wormhole lamp the render grid is
- * decoupled from the physical strip:
- *   strip  — a flat (24 * rings) x 1 strip. The script sees idx 0..N-1 and,
- *            if it wants ring structure, derives ring = floor(idx/24) itself.
- *   mirror — a single 24 x 1 ring; wormhole_expand() tiles it onto every
- *            physical ring.
- * Either way wormhole_expand() maps the render buffer onto led_count physical
- * pixels. h is always 1 for a wormhole. For every other form this is identical
- * to get_grid(), so the non-wormhole code path is byte-for-byte unchanged. */
-static void get_render_grid(int *w, int *h, bool *is_wormhole)
+/* Phase 29/30/35 — render geometry. Three modes:
+ *   wormhole — render buffer decoupled from physical strip; wormhole_expand
+ *              tiles a (24*rings)x1 strip or a single 24x1 ring onto the wire.
+ *   cube     — script renders the whole 320-LED chain as a flat strip
+ *              (w=led_count, h=1). Faces are derived by idx convention from
+ *              the form prompt (face=idx/64). led_control_set_all writes the
+ *              buffer to the wire directly; no per-face tiling in firmware.
+ *   default  — per-panel logical grid (the legacy tower / strip path).
+ * For non-wormhole/non-cube forms the code path is byte-for-byte unchanged. */
+static bool is_cube_form(void)
+{
+    char lamp_form[32];
+    config_get_str_or(CONFIG_KEY_LAMP_FORM, lamp_form, sizeof(lamp_form),
+                      CONFIG_PLAIIIN_FORM);
+    return strcmp(lamp_form, "cube") == 0;
+}
+
+static void get_render_grid(int *w, int *h, bool *is_wormhole, bool *is_cube)
 {
     bool wh = wormhole_is_wormhole();
+    bool cu = !wh && is_cube_form();
     if (is_wormhole) *is_wormhole = wh;
+    if (is_cube)     *is_cube = cu;
     if (wh) {
         *w = (wormhole_mode() == WORMHOLE_MODE_MIRROR) ? 24 : (24 * wormhole_rings());
+        *h = 1;
+    } else if (cu) {
+        *w = led_control_get_count();
         *h = 1;
     } else {
         get_grid(w, h);
@@ -163,11 +177,13 @@ static void player_task(void *arg)
     /* Render geometry — decoupled from the physical strip for a wormhole
      * lamp (Phase 29). For every other form `is_wormhole` is false and the
      * code path below is identical to before. */
-    bool is_wormhole = false;
+    bool is_wormhole = false, is_cube = false;
     int w, h;
-    get_render_grid(&w, &h, &is_wormhole);
+    get_render_grid(&w, &h, &is_wormhole, &is_cube);
     int total = w * h;
-    if (total > RENDER_MAX_PIXELS) total = RENDER_MAX_PIXELS;
+    /* Cube uses chain-space (one LED per cell) so its buffer must scale with
+     * led_count, not the legacy 1024-pixel matrix limit. */
+    if (!is_cube && total > RENDER_MAX_PIXELS) total = RENDER_MAX_PIXELS;
 
     led_color_t *frame = (led_color_t *)calloc(total, sizeof(led_color_t));
     if (!frame) {
@@ -258,6 +274,10 @@ static void player_task(void *arg)
                  * wormhole_expand() the WebSocket stream path uses. */
                 wormhole_expand(frame, total, phys, wh_rings, wh_mirror);
                 led_control_set_all(phys, phys_total);
+            } else if (is_cube) {
+                /* Cube renders the full chain directly — script controls every
+                 * face via idx (face = idx/64 per the form prompt). */
+                led_control_set_all(frame, total);
             } else {
                 led_control_set_logical(frame, w, h);
             }

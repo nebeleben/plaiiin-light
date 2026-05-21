@@ -834,6 +834,12 @@ int led_control_get_logical_h(void)
 // (px,py) on a phys_w × phys_h grid given origin corner + serpentine wiring + axis.
 // (px,py) are in *panel* (post-rotation) space — i.e. how the source image looks
 // when oriented for the viewer.
+//
+// For multi-panel chains (e.g. the cube — five 8x8 faces wired back-to-back into
+// one 320-LED strip) the chain row/col counter is taken modulo the panel size,
+// so each face maps to the same (px,py) range and gets the same source image
+// tiled onto it. Single-panel forms (tower) are unaffected because their chain
+// already fits within phys_w*phys_h.
 static inline void chain_to_panel(int chain_i, int phys_w, int phys_h,
                                   int origin, bool serpentine, int serp_axis,
                                   int *out_px, int *out_py)
@@ -841,16 +847,18 @@ static inline void chain_to_panel(int chain_i, int phys_w, int phys_h,
     int x, y;
     if (serp_axis == 0) {
         // Chain advances along X within a row, then steps in Y.
-        int row = chain_i / phys_w;
-        int col = chain_i - row * phys_w;
+        int row_chain = chain_i / phys_w;
+        int col       = chain_i - row_chain * phys_w;
+        int row       = (phys_h > 0) ? (row_chain % phys_h) : row_chain;
         // For serpentine wiring, every odd row reverses direction.
         if (serpentine && (row & 1)) col = phys_w - 1 - col;
         x = col;
         y = row;
     } else {
         // Chain advances along Y within a column, then steps in X.
-        int col = chain_i / phys_h;
-        int row = chain_i - col * phys_h;
+        int col_chain = chain_i / phys_h;
+        int row       = chain_i - col_chain * phys_h;
+        int col       = (phys_w > 0) ? (col_chain % phys_w) : col_chain;
         if (serpentine && (col & 1)) row = phys_h - 1 - row;
         x = col;
         y = row;
@@ -869,8 +877,9 @@ esp_err_t led_control_set_logical(const led_color_t *colors, int logical_w, int 
     int gh = s_px_group_h > 0 ? s_px_group_h : 1;
     int phys_w = s_phys_w > 0 ? s_phys_w : (logical_w * gw);
     int phys_h = s_phys_h > 0 ? s_phys_h : (logical_h * gh);
-    int total = phys_w * phys_h;
-    if (total > s_led_count) total = s_led_count;
+    // Iterate the whole chain; chain_to_panel modulos by phys_w/phys_h so
+    // multi-panel chains (cube) get the source image tiled onto every face.
+    int total = s_led_count;
 
     led_color_t *frame = (led_color_t *)calloc(total, sizeof(led_color_t));
     if (!frame) return ESP_ERR_NO_MEM;
@@ -885,7 +894,7 @@ esp_err_t led_control_set_logical(const led_color_t *colors, int logical_w, int 
 
     // Panel-space dimensions are the same as physical dimensions; the
     // rotation only affects how we sample the *source* image.
-    for (int chain_i = 0; chain_i < s_led_count && chain_i < total; chain_i++) {
+    for (int chain_i = 0; chain_i < total; chain_i++) {
         int px, py;
         chain_to_panel(chain_i, phys_w, phys_h, origin, serp, serp_axis, &px, &py);
 
