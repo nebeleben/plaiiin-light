@@ -24,4 +24,22 @@ if(NOT DEFINED PROJECT_VER OR PROJECT_VER STREQUAL "")
 endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(plaiiinlight_os)
+
+# Phase 35 — per-form firmware. Bake the form name into the project name so
+# esp_app_desc.project_name reads "plaiiinlight_os_<form>". /api/ota uses
+# that to refuse a binary built for a different form than the device.
+#
+# We read LAMPOS_FORM from the environment, not a -D cache var: ESP-IDF
+# invokes `component_get_requirements` in a sub-cmake process that doesn't
+# inherit -D, so cache values get dropped on the way down. Environment
+# variables survive the sub-process boundary cleanly. build.sh exports the
+# variable before calling idf.py.
+if(DEFINED ENV{LAMPOS_FORM} AND NOT "$ENV{LAMPOS_FORM}" STREQUAL "")
+    set(LAMPOS_FORM "$ENV{LAMPOS_FORM}")
+endif()
+if(NOT DEFINED LAMPOS_FORM OR LAMPOS_FORM STREQUAL "")
+    message(FATAL_ERROR
+        "LAMPOS_FORM is not set. Pass it via scripts/build.sh --form <name> "
+        "(which `export`s LAMPOS_FORM before invoking idf.py).")
+endif()
+project(plaiiinlight_os_${LAMPOS_FORM})

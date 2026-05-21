@@ -37,3 +37,11 @@ esp_err_t js_api_play_prev(char *out_name, size_t out_len);
 
 /** Stop playback. */
 void js_api_stop(void);
+
+/* Phase 35 — runtime-agnostic playback accessors. Callers that just want
+ * "what's playing right now and how fast" should use these instead of the
+ * PLBC-specific js_player_* getters: they automatically report whichever
+ * runtime (PLBC or hardcoded) currently has the stage. */
+const char *js_api_current_name(void);
+float       js_api_get_fps(void);
+bool        js_api_is_running(void);

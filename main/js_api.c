@@ -1,6 +1,7 @@
 #include "js_api.h"
 #include "js_storage.h"
 #include "js_player.h"
+#include "hardcoded_effects.h"
 #include "plbc.h"
 #include "config_store.h"
 #include "pairing.h"
@@ -61,6 +62,7 @@ static esp_err_t send_err_json(httpd_req_t *req, int status, const char *msg)
 {
     httpd_resp_set_status(req, status == 404 ? "404 Not Found"
                               : status == 400 ? "400 Bad Request"
+                              : status == 409 ? "409 Conflict"
                               : "500 Internal Server Error");
     httpd_resp_set_type(req, "application/json");
     char resp[192];
@@ -70,15 +72,66 @@ static esp_err_t send_err_json(httpd_req_t *req, int status, const char *msg)
 }
 
 // GET /api/js -> {"scripts":[...],"playing":"name"|null}
+//
+// Phase 35: the array is the union of (a) user-uploaded PLBC scripts on
+// SPIFFS and (b) hardcoded effects compiled into this firmware for the
+// current LAMPOS_FORM. Clients see one flat list and can't tell which is
+// which (intentional — keeps the script-picker UI uniform).
 static esp_err_t list_handler(httpd_req_t *req)
 {
     if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
-    char scripts[768];
+    char scripts[1024];
     esp_err_t err = js_storage_list(scripts, sizeof(scripts));
     if (err != ESP_OK) return send_err_json(req, 500, "list failed");
 
-    const char *playing = js_player_current_name();
-    char resp[900];
+    /* Merge hardcoded names into the array. js_storage_list returns "[…]" or
+     * "[]"; we splice each hardcoded name in before the closing bracket, AND
+     * we strip any SPIFFS entry whose name collides with a hardcoded one so
+     * the client sees one entry, not two. Collisions can happen when a
+     * byForm bundle (e.g. effects/tower/fire.js) was flashed alongside a
+     * hardcoded effect of the same name (e.g. hardcoded/tower/fire.c). The
+     * hardcoded version always wins for play/params; hiding the SPIFFS twin
+     * keeps the UI clean. */
+    for (size_t hi = 0; hi < hardcoded_effect_count(); hi++) {
+        const hardcoded_effect_t *eff = hardcoded_effect_at(hi);
+        if (!eff || !eff->name) continue;
+        size_t nlen = strlen(eff->name);
+        /* Look for "<name>" (quoted) and remove it along with one adjacent comma. */
+        char needle[80];
+        snprintf(needle, sizeof(needle), "\"%s\"", eff->name);
+        char *hit = strstr(scripts, needle);
+        if (!hit) continue;
+        size_t hit_len = strlen(needle);
+        char *after = hit + hit_len;
+        /* Eat the trailing comma if present; otherwise the preceding comma. */
+        if (*after == ',') {
+            after++;
+        } else if (hit > scripts && hit[-1] == ',') {
+            hit--; hit_len++;
+        }
+        size_t tail = strlen(after) + 1;  /* include trailing NUL */
+        memmove(hit, after, tail);
+        (void)nlen;
+    }
+
+    size_t n = strlen(scripts);
+    if (n >= 2 && scripts[n - 1] == ']') {
+        size_t pos = n - 1;  /* index of ']' */
+        bool empty = (n == 2);
+        for (size_t i = 0; i < hardcoded_effect_count(); i++) {
+            const hardcoded_effect_t *eff = hardcoded_effect_at(i);
+            if (!eff) continue;
+            int add = snprintf(scripts + pos, sizeof(scripts) - pos,
+                               "%s\"%s\"", (empty && i == 0) ? "" : ",", eff->name);
+            if (add < 0 || (size_t)(pos + add) >= sizeof(scripts) - 1) break;
+            pos += add;
+        }
+        scripts[pos++] = ']';
+        scripts[pos] = '\0';
+    }
+
+    const char *playing = js_api_current_name();
+    char resp[1200];
     if (playing) {
         snprintf(resp, sizeof(resp), "{\"scripts\":%s,\"playing\":\"%s\"}", scripts, playing);
     } else {
@@ -98,6 +151,21 @@ static esp_err_t read_handler(httpd_req_t *req)
     bool is_params = false;
     if (!split_uri(req->uri, name, sizeof(name), &is_params)) {
         return send_err_json(req, 400, "missing name");
+    }
+    /* Phase 35 — hardcoded effects: serve params from the descriptor;
+     * source and .bc don't exist, return 404 with a clear message so the
+     * client can tell "missing" from "is a builtin". */
+    const hardcoded_effect_t *hc_eff = hardcoded_effect_find(name);
+    if (hc_eff) {
+        if (is_params) {
+            char buf[2048];
+            int n = hc_eff->get_params_json(buf, sizeof(buf));
+            if (n <= 0) return send_err_json(req, 500, "params encode failed");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req, buf, n);
+            return ESP_OK;
+        }
+        return send_err_json(req, 404, "no source (hardcoded effect)");
     }
     if (is_params) {
         /* Phase 23 — schema lives in the compiled .bc. Load it, emit JSON
@@ -226,6 +294,29 @@ static esp_err_t write_handler(httpd_req_t *req)
     esp_err_t err = receive_body(req, &body, &body_len);
     if (err != ESP_OK) return send_err_json(req, 400, "bad body");
 
+    /* Phase 35 — hardcoded-effect collision: PUT /api/js/<hc_name> is
+     * forbidden (409); PUT /api/js/<hc_name>/params is routed to the
+     * descriptor (and persisted to NVS by its generated apply helper).
+     * If the live runtime is playing this effect, it picks up the new
+     * values on its next render_frame because they live in a writable
+     * global the effect reads each frame. */
+    const hardcoded_effect_t *hc_eff = hardcoded_effect_find(name);
+    if (hc_eff) {
+        if (is_params) {
+            int applied = hc_eff->apply_params_json(body, body_len);
+            (void)applied;
+            char buf[2048];
+            int n = hc_eff->get_params_json(buf, sizeof(buf));
+            free(body);
+            if (n <= 0) return send_err_json(req, 500, "params encode failed");
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_send(req, buf, n);
+            return ESP_OK;
+        }
+        free(body);
+        return send_err_json(req, 409, "name reserved (hardcoded effect)");
+    }
+
     if (is_params) {
         /* Phase 23 — load .bc, apply JSON patch, re-serialize. */
         void *bc = NULL; size_t bc_len = 0;
@@ -342,6 +433,10 @@ static esp_err_t delete_handler(httpd_req_t *req)
     if (pairing_http_check(req, PL_ROLE_CREATOR) != ESP_OK) return ESP_FAIL;
     const char *name = name_from_uri(req->uri);
     if (!name) return send_err_json(req, 400, "missing name");
+    /* Hardcoded effects can't be deleted — they live in firmware. */
+    if (hardcoded_effect_find(name)) {
+        return send_err_json(req, 409, "name reserved (hardcoded effect)");
+    }
     esp_err_t err = js_storage_remove(name);
     if (err == ESP_ERR_NOT_FOUND) return send_err_json(req, 404, "not found");
     if (err != ESP_OK) return send_err_json(req, 500, "delete failed");
@@ -356,6 +451,19 @@ esp_err_t js_api_play(const char *name, int fps)
 {
     if (!name || !name[0]) return ESP_ERR_INVALID_ARG;
     if (fps <= 0) fps = JS_DEFAULT_FPS;
+
+    /* Phase 35 — hardcoded effects take precedence by name. Stop whichever
+     * runtime is live so the next start sees a clean stage. */
+    const hardcoded_effect_t *hc = hardcoded_effect_find(name);
+    if (hc) {
+        js_player_stop();
+        js_player_set_current_name(NULL);
+        esp_err_t err = hardcoded_runtime_start(hc, fps);
+        if (err != ESP_OK) return err;
+        config_store_set_str(CONFIG_KEY_CURRENT_JS, name);
+        return ESP_OK;
+    }
+
     /* Phase 23 — verify the .bc exists before starting. Player reads .bc
      * directly so the source body isn't needed here. */
     if (!js_storage_exists(name)) return ESP_ERR_NOT_FOUND;
@@ -364,6 +472,8 @@ esp_err_t js_api_play(const char *name, int fps)
     if (err == ESP_ERR_NOT_FOUND) return ESP_ERR_NOT_FOUND;
     if (err != ESP_OK) return err;
     free(probe);
+    /* Stop a hardcoded effect if one is running. */
+    hardcoded_runtime_stop();
     /* Order matters — set_current_name must run before start so the player
      * task sees the right name when it loads the .bc. */
     js_player_set_current_name(name);
@@ -414,16 +524,51 @@ static esp_err_t play_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* Phase 35 — qsort callback for char[N] alphabetical order. */
+static int playable_cmp(const void *a, const void *b)
+{
+    return strcmp((const char *)a, (const char *)b);
+}
+
+/* Phase 35 — assemble the next/prev playlist: SPIFFS PLBC scripts MINUS any
+ * whose name collides with a hardcoded effect, plus all hardcoded effects.
+ * Same merge js_api's list_handler does for /api/js, just in a sortable form
+ * so next/prev iterates the same set the picker shows. */
+static int collect_playable_sorted(char (*out)[64], int max_names)
+{
+    int n = js_storage_collect_sorted(out, max_names);
+    /* Drop SPIFFS entries shadowed by a hardcoded effect. */
+    int kept = 0;
+    for (int i = 0; i < n; i++) {
+        if (hardcoded_effect_find(out[i])) continue;
+        if (kept != i) memcpy(out[kept], out[i], sizeof(out[0]));
+        kept++;
+    }
+    n = kept;
+    /* Append hardcoded effects (capacity permitting). */
+    for (size_t hi = 0; hi < hardcoded_effect_count() && n < max_names; hi++) {
+        const hardcoded_effect_t *eff = hardcoded_effect_at(hi);
+        if (!eff || !eff->name) continue;
+        snprintf(out[n], sizeof(out[0]), "%s", eff->name);
+        n++;
+    }
+    qsort(out, n, sizeof(out[0]), playable_cmp);
+    return n;
+}
+
 /// Move to the next or previous script in alphabetical order. Wraps around.
 /// `direction` is +1 (next) or -1 (prev). Returns the chosen name (or empty
 /// string + ESP_ERR_NOT_FOUND if the library is empty).
 static esp_err_t advance_script(int direction, char *out_name, size_t out_len)
 {
-    char names[32][64];
-    int n = js_storage_collect_sorted(names, 32);
+    char names[48][64];
+    int n = collect_playable_sorted(names, 48);
     if (n == 0) return ESP_ERR_NOT_FOUND;
 
-    const char *current = js_player_current_name();
+    /* Phase 35 — current must come from the runtime-agnostic accessor so a
+     * hardcoded effect (e.g. dynfire) actually appears as "current" and the
+     * walker advances FROM it, not from whatever PLBC script was last live. */
+    const char *current = js_api_current_name();
     if (!current || !current[0]) {
         char persisted[64] = {0};
         config_get_str_or(CONFIG_KEY_CURRENT_JS, persisted, sizeof(persisted), "");
@@ -461,6 +606,29 @@ void js_api_stop(void)
 {
     js_player_stop();
     js_player_set_current_name(NULL);
+    hardcoded_runtime_stop();
+}
+
+/* Phase 35 — unified playback accessors. Hardcoded runtime wins when live
+ * because the JS player's current_name is cleared in js_api_play() when we
+ * dispatch to a hardcoded effect, so there's never a state where both
+ * report non-NULL. */
+const char *js_api_current_name(void)
+{
+    const char *hc = hardcoded_runtime_current_name();
+    if (hc) return hc;
+    return js_player_current_name();
+}
+
+float js_api_get_fps(void)
+{
+    if (hardcoded_runtime_is_running()) return hardcoded_runtime_get_fps();
+    return js_player_get_fps();
+}
+
+bool js_api_is_running(void)
+{
+    return hardcoded_runtime_is_running() || js_player_is_running();
 }
 
 // POST /api/play/next  → advance one script alphabetically and play it.
@@ -501,7 +669,7 @@ static esp_err_t play_current_handler(httpd_req_t *req)
     if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     char persisted[64] = {0};
     config_get_str_or(CONFIG_KEY_CURRENT_JS, persisted, sizeof(persisted), "");
-    const char *playing = js_player_current_name();
+    const char *playing = js_api_current_name();
     char resp[160];
     if (persisted[0] && playing) {
         snprintf(resp, sizeof(resp),

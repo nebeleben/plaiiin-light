@@ -59,26 +59,21 @@ static void get_persistent_mode(char *out, size_t max_len)
 
 /// Start playback of the persisted current_js. Returns ESP_OK if anything
 /// got loaded; ESP_ERR_NOT_FOUND if no script is selected or it's missing.
+///
+/// Phase 35 — delegates to js_api_play() which dispatches hardcoded effects
+/// vs PLBC scripts by name. We still keep the "already playing this script"
+/// fast-path so a power-on mid-fade-out doesn't bin the running animation's
+/// state (jumpy's head position, depthswirl's phase, etc.).
 static esp_err_t start_current_js(void)
 {
     char name[64] = {0};
     config_get_str_or(CONFIG_KEY_CURRENT_JS, name, sizeof(name), "");
     if (!name[0]) return ESP_ERR_NOT_FOUND;
-    // Already playing this script — skip the restart so we don't bin the
-    // animation's running state (jumpy's head, depthswirl's phase, etc.)
-    // when the user toggles on mid-fade-out.
-    const char *cur = js_player_current_name();
-    if (js_player_is_running() && cur && strcmp(cur, name) == 0) {
+    const char *cur = js_api_current_name();
+    if (js_api_is_running() && cur && strcmp(cur, name) == 0) {
         return ESP_OK;
     }
-    char *src = NULL;
-    size_t len = 0;
-    esp_err_t err = js_storage_read(name, &src, &len);
-    if (err != ESP_OK) return err;
-    err = js_player_start(src, JS_DEFAULT_FPS);
-    free(src);
-    if (err == ESP_OK) js_player_set_current_name(name);
-    return err;
+    return js_api_play(name, JS_DEFAULT_FPS);
 }
 
 // --- Transport-agnostic helpers ---------------------------------------------
@@ -97,7 +92,8 @@ static void on_fade_complete(bool was_off)
     char mode[16] = {0};
     get_persistent_mode(mode, sizeof(mode));
     if (strcmp(mode, "js") == 0) {
-        js_player_stop();
+        /* Stops whichever runtime is live — JS player or hardcoded effect. */
+        js_api_stop();
     }
 }
 
@@ -148,8 +144,7 @@ int light_api_apply_mode(const char *mode)
     if (!mode) return -1;
     if (strcmp(mode, "api") == 0) {
         ws_server_set_mode(LAMP_MODE_API);
-        js_player_stop();
-        js_player_set_current_name(NULL);
+        js_api_stop();   /* stops either runtime; also clears current_name */
         config_store_set_str(CONFIG_KEY_LAMP_MODE, "api");
         return 0;
     }
@@ -160,8 +155,7 @@ int light_api_apply_mode(const char *mode)
         return 0;
     }
     if (strcmp(mode, "stream") == 0) {
-        js_player_stop();
-        js_player_set_current_name(NULL);
+        js_api_stop();
         ws_server_set_mode(LAMP_MODE_STREAM);
         return 0;
     }
@@ -666,8 +660,8 @@ static esp_err_t state_get_handler(httpd_req_t *req)
     get_persistent_mode(persistent, sizeof(persistent));
     const char *mode = (ws_server_get_mode() == LAMP_MODE_STREAM) ? "stream" : persistent;
     uint8_t brightness = led_control_get_brightness();
-    const char *current = js_player_current_name();
-    float fps = js_player_get_fps();
+    const char *current = js_api_current_name();
+    float fps = js_api_get_fps();
     // One-decimal formatting keeps the payload compact and matches what UIs
     // want to display anyway. snprintf with %.1f rounds for us.
 
@@ -712,7 +706,7 @@ static esp_err_t mode_get_handler(httpd_req_t *req)
     char persistent[16] = {0};
     get_persistent_mode(persistent, sizeof(persistent));
     const char *effective = (ws_server_get_mode() == LAMP_MODE_STREAM) ? "stream" : persistent;
-    const char *current = js_player_current_name();
+    const char *current = js_api_current_name();
     char resp[160];
     if (current) {
         snprintf(resp, sizeof(resp),
@@ -925,14 +919,14 @@ static esp_err_t wormhole_post_handler(httpd_req_t *req)
 
     // A mode/rings change alters the render geometry — re-init the player by
     // restarting the active script cleanly. A brief flicker is acceptable.
-    if (topology_changed && js_player_is_running()) {
-        const char *name = js_player_current_name();
+    // Phase 35 — works for hardcoded effects too via js_api_play dispatch.
+    if (topology_changed && js_api_is_running()) {
+        const char *name = js_api_current_name();
         if (name && name[0]) {
             char nm[64] = {0};
             snprintf(nm, sizeof(nm), "%s", name);
-            js_player_stop();
-            js_player_set_current_name(nm);
-            js_player_start(nm, JS_DEFAULT_FPS);
+            js_api_stop();
+            js_api_play(nm, JS_DEFAULT_FPS);
         }
     }
 

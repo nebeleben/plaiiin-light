@@ -123,6 +123,12 @@ declare -a SCHEMA=(
     # blue-pulse-on-first-3-LEDs fallback. Pair with a corresponding
     # effects/<FORM>/<NAME>.js that --full will flash into the byForm image.
     "AP_JS          ap_js          string"
+    # Phase 35 — hardcoded-effect mask source for the FirePattern port.
+    # Profile picks one of adaptations/fire/<name>.pattern (e.g. "fire8x8");
+    # the synthesis loop below parses the JSON and writes fire_hue_mask +
+    # fire_value_mask as CSV-of-CSV strings to NVS. Omit on lamps that
+    # don't use the fire effect — synthesis is then skipped entirely.
+    "FIRE_PATTERN   fire_pattern   string"
 )
 
 # Pull a CONFIG_PLAIIIN_<KEY> value from the .defaults file; strips quotes.
@@ -195,6 +201,47 @@ BIN="$TMPDIR/nvs.bin"
         phys_json="$phys_json]"
         echo "wh_phys,data,string,$(csv_field "$phys_json")"
     fi
+
+    # --- Phase 35: FirePattern masks → fire_hue_mask + fire_value_mask -------
+    # The profile names a pattern file (e.g. fire8x8) via CONFIG_PLAIIIN_FIRE_PATTERN.
+    # We pull the matching adaptations/fire/<name>.pattern JSON, extract the
+    # hue_mask and value_mask strings, and write them as NVS strings the
+    # firmware's fire.c parses at init(). No HTTP endpoint to set masks —
+    # they're physical-lamp config, like the wormhole per-ring data above.
+    fire_pattern_name="$(get FIRE_PATTERN)"
+    if [ -n "$fire_pattern_name" ]; then
+        fire_pattern_file="$PROJECT_DIR/adaptations/fire/${fire_pattern_name}.pattern"
+        if [ ! -f "$fire_pattern_file" ]; then
+            echo "FIRE_PATTERN='$fire_pattern_name' but $fire_pattern_file missing" >&2
+            exit 1
+        fi
+        # .pattern files are *almost* JSON but their hue_mask/value_mask
+        # strings contain raw newlines — strict json parsers reject them.
+        # Pull the string values out with a regex that handles embedded
+        # newlines and escapes. (Original C++ used Arduino's lenient parser.)
+        fire_hue="$("$PYTHON" -c "
+import re, sys
+src = open(sys.argv[1]).read()
+m = re.search(r'\"hue_mask\"\s*:\s*\"((?:[^\"\\\\]|\\\\.)*)\"', src, re.DOTALL)
+print(m.group(1) if m else '')
+" "$fire_pattern_file")"
+        fire_value="$("$PYTHON" -c "
+import re, sys
+src = open(sys.argv[1]).read()
+m = re.search(r'\"value_mask\"\s*:\s*\"((?:[^\"\\\\]|\\\\.)*)\"', src, re.DOTALL)
+print(m.group(1) if m else '')
+" "$fire_pattern_file")"
+        if [ -z "$fire_hue" ] || [ -z "$fire_value" ]; then
+            echo "could not extract hue_mask/value_mask from $fire_pattern_file" >&2
+            exit 1
+        fi
+        # Strip embedded newlines/CR — fire.c's parser tolerates them but the
+        # NVS-gen CSV must not contain raw newlines outside the quoted field.
+        fire_hue="$(printf '%s' "$fire_hue" | tr -d '\r\n')"
+        fire_value="$(printf '%s' "$fire_value" | tr -d '\r\n')"
+        echo "fire_hue_mask,data,string,$(csv_field "$fire_hue")"
+        echo "fire_value_mask,data,string,$(csv_field "$fire_value")"
+    fi
 } > "$CSV"
 
 echo "--- profile $PROFILE → NVS ---"
@@ -206,8 +253,23 @@ echo "=== Generating NVS image ($NVS_SIZE bytes) ==="
 
 # --- Optional full erase + firmware flash ------------------------------------
 if [ "$FULL" -eq 1 ]; then
-    FLASH_BIN="$(ls -1t "$PROJECT_DIR/build/dist/"plaiiinlight_os-*-flash.bin 2>/dev/null | head -1)"
-    [ -f "$FLASH_BIN" ] || { echo "no flash.bin in build/dist — run scripts/build.sh first" >&2; exit 1; }
+    # Phase 35 — per-form firmware. The binary name now embeds the FORM so a
+    # `--full tower` burn picks tower-app, not whatever was built last. Profiles
+    # without a FORM (unlikely) fall back to the legacy '*-flash.bin' glob.
+    PROFILE_FORM="$(get FORM)"
+    if [ -n "$PROFILE_FORM" ]; then
+        FLASH_BIN="$(ls -1t "$PROJECT_DIR/build/dist/"plaiiinlight_os-*-"$PROFILE_FORM"-flash.bin 2>/dev/null | head -1)"
+    else
+        FLASH_BIN="$(ls -1t "$PROJECT_DIR/build/dist/"plaiiinlight_os-*-flash.bin 2>/dev/null | head -1)"
+    fi
+    if [ ! -f "$FLASH_BIN" ]; then
+        if [ -n "$PROFILE_FORM" ]; then
+            echo "no flash.bin for form '$PROFILE_FORM' in build/dist — run scripts/build.sh --form $PROFILE_FORM first" >&2
+        else
+            echo "no flash.bin in build/dist — run scripts/build.sh --form <name> first" >&2
+        fi
+        exit 1
+    fi
     echo "=== --full: erase_flash ==="
     "$PYTHON" "$ESPTOOL" --chip esp32 --port "$PORT" --baud "$BAUD" erase_flash
     echo "=== --full: write_flash 0x0 $(basename "$FLASH_BIN") ==="

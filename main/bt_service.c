@@ -330,7 +330,8 @@ static int access_current(uint16_t conn, uint16_t attr,
         return 0;
     }
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
-        const char *cur = js_player_current_name();
+        /* Phase 35 — js_api_current_name reports whichever runtime is live. */
+        const char *cur = js_api_current_name();
         return respond_str(ctxt->om, cur ? cur : "");
     }
     return BLE_ATT_ERR_REQ_NOT_SUPPORTED;

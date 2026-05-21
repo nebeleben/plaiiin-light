@@ -1,19 +1,51 @@
 #!/usr/bin/env bash
-# Build the universal PlaiiinLightOS firmware.
-#   Usage: ./scripts/build.sh
+# Build PlaiiinLightOS firmware for a specific lamp form.
 #
-# There is ONE binary for every device. Per-device hardware (lamp type, LED
-# pin, count, matrix size, form factor, WiFi creds) is applied at first-boot
-# onboarding via the captive portal / /config page — NOT compiled in. See
-# ./scripts/onboard.sh for pushing a profile preset to a device after flash.
+#   Usage: ./scripts/build.sh --form <name>
 #
-#   Output: build/dist/plaiiinlight_os-<firmware-version>-app.bin    — OTA
-#           build/dist/plaiiinlight_os-<firmware-version>-flash.bin  — USB
+# Phase 35 — there is NO universal binary any more. Each release ships one
+# binary per lamp form (tower, wormhole, cube, …); the form-specific
+# hardcoded effects under lampos/hardcoded/<form>/ get compiled in for that
+# build only. profile-burn --full picks the binary matching the profile's
+# FORM value. /api/ota refuses a binary whose embedded FORM doesn't match
+# the device, so accidentally pushing a tower binary to a wormhole is a 409,
+# not a brick.
+#
+#   Output:
+#     build/dist/plaiiinlight_os-<ver>-<form>-app.bin    — OTA
+#     build/dist/plaiiinlight_os-<ver>-<form>-flash.bin  — USB first-flash
 set -euo pipefail
+
+# --- Argument parsing ---------------------------------------------------------
+FORM=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --form)  FORM="${2:-}"; shift 2 ;;
+        --help|-h)
+            sed -n '2,16p' "$0"; exit 0 ;;
+        *)
+            echo "unknown arg: $1" >&2
+            echo "usage: $0 --form <name>" >&2
+            exit 2 ;;
+    esac
+done
+if [ -z "$FORM" ]; then
+    echo "error: --form <name> is required (no universal binary in Phase 35)." >&2
+    echo "       e.g. ./scripts/build.sh --form tower" >&2
+    exit 2
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 IDF_DIR="${HOME}/esp/esp-idf"
+
+# Sanity-check the form has a directory (an empty/missing dir is OK — the
+# generator emits an empty registry — but we warn so a typo doesn't silently
+# build with no effects).
+HC_FORM_DIR="$PROJECT_DIR/hardcoded/$FORM"
+if [ ! -d "$HC_FORM_DIR" ]; then
+    echo "warn: no hardcoded/$FORM/ directory — binary will have zero hardcoded effects" >&2
+fi
 
 # --- Version manifest ---------------------------------------------------------
 VERSION_FILE="$PROJECT_DIR/version.properties"
@@ -50,29 +82,36 @@ cd "$PROJECT_DIR"
 
 export SDKCONFIG_DEFAULTS="$PROJECT_DIR/sdkconfig.defaults;$VERSION_DEFAULTS"
 
-BUILD_DIR="$PROJECT_DIR/build"
-SDK_FILE="$PROJECT_DIR/sdkconfig"
+# Per-form build dir so cmake's per-form configure caches don't collide if
+# someone alternates `--form tower` and `--form wormhole` in the same checkout.
+BUILD_DIR="$PROJECT_DIR/build-$FORM"
+SDK_FILE="$PROJECT_DIR/sdkconfig.$FORM"
 
-echo "=== Building PlaiiinLightOS  firmware=$FW_VERSION  api=$API_VERSION ==="
+echo "=== Building PlaiiinLightOS  firmware=$FW_VERSION  api=$API_VERSION  form=$FORM ==="
 rm -f "$SDK_FILE" "$SDK_FILE.old"
+# Export LAMPOS_FORM into the environment so ESP-IDF's component-requirements
+# sub-cmake (which doesn't inherit -D) still sees it.
+export LAMPOS_FORM="$FORM"
 idf.py -B "$BUILD_DIR" -D SDKCONFIG="$SDK_FILE" fullclean
 idf.py -B "$BUILD_DIR" -D SDKCONFIG="$SDK_FILE" build
 
 DIST="$PROJECT_DIR/build/dist"
 mkdir -p "$DIST"
-STAMPED="plaiiinlight_os-${FW_VERSION}"
-cp "$BUILD_DIR/plaiiinlight_os.bin" "$DIST/${STAMPED}-app.bin"
+STAMPED="plaiiinlight_os-${FW_VERSION}-${FORM}"
+# Per-form project() name makes the binary plaiiinlight_os_<FORM>.bin.
+APP_BIN="$BUILD_DIR/plaiiinlight_os_${FORM}.bin"
+cp "$APP_BIN" "$DIST/${STAMPED}-app.bin"
 
 # Merge the full image for USB first-flash at offset 0.
 python -m esptool --chip esp32 merge_bin -o "$DIST/${STAMPED}-flash.bin" \
     0x1000   "$BUILD_DIR/bootloader/bootloader.bin" \
     0x8000   "$BUILD_DIR/partition_table/partition-table.bin" \
     0xf000   "$BUILD_DIR/ota_data_initial.bin" \
-    0x20000  "$BUILD_DIR/plaiiinlight_os.bin"
+    0x20000  "$APP_BIN"
 
-# Unstamped convenience symlinks.
-ln -sfn "${STAMPED}-app.bin"   "$DIST/plaiiinlight_os-app.bin"
-ln -sfn "${STAMPED}-flash.bin" "$DIST/plaiiinlight_os-flash.bin"
+# Per-form unstamped convenience symlinks.
+ln -sfn "${STAMPED}-app.bin"   "$DIST/plaiiinlight_os-${FORM}-app.bin"
+ln -sfn "${STAMPED}-flash.bin" "$DIST/plaiiinlight_os-${FORM}-flash.bin"
 
 echo ""
 echo "=== build complete ==="
