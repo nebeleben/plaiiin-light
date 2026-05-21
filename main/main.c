@@ -25,6 +25,88 @@
 
 static const char *TAG = "plaiiinlight_os";
 
+/* Install the embedded default scripts onto SPIFFS if missing, and compile
+ * a .bc for each so the player can run them immediately. Idempotent — if a
+ * script is already on disk the slot is skipped (the user is free to edit
+ * built-ins in place, and a firmware upgrade respects those edits). Wipe
+ * via /api/js DELETE to get the next reinstall on reboot. Used twice in
+ * app_main: once before AP-mode (so ap_js="breath" finds its script on a
+ * fresh boot), and once again post-init for the byForm seed pass. */
+static void install_default_scripts(void)
+{
+    extern const uint8_t noop_js_start[]         asm("_binary_noop_js_start");
+    extern const uint8_t noop_js_end[]           asm("_binary_noop_js_end");
+    extern const uint8_t fade_js_start[]         asm("_binary_fade_js_start");
+    extern const uint8_t fade_js_end[]           asm("_binary_fade_js_end");
+    extern const uint8_t plasma_js_start[]       asm("_binary_plasma_js_start");
+    extern const uint8_t plasma_js_end[]         asm("_binary_plasma_js_end");
+    extern const uint8_t breath_js_start[]       asm("_binary_breath_js_start");
+    extern const uint8_t breath_js_end[]         asm("_binary_breath_js_end");
+    extern const uint8_t heartbeat_js_start[]    asm("_binary_heartbeat_js_start");
+    extern const uint8_t heartbeat_js_end[]      asm("_binary_heartbeat_js_end");
+    extern const uint8_t shootingstar_js_start[] asm("_binary_shootingstar_js_start");
+    extern const uint8_t shootingstar_js_end[]   asm("_binary_shootingstar_js_end");
+    extern const uint8_t particles_js_start[]    asm("_binary_particles_js_start");
+    extern const uint8_t particles_js_end[]      asm("_binary_particles_js_end");
+    extern const uint8_t sinwave_js_start[]      asm("_binary_sinwave_js_start");
+    extern const uint8_t sinwave_js_end[]        asm("_binary_sinwave_js_end");
+    extern const uint8_t blaze_js_start[]        asm("_binary_blaze_js_start");
+    extern const uint8_t blaze_js_end[]          asm("_binary_blaze_js_end");
+    struct { const char *name; const uint8_t *start; const uint8_t *end; } defaults[] = {
+        { "noop",         noop_js_start,         noop_js_end },
+        { "fade",         fade_js_start,         fade_js_end },
+        { "plasma",       plasma_js_start,       plasma_js_end },
+        { "breath",       breath_js_start,       breath_js_end },
+        { "heartbeat",    heartbeat_js_start,    heartbeat_js_end },
+        { "shootingstar", shootingstar_js_start, shootingstar_js_end },
+        { "particles",    particles_js_start,    particles_js_end },
+        { "sinwave",      sinwave_js_start,      sinwave_js_end },
+        { "blaze",        blaze_js_start,        blaze_js_end },
+    };
+    for (size_t i = 0; i < sizeof(defaults) / sizeof(defaults[0]); i++) {
+        if (js_storage_exists(defaults[i].name)) continue;
+        size_t src_len = defaults[i].end - defaults[i].start;
+        /* EMBED_TXTFILES appends a NUL terminator — drop it so the stored
+         * .js is clean source and the compiler doesn't see a stray '\0'. */
+        while (src_len > 0 && defaults[i].start[src_len - 1] == 0) src_len--;
+        esp_err_t werr = js_storage_write(defaults[i].name,
+                                          (const char *)defaults[i].start,
+                                          src_len);
+        if (werr != ESP_OK) {
+            ESP_LOGW(TAG, "Could not install %s.js: %s", defaults[i].name,
+                     esp_err_to_name(werr));
+            continue;
+        }
+        plbc_program_t *prog = (plbc_program_t *)calloc(1, sizeof(*prog));
+        if (!prog) {
+            ESP_LOGW(TAG, "OOM seeding %s.bc", defaults[i].name);
+            continue;
+        }
+        char cerr[128] = {0};
+        if (plbc_compile((const char *)defaults[i].start, src_len, prog,
+                         cerr, sizeof(cerr)) != ESP_OK) {
+            ESP_LOGW(TAG, "compile %s.js: %s", defaults[i].name, cerr);
+            free(prog);
+            continue;
+        }
+        /* Heap allocation — main_task stack is 3.5 KB, this buffer is up to
+         * 8 KB. Stack-allocating it would crash on first boot. */
+        uint8_t *bc = (uint8_t *)malloc(8192);
+        if (!bc) { free(prog); ESP_LOGW(TAG, "OOM bc buf"); continue; }
+        int n = plbc_serialize(prog, bc, 8192);
+        free(prog);
+        if (n <= 0) {
+            free(bc);
+            ESP_LOGW(TAG, "serialize %s.bc failed", defaults[i].name);
+            continue;
+        }
+        if (js_storage_write_bc(defaults[i].name, bc, (size_t)n) == ESP_OK) {
+            ESP_LOGI(TAG, "Installed default %s.js + .bc (%d B)", defaults[i].name, n);
+        }
+        free(bc);
+    }
+}
+
 void app_main(void)
 {
     // 1. Init NVS config store (must be first)
@@ -163,6 +245,14 @@ void app_main(void)
     // to ~30 % so the lamp doesn't run at full blast for hours during
     // onboarding. If no script is configured, the script is missing, or it
     // won't compile, fall back to the built-in blue pulse on LEDs 0..2.
+    //
+    // Phase 36 — the default-scripts installer (former step 6a) runs INSIDE
+    // this block, before the play attempt. On a fresh boot the embedded
+    // built-ins (breath, fade, ...) aren't on SPIFFS yet, so without this
+    // ordering ap_js="breath" always failed with "not found" and the lamp
+    // only ever showed the 3-LED fallback blink. Installing first means the
+    // configured AP script is present when we try to play it.
+    install_default_scripts();
     if (wifi_get_mode() == PLAIIIN_WIFI_AP) {
         char ap_js_name[64] = {0};
         config_get_str_or(CONFIG_KEY_AP_JS, ap_js_name, sizeof(ap_js_name), "");
@@ -189,86 +279,9 @@ void app_main(void)
         }
     }
 
-    // 6a. Install the embedded default scripts if missing. Once on disk they
-    // are NOT overwritten — the user is free to edit them in place, and a
-    // firmware upgrade respects those edits. Wipe via /api/js DELETE to get
-    // the next reinstall on reboot.
-    {
-        extern const uint8_t noop_js_start[]         asm("_binary_noop_js_start");
-        extern const uint8_t noop_js_end[]           asm("_binary_noop_js_end");
-        extern const uint8_t fade_js_start[]         asm("_binary_fade_js_start");
-        extern const uint8_t fade_js_end[]           asm("_binary_fade_js_end");
-        extern const uint8_t plasma_js_start[]       asm("_binary_plasma_js_start");
-        extern const uint8_t plasma_js_end[]         asm("_binary_plasma_js_end");
-        extern const uint8_t breath_js_start[]       asm("_binary_breath_js_start");
-        extern const uint8_t breath_js_end[]         asm("_binary_breath_js_end");
-        extern const uint8_t heartbeat_js_start[]    asm("_binary_heartbeat_js_start");
-        extern const uint8_t heartbeat_js_end[]      asm("_binary_heartbeat_js_end");
-        extern const uint8_t shootingstar_js_start[] asm("_binary_shootingstar_js_start");
-        extern const uint8_t shootingstar_js_end[]   asm("_binary_shootingstar_js_end");
-        extern const uint8_t particles_js_start[]    asm("_binary_particles_js_start");
-        extern const uint8_t particles_js_end[]      asm("_binary_particles_js_end");
-        extern const uint8_t sinwave_js_start[]      asm("_binary_sinwave_js_start");
-        extern const uint8_t sinwave_js_end[]        asm("_binary_sinwave_js_end");
-        extern const uint8_t blaze_js_start[]        asm("_binary_blaze_js_start");
-        extern const uint8_t blaze_js_end[]          asm("_binary_blaze_js_end");
-        struct { const char *name; const uint8_t *start; const uint8_t *end; } defaults[] = {
-            { "noop",         noop_js_start,         noop_js_end },
-            { "fade",         fade_js_start,         fade_js_end },
-            { "plasma",       plasma_js_start,       plasma_js_end },
-            { "breath",       breath_js_start,       breath_js_end },
-            { "heartbeat",    heartbeat_js_start,    heartbeat_js_end },
-            { "shootingstar", shootingstar_js_start, shootingstar_js_end },
-            { "particles",    particles_js_start,    particles_js_end },
-            { "sinwave",      sinwave_js_start,      sinwave_js_end },
-            { "blaze",        blaze_js_start,        blaze_js_end },
-        };
-        for (size_t i = 0; i < sizeof(defaults) / sizeof(defaults[0]); i++) {
-            if (js_storage_exists(defaults[i].name)) continue;
-            size_t src_len = defaults[i].end - defaults[i].start;
-            // EMBED_TXTFILES appends a NUL terminator — drop it so the stored
-            // .js is clean source and the compiler doesn't see a stray '\0'.
-            while (src_len > 0 && defaults[i].start[src_len - 1] == 0) src_len--;
-            esp_err_t werr = js_storage_write(defaults[i].name,
-                                              (const char *)defaults[i].start,
-                                              src_len);
-            if (werr != ESP_OK) {
-                ESP_LOGW(TAG, "Could not install %s.js: %s", defaults[i].name,
-                         esp_err_to_name(werr));
-                continue;
-            }
-            /* Phase 23 — compile to .bc immediately. The player loads .bc
-             * directly; without it a fresh boot would have a .js on disk
-             * but no runnable bytecode. */
-            plbc_program_t *prog = (plbc_program_t *)calloc(1, sizeof(*prog));
-            if (!prog) {
-                ESP_LOGW(TAG, "OOM seeding %s.bc", defaults[i].name);
-                continue;
-            }
-            char cerr[128] = {0};
-            if (plbc_compile((const char *)defaults[i].start, src_len, prog,
-                             cerr, sizeof(cerr)) != ESP_OK) {
-                ESP_LOGW(TAG, "compile %s.js: %s", defaults[i].name, cerr);
-                free(prog);
-                continue;
-            }
-            /* Heap allocation — main_task stack is 3.5 KB, this buffer is
-             * up to 8 KB. Stack-allocating it would crash on first boot. */
-            uint8_t *bc = (uint8_t *)malloc(8192);
-            if (!bc) { free(prog); ESP_LOGW(TAG, "OOM bc buf"); continue; }
-            int n = plbc_serialize(prog, bc, 8192);
-            free(prog);
-            if (n <= 0) {
-                free(bc);
-                ESP_LOGW(TAG, "serialize %s.bc failed", defaults[i].name);
-                continue;
-            }
-            if (js_storage_write_bc(defaults[i].name, bc, (size_t)n) == ESP_OK) {
-                ESP_LOGI(TAG, "Installed default %s.js + .bc (%d B)", defaults[i].name, n);
-            }
-            free(bc);
-        }
-    }
+    /* Default scripts are installed in install_default_scripts() above, just
+     * before the AP-mode play attempt, so ap_js can find its script on a
+     * fresh boot. Nothing to do here anymore. */
 
     // 6a-bis. Phase 25 — compile any stored .js that has no .bc yet. byForm
     // effects are flashed into the storage partition as raw .js by

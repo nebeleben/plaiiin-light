@@ -79,6 +79,14 @@ if [ "$file_node_name" != "$DEVICE" ]; then
     exit 1
 fi
 
+# Phase 36 — full profile completeness check (required keys, FIRE_PATTERN
+# matches LAMP_TYPE and file exists, AP_JS set, wormhole topology consistent).
+# Fails loud here rather than silently producing a half-configured device.
+"$SCRIPT_DIR/profile-verify.sh" "$DEFAULTS" || {
+    echo "refusing to burn: profile-verify failed on $DEFAULTS" >&2
+    exit 1
+}
+
 [ -e "$PORT" ]    || { echo "no device at $PORT" >&2; exit 1; }
 [ -x "$PYTHON" ]  || { echo "no python at $PYTHON (set IDF_PYTHON)" >&2; exit 1; }
 [ -f "$ESPTOOL" ] || { echo "no esptool.py at $ESPTOOL" >&2; exit 1; }
