@@ -3,7 +3,7 @@
 #
 #   Usage: ./scripts/onboard.sh <family>/<device> <host>
 #     e.g. ./scripts/onboard.sh tower/tower8v2 192.168.4.1
-#          ./scripts/onboard.sh wall/matrix16v14 192.168.178.111
+#          ./scripts/onboard.sh display/matrix16v14 192.168.178.111
 #
 # Reads the profile's .defaults and POSTs the hardware fields to /config
 # (then the device reboots into STA if WiFi creds are provided).

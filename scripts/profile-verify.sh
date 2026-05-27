@@ -22,8 +22,8 @@ REQUIRED=(NODE_NAME LED_PIN LED_COUNT LED_TYPE LAMP_TYPE FORM AP_JS)
 
 # Forms whose hardcoded effects depend on FIRE_PATTERN masks in NVS.
 # (rocket uses 'flight' which synthesises its gradient internally; wormhole
-# and display have no hardcoded fire at all.)
-FIRE_FORMS=(tower cube)
+# has no hardcoded fire.)
+FIRE_FORMS=(tower cube display)
 
 # Read CONFIG_PLAIIIN_<key> from a profile, stripping surrounding quotes.
 # Returns empty (exit 0) when the key isn't set — using awk because grep+pipefail
