@@ -29,39 +29,20 @@ static const char *TAG = "plaiiinlight_os";
  * a .bc for each so the player can run them immediately. Idempotent — if a
  * script is already on disk the slot is skipped (the user is free to edit
  * built-ins in place, and a firmware upgrade respects those edits). Wipe
- * via /api/js DELETE to get the next reinstall on reboot. Used twice in
- * app_main: once before AP-mode (so ap_js="breath" finds its script on a
- * fresh boot), and once again post-init for the byForm seed pass. */
+ * via /api/js DELETE to get the next reinstall on reboot.
+ *
+ * As of Phase 36 only `noop` is firmware-embedded — the rest of the former
+ * built-ins (fade, plasma, breath, heartbeat, shootingstar, particles,
+ * sinwave, blaze) live in effects/default/ and get SPIFFS-flashed by
+ * `profile-burn.sh --full` alongside the form-specific effects. Devices
+ * that have never been --full-burned will therefore only have `noop` on
+ * SPIFFS, and AP-mode's ap_js="breath" will hit the 3-LED fallback. */
 static void install_default_scripts(void)
 {
     extern const uint8_t noop_js_start[]         asm("_binary_noop_js_start");
     extern const uint8_t noop_js_end[]           asm("_binary_noop_js_end");
-    extern const uint8_t fade_js_start[]         asm("_binary_fade_js_start");
-    extern const uint8_t fade_js_end[]           asm("_binary_fade_js_end");
-    extern const uint8_t plasma_js_start[]       asm("_binary_plasma_js_start");
-    extern const uint8_t plasma_js_end[]         asm("_binary_plasma_js_end");
-    extern const uint8_t breath_js_start[]       asm("_binary_breath_js_start");
-    extern const uint8_t breath_js_end[]         asm("_binary_breath_js_end");
-    extern const uint8_t heartbeat_js_start[]    asm("_binary_heartbeat_js_start");
-    extern const uint8_t heartbeat_js_end[]      asm("_binary_heartbeat_js_end");
-    extern const uint8_t shootingstar_js_start[] asm("_binary_shootingstar_js_start");
-    extern const uint8_t shootingstar_js_end[]   asm("_binary_shootingstar_js_end");
-    extern const uint8_t particles_js_start[]    asm("_binary_particles_js_start");
-    extern const uint8_t particles_js_end[]      asm("_binary_particles_js_end");
-    extern const uint8_t sinwave_js_start[]      asm("_binary_sinwave_js_start");
-    extern const uint8_t sinwave_js_end[]        asm("_binary_sinwave_js_end");
-    extern const uint8_t blaze_js_start[]        asm("_binary_blaze_js_start");
-    extern const uint8_t blaze_js_end[]          asm("_binary_blaze_js_end");
     struct { const char *name; const uint8_t *start; const uint8_t *end; } defaults[] = {
         { "noop",         noop_js_start,         noop_js_end },
-        { "fade",         fade_js_start,         fade_js_end },
-        { "plasma",       plasma_js_start,       plasma_js_end },
-        { "breath",       breath_js_start,       breath_js_end },
-        { "heartbeat",    heartbeat_js_start,    heartbeat_js_end },
-        { "shootingstar", shootingstar_js_start, shootingstar_js_end },
-        { "particles",    particles_js_start,    particles_js_end },
-        { "sinwave",      sinwave_js_start,      sinwave_js_end },
-        { "blaze",        blaze_js_start,        blaze_js_end },
     };
     for (size_t i = 0; i < sizeof(defaults) / sizeof(defaults[0]); i++) {
         if (js_storage_exists(defaults[i].name)) continue;

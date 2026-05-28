@@ -117,14 +117,6 @@ idf_component_register(
         "../portal/js.html"
         "../portal/api.html"
         "../portal/noop.js"
-        "../portal/fade.js"
-        "../portal/plasma.js"
-        "../portal/breath.js"
-        "../portal/heartbeat.js"
-        "../portal/shootingstar.js"
-        "../portal/particles.js"
-        "../portal/sinwave.js"
-        "../portal/blaze.js"
         "../portal/shade-runtime.js"
 )
 

@@ -285,16 +285,23 @@ if [ "$FULL" -eq 1 ]; then
         write_flash 0x0 "$FLASH_BIN"
 
     # --- byForm effects + form template: SPIFFS image -----------------------
-    # Phase 25/26 — form-specific effects and the AI form-prompt template ship
-    # per-device, not embedded in the firmware. We build one SPIFFS image of
-    # the form's .js files plus its prompt-inject template and flash it to the
-    # `storage` partition. The firmware compiles each .js to .bc on boot and
-    # serves the template via GET /api/form-prompt.
+    # Phase 25/26/36 — bundle three things into the storage partition:
+    #   1) effects/default/*.js  — the former firmware-embedded built-ins
+    #      (fade, plasma, breath, heartbeat, …). Copied first so a form
+    #      can override any name by shipping its own version.
+    #   2) effects/<FORM>/*.js   — the form's own byForm effects.
+    #   3) form-template/<FORM>.txt → _form_template.txt for the AI prompt.
+    # The firmware compiles each .js to .bc on boot and serves the template
+    # via GET /api/form-prompt.
     FORM_VAL="$(get FORM)"
+    DEFAULT_EFFECTS_DIR="$PROJECT_DIR/effects/default"
     EFFECTS_DIR="$PROJECT_DIR/effects/$FORM_VAL"
     TEMPLATE_FILE="$PROJECT_DIR/form-template/$FORM_VAL.txt"
     SPIFFS_SRC="$TMPDIR/effects_src"
     mkdir -p "$SPIFFS_SRC"
+    if compgen -G "$DEFAULT_EFFECTS_DIR/*.js" >/dev/null 2>&1; then
+        cp "$DEFAULT_EFFECTS_DIR"/*.js "$SPIFFS_SRC/"
+    fi
     if [ -n "$FORM_VAL" ] && compgen -G "$EFFECTS_DIR/*.js" >/dev/null 2>&1; then
         cp "$EFFECTS_DIR"/*.js "$SPIFFS_SRC/"
     fi
