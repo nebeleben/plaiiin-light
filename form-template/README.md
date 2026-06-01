@@ -30,7 +30,7 @@ The firmware substitutes these tokens with live geometry:
 
 `bare`/unknown forms have no file here — they use the firmware fallback.
 
-## Two-mode templates (Phase 29)
+## Two-mode templates
 
 A template may carry two render-mode sections split by **line-leading
 markers** `@@strip` and `@@mirror`. The firmware extracts the section matching

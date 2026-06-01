@@ -388,5 +388,3 @@ Everything in this repository is **Apache License, Version 2.0** — see
 [`LICENSE`](LICENSE). Audit it, fork it, run it on your own hardware,
 ship products that include it; the only requirement is the standard
 Apache 2.0 attribution + notice retention.
-
-For partnership inquiries, contact plaiiin.com.
