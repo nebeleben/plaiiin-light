@@ -18,6 +18,12 @@ on:
 permissions:
   contents: write
 
+# Force bash on every `run:` step. Inside the Espressif container the runner
+# auto-detects `sh` — which breaks `compgen` and bash-only idioms below.
+defaults:
+  run:
+    shell: bash
+
 env:
   IDF_IMAGE: espressif/idf:v5.3.2
 
@@ -68,7 +74,13 @@ jobs:
           echo "→ building $TAG (firmware=$VERSION, api=$API_VERSION)"
 
       - name: Build firmware
-        run: ./scripts/build.sh --form ${{ matrix.form }}
+        # Pre-source IDF's env so IDF_PYTHON_ENV_PATH lands at the correct
+        # in-container path (/opt/esp/python_env/idf5.3_py3.xx_env). build.sh
+        # then uses ${IDF_PYTHON_ENV_PATH:-...} which is a no-op if already
+        # set, so the host-style fallback it would otherwise pick never runs.
+        run: |
+          source "$IDF_PATH/export.sh"
+          ./scripts/build.sh --form ${{ matrix.form }}
 
       - name: Build byForm SPIFFS effects image
         # Mirrors what scripts/profile-burn.sh --full does at the workbench:
