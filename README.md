@@ -2,7 +2,7 @@
 
 Open firmware for ESP32 microcontrollers driving WS2812 addressable LED
 strips and matrices. AI-aware, scriptable, OTA-updatable, with HTTP,
-WebSocket, and BLE control surfaces. :-)
+WebSocket, and BLE control surfaces.
 
 ### What's in this repository
 
