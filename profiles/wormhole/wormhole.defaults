@@ -1,0 +1,54 @@
+# PlaiiinLightOS default profile: wormhole (4× 24-LED rings)
+# Base defaults come from ../../sdkconfig.defaults; this file overrides per device.
+# Generic per-form default — copy to <node>.defaults and tune per unit.
+
+# Identity
+CONFIG_PLAIIIN_NODE_NAME="wormhole"
+CONFIG_PLAIIIN_VENDOR_NAME="PlaiiinLight"
+
+# LED hardware
+CONFIG_PLAIIIN_LED_PIN=26
+CONFIG_PLAIIIN_LED_CLK_PIN=-1
+CONFIG_PLAIIIN_LED_COUNT=96
+CONFIG_PLAIIIN_LED_TYPE="ws2812"
+
+# Lamp shape — a wormhole is a plain LED chain (rings wired in sequence),
+# not a matrix; the ring geometry lives in the wormhole config below.
+CONFIG_PLAIIIN_LAMP_TYPE="strip"
+CONFIG_PLAIIIN_FORM="wormhole"
+
+# Pixel grouping (combine N×M physical → 1 logical)
+CONFIG_PLAIIIN_PX_GROUP_W=1
+CONFIG_PLAIIIN_PX_GROUP_H=1
+
+# Orientation — not meaningful for a wormhole (the render path goes through
+# wormhole_expand → led_control_set_all, bypassing serpentine/logical mapping).
+CONFIG_PLAIIIN_ROTATION=0
+CONFIG_PLAIIIN_ORIGIN=0
+CONFIG_PLAIIIN_SERPENTINE=n
+CONFIG_PLAIIIN_SERP_AXIS=0
+
+# Hardware buttons (-1 = not wired)
+CONFIG_PLAIIIN_BTN_PWR_PIN=-1
+CONFIG_PLAIIIN_BTN_NEXT_PIN=-1
+CONFIG_PLAIIIN_BTN_PREV_PIN=-1
+
+# Wormhole render config (Phase 29) — see docs/wormhole-api.md.
+# WH_MODE  : boot render mode, "strip" (default) or "mirror".
+# WH_RINGS : explicit ring count (LED_COUNT must be 24 * WH_RINGS).
+CONFIG_PLAIIIN_WH_MODE="strip"
+CONFIG_PLAIIIN_WH_RINGS=4
+# Physical per-ring mounting config: "face,direction,offset".
+#   face/direction are 0|1 — each contributes a reversal bit (XOR-composed);
+#   offset is the physical LED sitting at the ring's 12-o'clock, 0..23.
+# All-default here — tune per unit with effects/wormhole/count.js, then the
+# app or web /config page, and re-burn once the real values are known.
+CONFIG_PLAIIIN_WH_RING0="0,0,0"
+CONFIG_PLAIIIN_WH_RING1="0,0,0"
+CONFIG_PLAIIIN_WH_RING2="0,0,0"
+CONFIG_PLAIIIN_WH_RING3="0,0,0"
+
+# Phase 33 — AP-mode onboarding animation. The named script must live in
+# effects/wormhole/ so a --full burn installs it to SPIFFS alongside the
+# rest of the byForm bundle. Replace it later via PUT /api/js/ap-wormhole.
+CONFIG_PLAIIIN_AP_JS="ap-wormhole"

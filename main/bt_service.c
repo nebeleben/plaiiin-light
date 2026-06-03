@@ -58,6 +58,7 @@ DEF_UUID(chr_upload_meta,     0x0B);
 DEF_UUID(chr_upload_data,     0x0C);
 DEF_UUID(chr_upload_status,   0x0D);
 DEF_UUID(chr_pair_token,      0x0E);
+DEF_UUID(chr_pair_claim,      0x0F);
 
 // --- State ------------------------------------------------------------------
 
@@ -450,14 +451,56 @@ static int access_pair_token(uint16_t conn, uint16_t attr,
     return respond_str(ctxt->om, tok);
 }
 
+// Claim admin over BLE alone. Writing to this characteristic while unpaired
+// mints a fresh admin token (pairing_pair) and switches the lamp to paired
+// mode — letting a user own a lamp that has never seen WiFi. The peer then
+// reads chr_pair_token to fetch the key. First-claim-wins: once paired, BLE
+// claims are rejected (the bonded owner re-reads the token instead). The
+// characteristic is WRITE_ENC, so the claim happens over a Just-Works-bonded
+// link, not in the clear.
+// Self-restarting tail of a successful BLE admin-claim. The reboot rebuilds
+// the GATT table in paired mode (control chars become bonded-link-only) and
+// re-runs wifi_init (which now skips the provisioning AP). The delay is longer
+// than the wifi-config one: the claiming peer reads pair_token immediately
+// AFTER its claim write, so the link must stay alive for that round-trip
+// before the radio dies.
+static void pair_claim_reboot_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(1500));
+    esp_restart();
+}
+
+static int access_pair_claim(uint16_t conn, uint16_t attr,
+                             struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    if (pairing_is_paired()) {
+        ESP_LOGW(TAG, "BLE claim rejected — lamp already owned");
+        return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
+    }
+    char token[64] = {0};
+    esp_err_t err = pairing_pair(token, sizeof(token));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "BLE claim: pairing_pair err=%s", esp_err_to_name(err));
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    ESP_LOGI(TAG, "BLE claim: lamp paired over Bluetooth — scheduling reboot");
+    // Drop the AP now to cover the pre-reboot window; the reboot then applies
+    // the full paired GATT surface and wifi_init's AP-skip cleanly.
+    wifi_provisioning_ap_stop();
+    xTaskCreate(pair_claim_reboot_task, "pair_reboot", 2048, NULL, 5, NULL);
+    return 0;
+}
+
 // --- Service definition -----------------------------------------------------
 
 // Built at start time so we can stamp on the WRITE_ENC / READ_ENC bits when
-// the device is in paired mode (forces NimBLE to require a bonded link
-// before allowing the operation). The pair_token characteristic is only
-// added in paired mode — exposes nothing in unpaired mode and avoids
-// leaking the existence of the secret over a passive scan.
-static struct ble_gatt_chr_def s_chrs[16];
+// the device is in paired mode (forces NimBLE to require a bonded link before
+// allowing the operation). The pair_token + pair_claim characteristics are
+// always present but are themselves ENC-gated, so they leak nothing to a
+// passive scanner while still allowing a first-time BLE claim.
+static struct ble_gatt_chr_def s_chrs[18];
 static struct ble_gatt_svc_def s_svcs[2];
 
 static void build_service_def(bool paired)
@@ -484,9 +527,13 @@ static void build_service_def(bool paired)
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_upload_meta.u,    .access_cb = access_upload_meta,    .flags = W };
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_upload_data.u,    .access_cb = access_upload_data,    .flags = W };
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_upload_status.u,  .access_cb = access_upload_status,  .flags = R | N, .val_handle = &s_h_upload_status };
-    if (paired) {
-        s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_pair_token.u, .access_cb = access_pair_token,     .flags = RE };
-    }
+    // Pair token + claim are always present and always require an encrypted
+    // (bonded) link — independent of `paired`. Claim lets a user take
+    // ownership over BLE alone; token hands the minted admin key back to the
+    // bonded owner. Exposing them while unpaired is safe: the claim is
+    // first-wins, and both are ENC-gated so a passive sniffer learns nothing.
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_pair_token.u, .access_cb = access_pair_token, .flags = BLE_GATT_CHR_F_READ  | BLE_GATT_CHR_F_READ_ENC };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_pair_claim.u, .access_cb = access_pair_claim, .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC };
     s_chrs[i] = (struct ble_gatt_chr_def){ 0 };
 
     s_svcs[0] = (struct ble_gatt_svc_def){
@@ -524,7 +571,7 @@ static void advertise(void)
     }
 
     char node[32];
-    config_get_str_or(CONFIG_KEY_NODE_NAME, node, sizeof(node), "PlaiiinLight");
+    config_get_str_or(CONFIG_KEY_NODE_NAME, node, sizeof(node), CONFIG_PLAIIIN_NODE_NAME);
     struct ble_hs_adv_fields rsp_fields = {0};
     rsp_fields.name = (uint8_t *)node;
     rsp_fields.name_len = strlen(node);
@@ -606,13 +653,16 @@ esp_err_t bt_service_start(void)
     ble_hs_cfg.sync_cb = on_sync;
     ble_hs_cfg.reset_cb = on_reset;
 
-    // Phase 9 — Just Works bonding when paired. NoInputNoOutput cap means
-    // the host (macOS) will NOT prompt for a passkey; it auto-bonds. Future
-    // upgrade to LE Secure Connections + passkey can flip these capabilities
-    // without changing the rest of the surface.
+    // Phase 9 — Just Works bonding. NoInputNoOutput cap means the host
+    // (macOS/Android) will NOT prompt for a passkey; it auto-bonds. Bonding is
+    // enabled unconditionally (not only when paired) so the encrypted pair
+    // claim/token characteristics can be reached even by a brand-new, unpaired
+    // lamp: a peer that writes the ENC claim char triggers Just Works bonding,
+    // then claims admin over the now-encrypted link. Future upgrade to LE
+    // Secure Connections + passkey can flip these caps without surface changes.
     bool paired = pairing_is_paired();
     ble_hs_cfg.sm_io_cap = 3;          // BLE_HS_IO_NO_INPUT_OUTPUT
-    ble_hs_cfg.sm_bonding = paired ? 1 : 0;
+    ble_hs_cfg.sm_bonding = 1;         // always — enables the ENC pair-claim path
     ble_hs_cfg.sm_mitm = 0;            // no MITM protection (Just Works)
     ble_hs_cfg.sm_sc = 1;              // LE Secure Connections — cheap, modern
     ble_hs_cfg.sm_our_key_dist = 1;    // ENC_KEY
@@ -628,7 +678,7 @@ esp_err_t bt_service_start(void)
     if (rc != 0) { ESP_LOGE(TAG, "add_svcs rc=%d", rc); return ESP_FAIL; }
 
     char node[32];
-    config_get_str_or(CONFIG_KEY_NODE_NAME, node, sizeof(node), "PlaiiinLight");
+    config_get_str_or(CONFIG_KEY_NODE_NAME, node, sizeof(node), CONFIG_PLAIIIN_NODE_NAME);
     ble_svc_gap_device_name_set(node);
 
     nimble_port_freertos_init(host_task);

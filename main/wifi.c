@@ -1,5 +1,6 @@
 #include "wifi.h"
 #include "config_store.h"
+#include "pairing.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -89,6 +90,24 @@ static esp_err_t start_ap(void)
     return ESP_OK;
 }
 
+// Tear down the provisioning SoftAP at runtime. Called when a lamp is claimed
+// over BLE (it no longer needs an open captive portal anyone in range could
+// reach). No-op unless we're actually in AP mode. Soft-fails rather than
+// ESP_ERROR_CHECK so a hiccup here never crashes a freshly-claimed lamp.
+esp_err_t wifi_provisioning_ap_stop(void)
+{
+    if (s_mode != PLAIIIN_WIFI_AP) return ESP_OK;
+    ESP_LOGI(TAG, "stopping provisioning AP (lamp claimed over BLE)");
+    esp_err_t err = esp_wifi_stop();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_stop err=%s", esp_err_to_name(err));
+        return err;
+    }
+    esp_wifi_set_mode(WIFI_MODE_NULL);
+    s_mode = PLAIIIN_WIFI_NONE;
+    return ESP_OK;
+}
+
 esp_err_t wifi_init(void)
 {
     ESP_ERROR_CHECK(esp_netif_init());
@@ -104,6 +123,14 @@ esp_err_t wifi_init(void)
 
     if (config_store_has_wifi()) {
         return start_sta();
+    } else if (pairing_is_paired()) {
+        // Paired (claimed over BLE) but no WiFi creds: don't bring up the open
+        // provisioning AP — the owner drives the lamp over Bluetooth, and an
+        // AP would let anyone in radio range reach the captive portal. The
+        // lamp stays BLE-only until WiFi creds are pushed.
+        ESP_LOGI(TAG, "no WiFi creds but paired — skipping provisioning AP (BLE-only ownership)");
+        s_mode = PLAIIIN_WIFI_NONE;
+        return ESP_OK;
     } else {
         return start_ap();
     }

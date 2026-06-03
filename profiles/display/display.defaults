@@ -1,0 +1,36 @@
+# PlaiiinLightOS default profile: display (16×16 WS2812 wall matrix)
+# Base defaults come from ../../sdkconfig.defaults; this file overrides per device.
+# Generic per-form default — copy to <node>.defaults and tune per unit.
+
+# Identity
+CONFIG_PLAIIIN_NODE_NAME="display"
+CONFIG_PLAIIIN_VENDOR_NAME="PlaiiinLight"
+
+# LED hardware
+CONFIG_PLAIIIN_LED_PIN=18
+CONFIG_PLAIIIN_LED_CLK_PIN=-1
+CONFIG_PLAIIIN_LED_COUNT=256
+CONFIG_PLAIIIN_LED_TYPE="ws2812"
+
+# Lamp shape
+CONFIG_PLAIIIN_LAMP_TYPE="matrix16x16"
+CONFIG_PLAIIIN_FORM="display"
+
+# Pixel grouping (combine N×M physical → 1 logical)
+CONFIG_PLAIIIN_PX_GROUP_W=1
+CONFIG_PLAIIIN_PX_GROUP_H=1
+
+# Orientation
+CONFIG_PLAIIIN_ROTATION=0
+CONFIG_PLAIIIN_ORIGIN=0
+CONFIG_PLAIIIN_SERPENTINE=y
+CONFIG_PLAIIIN_SERP_AXIS=1
+
+# Hardware buttons (-1 = not wired)
+CONFIG_PLAIIIN_BTN_PWR_PIN=-1
+CONFIG_PLAIIIN_BTN_NEXT_PIN=-1
+CONFIG_PLAIIIN_BTN_PREV_PIN=-1
+
+CONFIG_PLAIIIN_FIRE_PATTERN="fire16x16"
+
+CONFIG_PLAIIIN_AP_JS="breath"

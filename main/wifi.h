@@ -17,3 +17,8 @@ typedef enum {
 esp_err_t wifi_init(void);
 plaiiin_wifi_mode_t wifi_get_mode(void);
 bool wifi_is_connected(void);
+
+/** Tear down the provisioning SoftAP at runtime (no-op unless in AP mode).
+ *  Called when a lamp is claimed over BLE so it stops exposing an open
+ *  captive portal. */
+esp_err_t wifi_provisioning_ap_stop(void);

@@ -561,16 +561,23 @@ static int collect_playable_sorted(char (*out)[64], int max_names)
 /// string + ESP_ERR_NOT_FOUND if the library is empty).
 static esp_err_t advance_script(int direction, char *out_name, size_t out_len)
 {
-    char names[48][64];
+    // 48 × 64 = 3 KB. Heap-allocate rather than stacking it: BLE play-next/prev
+    // runs this on the NimBLE host task, whose stack is only 4 KB (vs the HTTP
+    // server task's 16 KB), so a 3 KB stack frame overflows and crashes the
+    // radio. malloc keeps every caller — BLE and HTTP — safe.
+    char (*names)[64] = malloc(48 * sizeof(*names));
+    if (!names) return ESP_ERR_NO_MEM;
     int n = collect_playable_sorted(names, 48);
-    if (n == 0) return ESP_ERR_NOT_FOUND;
+    if (n == 0) { free(names); return ESP_ERR_NOT_FOUND; }
 
     /* Phase 35 — current must come from the runtime-agnostic accessor so a
      * hardcoded effect (e.g. dynfire) actually appears as "current" and the
      * walker advances FROM it, not from whatever PLBC script was last live. */
     const char *current = js_api_current_name();
+    // `persisted` lives at function scope: `current` may point into it and is
+    // read below, past the if-block that fills it.
+    char persisted[64] = {0};
     if (!current || !current[0]) {
-        char persisted[64] = {0};
         config_get_str_or(CONFIG_KEY_CURRENT_JS, persisted, sizeof(persisted), "");
         current = persisted[0] ? persisted : NULL;
     }
@@ -589,7 +596,9 @@ static esp_err_t advance_script(int direction, char *out_name, size_t out_len)
         next = (idx + direction + n) % n;
     }
     snprintf(out_name, out_len, "%s", names[next]);
-    return js_api_play(names[next], JS_DEFAULT_FPS);
+    esp_err_t rc = js_api_play(names[next], JS_DEFAULT_FPS);
+    free(names);
+    return rc;
 }
 
 esp_err_t js_api_play_next(char *out_name, size_t out_len)

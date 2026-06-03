@@ -1,0 +1,34 @@
+# PlaiiinLightOS default profile: strip (single WS2812 chain)
+# Base defaults come from ../../sdkconfig.defaults; this file overrides per device.
+# Generic per-form default — copy to <node>.defaults and tune per unit.
+
+# Identity
+CONFIG_PLAIIIN_NODE_NAME="strip"
+CONFIG_PLAIIIN_VENDOR_NAME="PlaiiinLight"
+
+# LED hardware
+CONFIG_PLAIIIN_LED_PIN=26
+CONFIG_PLAIIIN_LED_CLK_PIN=-1
+CONFIG_PLAIIIN_LED_COUNT=100
+CONFIG_PLAIIIN_LED_TYPE="ws2812"
+
+# Lamp shape — a plain 1-D LED chain, no matrix geometry.
+CONFIG_PLAIIIN_LAMP_TYPE="strip"
+CONFIG_PLAIIIN_FORM="strip"
+
+# Pixel grouping (combine N×M physical → 1 logical)
+CONFIG_PLAIIIN_PX_GROUP_W=1
+CONFIG_PLAIIIN_PX_GROUP_H=1
+
+# Orientation — not meaningful for a single line; no serpentine folding.
+CONFIG_PLAIIIN_ROTATION=0
+CONFIG_PLAIIIN_ORIGIN=0
+CONFIG_PLAIIIN_SERPENTINE=n
+CONFIG_PLAIIIN_SERP_AXIS=0
+
+# Hardware buttons (-1 = not wired)
+CONFIG_PLAIIIN_BTN_PWR_PIN=-1
+CONFIG_PLAIIIN_BTN_NEXT_PIN=-1
+CONFIG_PLAIIIN_BTN_PREV_PIN=-1
+
+CONFIG_PLAIIIN_AP_JS="breath"
