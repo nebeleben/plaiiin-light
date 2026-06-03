@@ -5,6 +5,7 @@
 #include "plbc.h"
 #include "config_store.h"
 #include "pairing.h"
+#include "wormhole.h"
 #include <stdbool.h>
 
 #include "esp_log.h"
@@ -143,6 +144,69 @@ static esp_err_t list_handler(httpd_req_t *req)
 }
 
 // GET /api/js/<name>            -> script source as text/javascript
+// Shared param schema + apply logic, used by both the HTTP handlers below and
+// the BLE script-params characteristic. `name` is a hardcoded effect or a
+// stored .bc script.
+int js_api_params_json(const char *name, char *buf, size_t cap)
+{
+    if (!name || !name[0]) return -1;
+    const hardcoded_effect_t *hc_eff = hardcoded_effect_find(name);
+    if (hc_eff) {
+        return hc_eff->get_params_json(buf, cap);
+    }
+    void *bc = NULL; size_t bc_len = 0;
+    if (js_storage_read_bc(name, &bc, &bc_len) != ESP_OK) return -1;
+    plbc_program_t *prog = (plbc_program_t *)calloc(1, sizeof(*prog));
+    if (!prog) { free(bc); return -1; }
+    char perr[64] = {0};
+    if (plbc_load(bc, bc_len, prog, perr, sizeof(perr)) != ESP_OK) {
+        free(bc); free(prog); return -1;
+    }
+    free(bc);
+    /* Compact (no descriptions): this helper feeds the BLE script-params
+     * characteristic, whose GATT long-read tops out near 1 KB. Descriptions are
+     * the bulk of the payload and only drive hover tooltips, so the dashboard
+     * Tune knobs work without them. HTTP /api/js/<name>/params keeps them. */
+    int n = plbc_params_to_json_ex(prog, buf, cap, false);
+    free(prog);
+    return n;
+}
+
+esp_err_t js_api_apply_params(const char *name, const char *body, size_t len)
+{
+    if (!name || !name[0]) return ESP_ERR_NOT_FOUND;
+    const hardcoded_effect_t *hc_eff = hardcoded_effect_find(name);
+    if (hc_eff) {
+        hc_eff->apply_params_json(body, len);
+        return ESP_OK;
+    }
+    void *bc = NULL; size_t bc_len = 0;
+    esp_err_t rerr = js_storage_read_bc(name, &bc, &bc_len);
+    if (rerr == ESP_ERR_NOT_FOUND) return ESP_ERR_NOT_FOUND;
+    if (rerr != ESP_OK) return ESP_FAIL;
+    plbc_program_t *prog = (plbc_program_t *)calloc(1, sizeof(*prog));
+    if (!prog) { free(bc); return ESP_FAIL; }
+    char perr[64] = {0};
+    if (plbc_load(bc, bc_len, prog, perr, sizeof(perr)) != ESP_OK) {
+        free(bc); free(prog); return ESP_FAIL;
+    }
+    free(bc);
+    plbc_apply_params_json(prog, body, len);
+    /* Heap, not stack — httpd/NimBLE task stacks are small; MAX_BC_BYTES is 16 KB. */
+    uint8_t *out_bc = (uint8_t *)malloc(MAX_BC_BYTES);
+    if (!out_bc) { free(prog); return ESP_FAIL; }
+    int n_bc = plbc_serialize(prog, out_bc, MAX_BC_BYTES);
+    if (n_bc > 0) js_storage_write_bc(name, out_bc, (size_t)n_bc);
+    free(out_bc);
+    /* Push live values into the running player if it's playing this script. */
+    const char *playing = js_player_current_name();
+    if (playing && strcmp(playing, name) == 0) {
+        js_player_apply_params_json(body, len);
+    }
+    free(prog);
+    return ESP_OK;
+}
+
 // GET /api/js/<name>/params     -> {"items":[{"name":..,"min":..,...}]}
 static esp_err_t read_handler(httpd_req_t *req)
 {
@@ -449,6 +513,11 @@ static esp_err_t delete_handler(httpd_req_t *req)
 
 esp_err_t js_api_play(const char *name, int fps)
 {
+    return js_api_play_ex(name, fps, true);
+}
+
+esp_err_t js_api_play_ex(const char *name, int fps, bool autoswitch)
+{
     if (!name || !name[0]) return ESP_ERR_INVALID_ARG;
     if (fps <= 0) fps = JS_DEFAULT_FPS;
 
@@ -471,7 +540,25 @@ esp_err_t js_api_play(const char *name, int fps)
     esp_err_t err = js_storage_read_bc(name, &probe, &probe_len);
     if (err == ESP_ERR_NOT_FOUND) return ESP_ERR_NOT_FOUND;
     if (err != ESP_OK) return err;
+
+    /* Phase 41 — auto-switch the wormhole render mode to the effect's declared
+     * @mode BEFORE the player inits its render grid. A cheap no-op on every
+     * other form; effects with no @mode (mode < 0) leave wh_mode untouched, and
+     * a mirror hint that fails the geometry gate falls back to strip inside
+     * wormhole_apply_effect_mode(). The mode is read straight from the .bc we
+     * just loaded as a play probe, so there's no extra disk read. */
+    if (autoswitch && wormhole_is_wormhole()) {
+        plbc_program_t *probe_prog = (plbc_program_t *)calloc(1, sizeof(*probe_prog));
+        if (probe_prog) {
+            if (plbc_load(probe, probe_len, probe_prog, NULL, 0) == ESP_OK
+                && probe_prog->mode >= 0) {
+                wormhole_apply_effect_mode((wormhole_mode_t)probe_prog->mode);
+            }
+            free(probe_prog);
+        }
+    }
     free(probe);
+
     /* Stop a hardcoded effect if one is running. */
     hardcoded_runtime_stop();
     /* Order matters — set_current_name must run before start so the player

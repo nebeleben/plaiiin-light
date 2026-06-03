@@ -57,6 +57,15 @@ void wormhole_reload_creative(void);
 /** Effective render mode after the geometry gate. */
 wormhole_mode_t wormhole_mode(void);
 
+/** Phase 41 — auto-switch the device to an effect's declared @mode. Called
+ *  from js_api_play() when a wormhole lamp starts an effect that carries a
+ *  mode hint (0 strip / 1 mirror). Persists wh_mode and reloads (closing any
+ *  active stream) only when the mode actually changes; a mirror request that
+ *  fails the geometry gate falls back to strip. No-op for non-wormhole lamps
+ *  or when the requested mode already matches. Call BEFORE starting the player
+ *  so it inits with the right render grid. Returns true if the mode changed. */
+bool wormhole_apply_effect_mode(wormhole_mode_t desired);
+
 /** Explicit ring count (wh_rings, default led_count / 24, >= 1). */
 int wormhole_rings(void);
 

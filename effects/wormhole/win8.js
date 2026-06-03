@@ -1,3 +1,6 @@
+// @mode mirror
+// @modeSwitch
+//
 // Win8 — the Windows 8 boot spinner: a string of dots that race around the
 // loop with an easeInOutCubic motion, so they accelerate out of the start,
 // coast, then decelerate before looping. The lead dot is brightest and each

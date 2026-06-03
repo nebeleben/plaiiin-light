@@ -251,17 +251,30 @@ if no markers are present the whole file is used for both modes. Non-wormhole
 templates have no markers and are unaffected. `{placeholder}` substitution runs
 per section as before.
 
-## `@mode` script annotation (convention only — parsing deferred)
+## `@mode` script annotation (Phase 41 — parsed + auto-switching)
 
-Effect authors may add a leading comment `// @mode mirror` or `// @mode strip`
-to declare which render mode a `shade()` script is written for. The
-convention is adopted by byForm effects today, but the compiler does
-**not** parse it and clients do **not** auto-switch on it. That parsing
-+ auto-switch is an explicit deferred follow-up.
+Effect authors add a leading comment `// @mode mirror` or `// @mode strip` to
+declare which render mode a `shade()` script is written for. As of Phase 41:
+
+- The PLBC compiler parses `@mode` into the program (`plbc_program_t.mode`:
+  `-1` none / `0` strip / `1` mirror) and serializes it in the `.bc` header
+  (format bumped to v2 — stale v1 `.bc` are recompiled on boot via
+  `js_storage_bc_current`).
+- `js_api_play()` auto-switches `wh_mode` to the effect's declared mode on a
+  wormhole lamp before the player inits its render grid (reusing the geometry
+  gate + strip fallback). Effects with no `@mode` leave `wh_mode` untouched.
+- The declared mode is surfaced to clients as the top-level `"mode"` field of
+  `GET /api/js/<name>/params`, so the dashboard tile shows a render-mode toggle
+  (wired to `POST /api/wormhole`) for effects that carry one.
+- The `POST /api/wormhole` reinit replay uses `js_api_play_ex(…, autoswitch=
+  false)` so a hand-set mode isn't immediately reverted by the auto-switch.
+
+A new tune type rides along: `// @param NAME switch = 0` declares a 0/1 toggle
+(`plbc_param_t.type == PLBC_PARAM_SWITCH`), surfaced as `"type":"switch"` in the
+params JSON and rendered as a switch (not a knob) by all clients.
 
 ## Out of scope
 
 - "Rocket areas" / heterogeneous segment tiling — a separate, larger feature.
-- `@mode` parsing and client-side auto-switch.
 - Mirror-aware preview in `shade-runtime.js` — preview renders a single
   24-LED ring in mirror mode. Documented caveat, not a bug.

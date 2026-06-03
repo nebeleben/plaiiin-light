@@ -16,6 +16,13 @@
 .knob{display:flex;flex-direction:column;align-items:center;font-size:.7rem;color:var(--text-dim);user-select:none;-webkit-user-select:none}
 .knob svg{cursor:ns-resize;touch-action:none}
 .knob .lbl{margin-top:2px;text-align:center;line-height:1.1;max-width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.swk{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;font-size:.7rem;color:var(--text-dim);user-select:none;-webkit-user-select:none}
+.swk .sw{width:48px;height:26px;border-radius:13px;background:rgba(128,128,128,0.35);position:relative;cursor:pointer;transition:background .15s;margin:14px 0 8px}
+.swk .sw.on{background:var(--accent)}
+.swk .sw.disabled{opacity:.4;cursor:not-allowed}
+.swk .sw::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:left .15s}
+.swk .sw.on::after{left:25px}
+.swk .lbl{text-align:center;line-height:1.1;max-width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -229,9 +236,60 @@ function loadKnobs(name){
     .then(function(d){
       if(myId!==knobLoadId)return;  // a newer load took over
       var items=d.items||[];
-      if(!items.length){grid.innerHTML='<div style="color:var(--text-dim);font-size:.78rem">No tunable parameters</div>';return;}
-      items.forEach(function(p){grid.appendChild(makeKnob(p,name));});
+      if(!items.length && !(d.mode && d.modeSwitch)){grid.innerHTML='<div style="color:var(--text-dim);font-size:.78rem">No tunable parameters</div>';return;}
+      // Phase 41 — switch-type tunes render as a sliding toggle; ranges keep the knob.
+      items.forEach(function(p){grid.appendChild(p.type==='switch'?makeToggle(p,name):makeKnob(p,name));});
+      // Phase 41 — show a render-mode toggle only when the effect declares a
+      // @mode AND is switchable (@modeSwitch); a locked effect keeps the mode
+      // its auto-switch picked. Gated further on this being a wormhole lamp
+      // (GET /api/wormhole 200s). The toggle reflects the live device mode.
+      if(d.mode && d.modeSwitch){
+        fetch('/api/wormhole').then(function(r){return r.ok?r.json():null;}).then(function(w){
+          if(myId!==knobLoadId||!w)return;
+          grid.appendChild(makeModeToggle(w));
+        }).catch(function(){});
+      }
     }).catch(function(){});
+}
+
+// Phase 41 — a boolean tune (type:"switch") as a sliding switch. Pushes the
+// param like any other tune; the firmware still sees a 0..1 float.
+function makeToggle(p,scriptName){
+  return buildSwitch(p.name,(p.value||0)>=0.5,p.description,function(on){
+    var body={};body[p.name]=on?1:0;
+    fetch('/api/js/'+encodeURIComponent(scriptName)+'/params',{
+      method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
+    }).catch(function(){});
+  });
+}
+
+// Phase 41 — wormhole render-mode switch (strip ↔ mirror), wired to
+// POST /api/wormhole. Disabled when the geometry can't mirror.
+function makeModeToggle(w){
+  var allowed=!!w.mirrorAllowed;
+  return buildSwitch('Mirror mode',w.mode==='mirror','',
+    allowed?function(on){
+      fetch('/api/wormhole',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({mode:on?'mirror':'strip'})}).catch(function(){});
+    }:null);
+}
+
+// Shared sliding-switch cell sized to drop into the knob grid. A null
+// onChange renders it disabled (e.g. mirror not allowed by geometry).
+function buildSwitch(label,on,desc,onChange){
+  var wrap=document.createElement('div');wrap.className='swk';
+  var state=!!on;
+  var sw=document.createElement('div');sw.className='sw'+(state?' on':'')+(onChange?'':' disabled');
+  if(onChange){
+    sw.addEventListener('click',function(){
+      state=!state;sw.classList.toggle('on',state);onChange(state);
+    });
+  }
+  wrap.appendChild(sw);
+  var lbl=document.createElement('div');lbl.className='lbl';lbl.textContent=label;
+  if(desc)wrap.title=desc;
+  wrap.appendChild(lbl);
+  return wrap;
 }
 
 function makeKnob(p,scriptName){

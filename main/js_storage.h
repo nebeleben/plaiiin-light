@@ -33,6 +33,12 @@ esp_err_t js_storage_remove_bc(const char *name);
 /** True if a compiled <name>.bc exists on disk. */
 bool js_storage_bc_exists(const char *name);
 
+/** True if a compiled <name>.bc exists AND its header magic + version match
+ *  the firmware's current PLBC format. Used by the boot recompile pass so a
+ *  firmware upgrade that bumps the .bc format rebuilds stale bytecode from the
+ *  .js (instead of leaving the player unable to load it). */
+bool js_storage_bc_current(const char *name);
+
 /** Collect JS script names (without the .js suffix) into `out`, sorted
  *  alphabetically (strcmp). Caller supplies the buffer.
  *  Returns the number of names actually written, capped at `max_names`. */

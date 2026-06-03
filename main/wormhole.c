@@ -268,6 +268,23 @@ wormhole_mode_t wormhole_mode(void)
     return s_mode;
 }
 
+bool wormhole_apply_effect_mode(wormhole_mode_t desired)
+{
+    if (!wormhole_is_wormhole()) return false;
+    ensure_loaded();
+    /* Mirror only when the geometry gate allows it; otherwise fall back to
+     * strip (mirroring the boot fallback in wormhole_reload_internal). */
+    const char *want = (desired == WORMHOLE_MODE_MIRROR && wormhole_mirror_allowed())
+                       ? "mirror" : "strip";
+    char cur[16] = {0};
+    config_get_str_or(CONFIG_KEY_WH_MODE, cur, sizeof(cur), "strip");
+    if (strcmp(cur, want) == 0) return false;  /* already there — no churn */
+    ESP_LOGI(TAG, "auto-switch wh_mode %s -> %s (effect @mode)", cur, want);
+    config_store_set_str(CONFIG_KEY_WH_MODE, want);
+    wormhole_reload();  /* re-reads mode/geometry; bumps stream generation */
+    return true;
+}
+
 int wormhole_rings(void)
 {
     ensure_loaded();

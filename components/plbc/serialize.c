@@ -4,14 +4,15 @@
  *   0       4     magic 'PLBC'
  *   4       1     version
  *   5       1     flags (reserved)
- *   6       2     reserved
+ *   6       1     mode (v2: int8 — 0xFF none / 0 strip / 1 mirror; v1: reserved)
+ *   7       1     mode_switch (v2: 1 = user may change mode; 0 / old v2 = locked)
  *   8       1     n_params
  *   9       1     n_frame_state
  *   10      1     n_pixel_state
  *   11      1     n_locals
  *   12      2     code_size
  *   14      code_size  bytecode
- *   ...     param schema:   for each: name_len(u8) + name + min(f32) + max(f32) + def(f32) + cur(f32) + desc_len(u8) + desc
+ *   ...     param schema:   for each: name_len(u8) + name + min(f32) + max(f32) + def(f32) + cur(f32) + desc_len(u8) + desc + type(u8, v2+)
  *   ...     frame state defs: for each: name_len(u8) + name + def(f32)
  *   ...     pixel state defs: for each: name_len(u8) + name + def(f32)
  *
@@ -67,7 +68,8 @@ int plbc_serialize(const plbc_program_t *prog, uint8_t *buf, size_t buf_size)
     WB(buf, off, buf_size, PLBC_MAGIC, 4);
     WU8(buf, off, buf_size, PLBC_VERSION);
     WU8(buf, off, buf_size, 0);  /* flags */
-    WU16(buf, off, buf_size, 0); /* reserved */
+    WU8(buf, off, buf_size, (uint8_t)(int8_t)prog->mode);  /* v2: declared mode (0xFF=none) */
+    WU8(buf, off, buf_size, prog->mode_switch);  /* v2 byte-7: mode-switchable flag (was reserved-0) */
     WU8(buf, off, buf_size, prog->n_params);
     WU8(buf, off, buf_size, prog->n_frame_state);
     WU8(buf, off, buf_size, prog->n_pixel_state);
@@ -86,6 +88,7 @@ int plbc_serialize(const plbc_program_t *prog, uint8_t *buf, size_t buf_size)
         WF32(buf, off, buf_size, p->def);
         WF32(buf, off, buf_size, p->value);
         WSTR(buf, off, buf_size, p->desc, PLBC_MAX_DESC - 1);
+        WU8(buf, off, buf_size, p->type);  /* v2 */
     }
 
     /* Frame state defs */
@@ -165,15 +168,16 @@ esp_err_t plbc_load(const uint8_t *buf, size_t buf_len,
         return ESP_FAIL;
     }
     int off = 4;
-    uint8_t version, flags, np, nf, ns, nl;
-    uint16_t reserved, code_size;
+    uint8_t version, flags, mode_b, modesw_b, np, nf, ns, nl;
+    uint16_t code_size;
     off = read_u8(buf, buf_len, off, &version); if (off < 0) goto truncated;
     if (version != PLBC_VERSION) {
         if (err_buf) snprintf(err_buf, err_buf_size, "version %u, expected %u", version, PLBC_VERSION);
         return ESP_FAIL;
     }
     off = read_u8(buf, buf_len, off, &flags); if (off < 0) goto truncated;
-    off = read_u16(buf, buf_len, off, &reserved); if (off < 0) goto truncated;
+    off = read_u8(buf, buf_len, off, &mode_b); if (off < 0) goto truncated;
+    off = read_u8(buf, buf_len, off, &modesw_b); if (off < 0) goto truncated;
     off = read_u8(buf, buf_len, off, &np); if (off < 0) goto truncated;
     off = read_u8(buf, buf_len, off, &nf); if (off < 0) goto truncated;
     off = read_u8(buf, buf_len, off, &ns); if (off < 0) goto truncated;
@@ -191,6 +195,8 @@ esp_err_t plbc_load(const uint8_t *buf, size_t buf_len,
     out_prog->n_pixel_state = ns;
     out_prog->n_locals = nl;
     out_prog->code_size = code_size;
+    out_prog->mode = (int8_t)mode_b;  /* 0xFF -> -1 (none) */
+    out_prog->mode_switch = modesw_b ? 1 : 0;
 
     off = read_bytes(buf, buf_len, off, out_prog->code, code_size); if (off < 0) goto truncated;
 
@@ -202,6 +208,7 @@ esp_err_t plbc_load(const uint8_t *buf, size_t buf_len,
         off = read_f32(buf, buf_len, off, &p->def);                 if (off < 0) goto truncated;
         off = read_f32(buf, buf_len, off, &p->value);               if (off < 0) goto truncated;
         off = read_str(buf, buf_len, off, p->desc, sizeof(p->desc)); if (off < 0) goto truncated;
+        off = read_u8(buf, buf_len, off, &p->type);                 if (off < 0) goto truncated;
     }
     for (int i = 0; i < nf; i++) {
         off = read_str(buf, buf_len, off, out_prog->frame_state_defs[i].name,
@@ -218,7 +225,7 @@ esp_err_t plbc_load(const uint8_t *buf, size_t buf_len,
         if (off < 0) goto truncated;
     }
 
-    (void)flags; (void)reserved;
+    (void)flags;
     return ESP_OK;
 
 truncated:
@@ -231,19 +238,50 @@ truncated:
  * works without changes. */
 int plbc_params_to_json(const plbc_program_t *prog, char *out, size_t max)
 {
+    return plbc_params_to_json_ex(prog, out, max, true);
+}
+
+int plbc_params_to_json_ex(const plbc_program_t *prog, char *out, size_t max,
+                           bool include_desc)
+{
     if (!prog || !out || max < 16) return 0;
     int off = snprintf(out, max, "{\"items\":[");
     for (int i = 0; i < prog->n_params; i++) {
         const plbc_param_t *p = &prog->params[i];
         const char *sep = (i == 0) ? "" : ",";
-        int n = snprintf(out + off, max - off,
-            "%s{\"name\":\"%s\",\"min\":%g,\"max\":%g,\"default\":%g,\"value\":%g,\"description\":\"%s\"}",
-            sep, p->name, p->min, p->max, p->def, p->value, p->desc);
+        /* `type` is additive — older clients ignore it and render a slider.
+         * `description` is omitted over BLE to stay under the GATT read cap. */
+        int n;
+        if (include_desc) {
+            n = snprintf(out + off, max - off,
+                "%s{\"name\":\"%s\",\"min\":%g,\"max\":%g,\"default\":%g,\"value\":%g,\"description\":\"%s\",\"type\":\"%s\"}",
+                sep, p->name, p->min, p->max, p->def, p->value, p->desc,
+                p->type == PLBC_PARAM_SWITCH ? "switch" : "range");
+        } else {
+            /* Keep an empty "description" so clients whose model has a
+             * non-optional description field still decode — just shed the
+             * (long) text that blows past the BLE read cap. */
+            n = snprintf(out + off, max - off,
+                "%s{\"name\":\"%s\",\"min\":%g,\"max\":%g,\"default\":%g,\"value\":%g,\"description\":\"\",\"type\":\"%s\"}",
+                sep, p->name, p->min, p->max, p->def, p->value,
+                p->type == PLBC_PARAM_SWITCH ? "switch" : "range");
+        }
         if (n < 0 || (size_t)(off + n) >= max) return 0;
         off += n;
     }
-    int n = snprintf(out + off, max - off, "]}");
-    if (n < 0) return 0;
+    /* Top-level `mode` carries the effect's declared wormhole render mode so a
+     * client can seed the toggle; `modeSwitch` says whether the user may change
+     * it (false = locked to `mode`, so clients hide the toggle). Both absent of
+     * meaning when mode is null (a form-agnostic effect). */
+    int n;
+    if (prog->mode == 0 || prog->mode == 1) {
+        n = snprintf(out + off, max - off, "],\"mode\":\"%s\",\"modeSwitch\":%s}",
+                     prog->mode == 1 ? "mirror" : "strip",
+                     prog->mode_switch ? "true" : "false");
+    } else {
+        n = snprintf(out + off, max - off, "],\"mode\":null,\"modeSwitch\":false}");
+    }
+    if (n < 0 || (size_t)(off + n) >= max) return 0;
     off += n;
     return off;
 }

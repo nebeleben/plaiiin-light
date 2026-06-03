@@ -1,4 +1,5 @@
 // @mode mirror
+// @modeSwitch
 //
 // Comet — a single bright head chases its own fading tail around one ring.
 // In mirror mode the firmware tiles this one 24-LED ring onto every physical

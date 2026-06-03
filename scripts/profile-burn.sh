@@ -286,10 +286,11 @@ if [ "$FULL" -eq 1 ]; then
 
     # --- byForm effects + form template: SPIFFS image -----------------------
     # Phase 25/26/36 — bundle three things into the storage partition:
-    #   1) effects/default/*.js  — the former firmware-embedded built-ins
-    #      (fade, plasma, breath, heartbeat, …). Copied first so a form
-    #      can override any name by shipping its own version.
-    #   2) effects/<FORM>/*.js   — the form's own byForm effects.
+    #   1) effects/<FORM>/*.js   — the form's own byForm effects.
+    #   2) effects/default/*.js  — the general built-ins (fade, plasma, breath,
+    #      sinwave, …), but ONLY those the form does not override. A form may
+    #      ship its own tuned version of a default effect (e.g. a wormhole
+    #      sinwave with @mode/@modeSwitch); that form version always wins.
     #   3) form-template/<FORM>.txt → _form_template.txt for the AI prompt.
     # The firmware compiles each .js to .bc on boot and serves the template
     # via GET /api/form-prompt.
@@ -299,11 +300,21 @@ if [ "$FULL" -eq 1 ]; then
     TEMPLATE_FILE="$PROJECT_DIR/form-template/$FORM_VAL.txt"
     SPIFFS_SRC="$TMPDIR/effects_src"
     mkdir -p "$SPIFFS_SRC"
-    if compgen -G "$DEFAULT_EFFECTS_DIR/*.js" >/dev/null 2>&1; then
-        cp "$DEFAULT_EFFECTS_DIR"/*.js "$SPIFFS_SRC/"
-    fi
+    # Stage the form's effects first so they take precedence...
     if [ -n "$FORM_VAL" ] && compgen -G "$EFFECTS_DIR/*.js" >/dev/null 2>&1; then
         cp "$EFFECTS_DIR"/*.js "$SPIFFS_SRC/"
+    fi
+    # ...then add only the default effects this form does NOT override, logging
+    # any that are shadowed so the burn output makes the precedence explicit.
+    if compgen -G "$DEFAULT_EFFECTS_DIR/*.js" >/dev/null 2>&1; then
+        for def_js in "$DEFAULT_EFFECTS_DIR"/*.js; do
+            base="$(basename "$def_js")"
+            if [ -e "$SPIFFS_SRC/$base" ]; then
+                echo "  · $base: using effects/$FORM_VAL/ (overrides default)"
+            else
+                cp "$def_js" "$SPIFFS_SRC/"
+            fi
+        done
     fi
     # Phase 26 — the form's prompt-inject template, flashed as _form_template.txt.
     if [ -n "$FORM_VAL" ] && [ -f "$TEMPLATE_FILE" ]; then

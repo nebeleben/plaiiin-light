@@ -1,4 +1,5 @@
 // @mode mirror
+// @modeSwitch
 //
 // Twin Arc — two glowing arcs sit on opposite sides of one ring and counter-
 // rotate, sweeping past each other twice per lap. Where the two arcs overlap

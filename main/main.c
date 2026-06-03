@@ -270,6 +270,11 @@ void app_main(void)
     // player only runs .bc. This pass also self-heals any script left
     // .js-only by an older firmware. The general built-ins seeded above
     // already have their .bc, so they're skipped here.
+    //
+    // Phase 41 — the check is bc_current(), not bc_exists(): a firmware
+    // upgrade that bumps the PLBC .bc format leaves stale-version bytecode the
+    // player can't load, so we recompile any .bc whose magic/version no longer
+    // match. Same-version .bc are skipped (no rebuild churn on normal boots).
     {
         char (*names)[64] = (char (*)[64])malloc(32 * 64);
         if (!names) {
@@ -277,7 +282,7 @@ void app_main(void)
         } else {
             int n = js_storage_collect_sorted(names, 32);
             for (int i = 0; i < n; i++) {
-                if (js_storage_bc_exists(names[i])) continue;
+                if (js_storage_bc_current(names[i])) continue;
                 char *src = NULL;
                 size_t src_len = 0;
                 if (js_storage_read(names[i], &src, &src_len) != ESP_OK || !src) {

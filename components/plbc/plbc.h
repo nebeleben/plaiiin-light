@@ -31,7 +31,10 @@
 #include "esp_err.h"
 
 #define PLBC_MAGIC       "PLBC"
-#define PLBC_VERSION     1
+/* v2 (Phase 41): per-param `type` byte (range vs switch) + a program-level
+ * `mode` byte in the header (declared wormhole render mode). v1 .bc lack both;
+ * the boot recompile pass (js_storage_bc_current) rebuilds them on upgrade. */
+#define PLBC_VERSION     2
 
 #define PLBC_MAX_PARAMS         12
 /* Bumped from 16 → 32 in Phase 23 so multi-slot effects (e.g. shootingstar
@@ -134,12 +137,20 @@ typedef enum {
     PLBC_HALT           = 0xFF,
 } plbc_op_t;
 
+/* Param UI hint. The VM always treats a param as a float in [min,max]; this
+ * only tells clients how to render it. PLBC_PARAM_SWITCH is a 0..1 toggle. */
+typedef enum {
+    PLBC_PARAM_RANGE  = 0,  /* slider/knob over [min,max] (default) */
+    PLBC_PARAM_SWITCH = 1,  /* 0/1 toggle — declared as `@param N switch = 0` */
+} plbc_param_type_t;
+
 /* In-memory representation of a compiled program. Layout matches the .bc
  * file exactly so we can load by mmap or by memcpy without parsing. */
 typedef struct {
     char  name[PLBC_MAX_NAME];
     float min, max, def, value;
     char  desc[PLBC_MAX_DESC];
+    uint8_t type;  /* plbc_param_type_t — Phase 41 */
 } plbc_param_t;
 
 typedef struct {
@@ -154,6 +165,18 @@ typedef struct {
     uint8_t n_pixel_state;
     uint8_t n_locals;
     uint16_t code_size;
+
+    /* Phase 41 — declared wormhole render mode, parsed from `// @mode
+     * strip|mirror`. -1 = none (effect carries no mode hint), 0 = strip,
+     * 1 = mirror. Drives the auto-switch in js_api_play() and is surfaced to
+     * clients via plbc_params_to_json so the tile can show the mode toggle. */
+    int8_t mode;
+    /* Phase 41 — whether the user may change the render mode away from `mode`.
+     * Parsed from `// @modeSwitch` (presence = 1). 0 (default / absent) means
+     * the effect only makes sense in its declared `mode`, so clients hide the
+     * toggle; 1 means it works in both, so the toggle is shown. Stored in the
+     * v2 header's byte-7 slot (was reserved-0), so old .bc read back as 0. */
+    uint8_t mode_switch;
 
     plbc_param_t     params[PLBC_MAX_PARAMS];
     plbc_state_def_t frame_state_defs[PLBC_MAX_FRAME_STATE];
@@ -231,3 +254,10 @@ int plbc_apply_params_json(plbc_program_t *prog, const char *json, size_t len);
 
 /* Serialize param schema as JSON for /api/js/<name>/params GET. */
 int plbc_params_to_json(const plbc_program_t *prog, char *out, size_t max);
+
+/* Like plbc_params_to_json but `include_desc` toggles the per-param
+ * "description" field. The BLE script-params characteristic omits descriptions
+ * to keep the payload under the GATT long-read ceiling (~1 KB); HTTP keeps
+ * them. plbc_params_to_json() is the include_desc=true wrapper. */
+int plbc_params_to_json_ex(const plbc_program_t *prog, char *out, size_t max,
+                           bool include_desc);

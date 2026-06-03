@@ -17,6 +17,7 @@
 #include "nvs_flash.h"
 
 #include "host/ble_hs.h"
+#include "host/ble_store.h"
 #include "host/ble_uuid.h"
 #include "host/util/util.h"
 #include "nimble/ble.h"
@@ -30,6 +31,13 @@
 #include <string.h>
 
 static const char *TAG = "bt_service";
+
+// Provided by NimBLE's store/config component (linked in when
+// CONFIG_BT_NIMBLE_NVS_PERSIST=y). No public header exports it, so the ESP-IDF
+// NimBLE examples extern-declare it exactly like this. Installs the NVS-backed
+// keystore so Just Works bonds survive reboots — including the deliberate
+// post-claim reboot — instead of living in RAM only.
+void ble_store_config_init(void);
 
 #define UPLOAD_MAX_BYTES (48 * 1024)
 
@@ -59,6 +67,10 @@ DEF_UUID(chr_upload_data,     0x0C);
 DEF_UUID(chr_upload_status,   0x0D);
 DEF_UUID(chr_pair_token,      0x0E);
 DEF_UUID(chr_pair_claim,      0x0F);
+DEF_UUID(chr_pair_unpair,     0x10);
+DEF_UUID(chr_brightness,      0x11);
+DEF_UUID(chr_script_params,   0x12);
+DEF_UUID(chr_fps,             0x13);
 
 // --- State ------------------------------------------------------------------
 
@@ -319,6 +331,69 @@ static int access_mode(uint16_t conn, uint16_t attr,
     return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
 }
 
+// Rolling rendered-FPS of the JS player, mirroring the HTTP /api/state `fps`.
+// Read-only string ("%.1f") — 0.0 when nothing is rendering frames.
+static int access_fps(uint16_t conn, uint16_t attr,
+                      struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%.1f", js_api_get_fps());
+    return respond_str(ctxt->om, buf);
+}
+
+static int access_brightness(uint16_t conn, uint16_t attr,
+                             struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        uint8_t v = 0;
+        if (read_u8(ctxt->om, &v) != 0) return BLE_ATT_ERR_INVALID_PDU;
+        led_control_set_brightness(v);
+        return 0;
+    }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        uint8_t v = led_control_get_brightness();
+        return respond(ctxt->om, &v, 1);
+    }
+    return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+}
+
+// Tunable params for the *currently playing* effect — the BLE analogue of
+// /api/js/<current>/params. READ returns the schema JSON ({"items":[...]});
+// WRITE applies a partial patch ({"name":value,...}). Buffers are heap, not
+// stack: the schema can be ~2 KB and the NimBLE host task stack is only 4 KB.
+static int access_script_params(uint16_t conn, uint16_t attr,
+                                struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    const char *name = js_api_current_name();
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        if (!name || !name[0]) return respond_str(ctxt->om, "{\"items\":[]}");
+        char *buf = malloc(2048);
+        if (!buf) return BLE_ATT_ERR_INSUFFICIENT_RES;
+        int n = js_api_params_json(name, buf, 2048);
+        int rc = (n > 0) ? respond(ctxt->om, buf, (size_t)n)
+                         : respond_str(ctxt->om, "{\"items\":[]}");
+        free(buf);
+        return rc;
+    }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        if (!name || !name[0]) return 0;  // nothing playing — no-op
+        uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+        char *body = malloc((size_t)len + 1);
+        if (!body) return BLE_ATT_ERR_INSUFFICIENT_RES;
+        uint16_t got = 0;
+        if (ble_hs_mbuf_to_flat(ctxt->om, body, len, &got) != 0) {
+            free(body);
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+        body[got] = 0;
+        js_api_apply_params(name, body, got);
+        free(body);
+        return 0;
+    }
+    return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+}
+
 static int access_current(uint16_t conn, uint16_t attr,
                           struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
@@ -493,6 +568,40 @@ static int access_pair_claim(uint16_t conn, uint16_t attr,
     return 0;
 }
 
+// Release ownership over BLE. The bonded owner writes here to unpair so the app
+// can actually let go of a BLE-only lamp on "Remove" — otherwise the lamp stays
+// claimed with its only admin token discarded, and re-claim is rejected forever
+// (BLE_ATT_ERR_WRITE_NOT_PERMITTED). WRITE_ENC means only a Just-Works-bonded
+// peer reaches it. The reboot rebuilds the GATT table in unpaired mode (control
+// chars drop back to plaintext) and re-runs wifi_init, which brings the
+// provisioning AP back so the now-ownerless lamp can be re-adopted over WiFi too.
+static void pair_unpair_reboot_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+}
+
+static int access_pair_unpair(uint16_t conn, uint16_t attr,
+                              struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    if (!pairing_is_paired()) {
+        // Nothing to release — report success so a best-effort "unpair on
+        // remove" against an already-unpaired lamp doesn't surface an error.
+        ESP_LOGI(TAG, "BLE unpair: already unpaired — no-op");
+        return 0;
+    }
+    esp_err_t err = pairing_unpair();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "BLE unpair: pairing_unpair err=%s", esp_err_to_name(err));
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    ESP_LOGI(TAG, "BLE unpair: ownership released — scheduling reboot");
+    xTaskCreate(pair_unpair_reboot_task, "pair_unpair_reboot", 2048, NULL, 5, NULL);
+    return 0;
+}
+
 // --- Service definition -----------------------------------------------------
 
 // Built at start time so we can stamp on the WRITE_ENC / READ_ENC bits when
@@ -500,7 +609,7 @@ static int access_pair_claim(uint16_t conn, uint16_t attr,
 // allowing the operation). The pair_token + pair_claim characteristics are
 // always present but are themselves ENC-gated, so they leak nothing to a
 // passive scanner while still allowing a first-time BLE claim.
-static struct ble_gatt_chr_def s_chrs[18];
+static struct ble_gatt_chr_def s_chrs[21];
 static struct ble_gatt_svc_def s_svcs[2];
 
 static void build_service_def(bool paired)
@@ -521,7 +630,10 @@ static void build_service_def(bool paired)
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_power.u,          .access_cb = access_power,          .flags = R | W };
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_color.u,          .access_cb = access_color,          .flags = R | W };
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_mode.u,           .access_cb = access_mode,           .flags = R | W };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_brightness.u,     .access_cb = access_brightness,     .flags = R | W };
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_current_script.u, .access_cb = access_current,        .flags = RE | W | N, .val_handle = &s_h_current };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_script_params.u,  .access_cb = access_script_params,  .flags = R | W };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_fps.u,            .access_cb = access_fps,            .flags = R };
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_play_next.u,      .access_cb = access_play_step,      .arg = (void *)(intptr_t)+1, .flags = W };
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_play_prev.u,      .access_cb = access_play_step,      .arg = (void *)(intptr_t)-1, .flags = W };
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_upload_meta.u,    .access_cb = access_upload_meta,    .flags = W };
@@ -534,6 +646,7 @@ static void build_service_def(bool paired)
     // first-wins, and both are ENC-gated so a passive sniffer learns nothing.
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_pair_token.u, .access_cb = access_pair_token, .flags = BLE_GATT_CHR_F_READ  | BLE_GATT_CHR_F_READ_ENC };
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_pair_claim.u, .access_cb = access_pair_claim, .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_pair_unpair.u, .access_cb = access_pair_unpair, .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC };
     s_chrs[i] = (struct ble_gatt_chr_def){ 0 };
 
     s_svcs[0] = (struct ble_gatt_svc_def){
@@ -610,6 +723,24 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_MTU:
         ESP_LOGI(TAG, "BLE MTU=%d", event->mtu.value);
         return 0;
+    case BLE_GAP_EVENT_ENC_CHANGE:
+        ESP_LOGI(TAG, "BLE encryption change status=%d", event->enc_change.status);
+        return 0;
+    case BLE_GAP_EVENT_REPEAT_PAIRING: {
+        // The peer (e.g. iOS) still holds a bond we no longer have. Our bonds
+        // are RAM-only, so any reboot — including the deliberate one after an
+        // admin claim — and any re-flash/NVS re-burn drops them, while the
+        // phone keeps its LTK. Without this case NimBLE denies the re-pair, the
+        // link never encrypts, and the WRITE_ENC pair-claim comes back as
+        // "Encryption is insufficient" (and iOS holds the connection open, so
+        // we stop advertising until rebooted). Delete our stale record and tell
+        // the host to pair again from scratch — the user never has to "forget"
+        // the lamp in their Bluetooth settings.
+        struct ble_gap_conn_desc desc;
+        if (ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc) == 0)
+            ble_store_util_delete_peer(&desc.peer_id_addr);
+        return BLE_GAP_REPEAT_PAIRING_RETRY;
+    }
     case BLE_GAP_EVENT_ADV_COMPLETE:
         advertise();
         return 0;
@@ -652,6 +783,12 @@ esp_err_t bt_service_start(void)
     }
     ble_hs_cfg.sync_cb = on_sync;
     ble_hs_cfg.reset_cb = on_reset;
+    // Persist Just Works bonds to NVS so the link stays bonded across reboots
+    // (the RAM store would drop every bond, forcing a re-pair after the
+    // post-claim reboot). Pairs with the BLE_GAP_EVENT_REPEAT_PAIRING handler:
+    // persistence is the happy path, repeat-pairing recovers a wiped/reflashed
+    // lamp whose phone still holds a stale key.
+    ble_store_config_init();
 
     // Phase 9 — Just Works bonding. NoInputNoOutput cap means the host
     // (macOS/Android) will NOT prompt for a passkey; it auto-bonds. Bonding is

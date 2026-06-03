@@ -405,8 +405,15 @@ static void parse_annotations(ctx_t *c)
             char range[40] = {0}; int ri = 0;
             while (p < end && ri < (int)sizeof(range) - 1 && *p != '=' && *p != ' ') range[ri++] = *p++;
             float lo = 0, hi = 1;
+            uint8_t ptype = PLBC_PARAM_RANGE;
             char *dd = strstr(range, "..");
-            if (dd) { *dd = 0; lo = (float)atof(range); hi = (float)atof(dd + 2); }
+            if (dd) {
+                *dd = 0; lo = (float)atof(range); hi = (float)atof(dd + 2);
+            } else if (strcmp(range, "switch") == 0) {
+                /* `@param N switch = 0` — a 0/1 toggle. The VM still sees a
+                 * float in [0,1]; `type` only changes how clients render it. */
+                ptype = PLBC_PARAM_SWITCH; lo = 0; hi = 1;
+            }
             while (p < end && (*p == ' ' || *p == '\t' || *p == '=')) p++;
             char defbuf[32] = {0}; int di = 0;
             while (p < end && di < (int)sizeof(defbuf) - 1
@@ -424,6 +431,7 @@ static void parse_annotations(ctx_t *c)
                 plbc_param_t *param = &prog->params[prog->n_params++];
                 strncpy(param->name, name, sizeof(param->name) - 1);
                 param->min = lo; param->max = hi; param->def = def; param->value = def;
+                param->type = ptype;
                 strncpy(param->desc, desc, sizeof(param->desc) - 1);
             }
         } else if (line_len > 13 && memcmp(line, "@state.pixel ", 13) == 0) {
@@ -454,6 +462,20 @@ static void parse_annotations(ctx_t *c)
                 strncpy(s->name, name, sizeof(s->name) - 1);
                 s->def = def;
             }
+        } else if (line_len > 6 && memcmp(line, "@mode ", 6) == 0) {
+            /* @mode strip|mirror — Phase 41. Declares the wormhole render mode
+             * this effect is authored for; js_api_play() auto-switches the
+             * device to it. Unrecognised values leave mode = -1 (no hint). */
+            const char *p = line + 6;
+            const char *end = line + line_len;
+            while (p < end && (*p == ' ' || *p == '\t')) p++;
+            if (end - p >= 6 && memcmp(p, "mirror", 6) == 0)     prog->mode = 1;
+            else if (end - p >= 5 && memcmp(p, "strip", 5) == 0) prog->mode = 0;
+        } else if (line_len >= 11 && memcmp(line, "@modeSwitch", 11) == 0) {
+            /* @modeSwitch — Phase 41. Marks the effect as nice in both render
+             * modes, so clients allow the user to change it. Absent (default)
+             * means the effect is locked to its declared @mode. */
+            prog->mode_switch = 1;
         }
         /* Other // ... comments are ignored. */
         i = le;
@@ -919,6 +941,7 @@ esp_err_t plbc_compile(const char *source, size_t source_len,
 {
     if (!source || !out_prog) return ESP_ERR_INVALID_ARG;
     memset(out_prog, 0, sizeof(*out_prog));
+    out_prog->mode = -1;  /* no @mode hint unless the source declares one */
     if (err_buf && err_buf_size) err_buf[0] = 0;
 
     /* Tolerate trailing NUL terminators. EMBED_TXTFILES appends one to every

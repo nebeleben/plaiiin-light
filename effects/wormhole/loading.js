@@ -1,3 +1,6 @@
+// @mode mirror
+// @modeSwitch
+//
 // Loading — a ring of evenly spaced dots chasing each other around the loop,
 // the classic "loading spinner". Each dot has a soft pow() falloff so it
 // reads as a glowing blob with a short trail rather than a hard pixel.

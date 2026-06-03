@@ -22,6 +22,9 @@ CONFIG_BT_BLUEDROID_ENABLED=n
 CONFIG_BT_NIMBLE_ENABLED=y
 # Bigger MTU = fewer round-trips when uploading scripts over BLE.
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=512
+# Persist Just Works bonds to NVS so they survive reboots (incl. the deliberate
+# post-claim reboot). Without this the RAM store drops every bond on reset.
+CONFIG_BT_NIMBLE_NVS_PERSIST=y
 # WiFi IRAM optimization off — frees ~2 KB IRAM that the BT controller needs.
 # Tradeoff: very small WiFi throughput cost (we don't push gigabit anyway).
 CONFIG_ESP_WIFI_IRAM_OPT=n

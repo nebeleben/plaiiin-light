@@ -51,4 +51,4 @@ CONFIG_PLAIIIN_WH_RING3="0,0,0"
 # Phase 33 — AP-mode onboarding animation. The named script must live in
 # effects/wormhole/ so a --full burn installs it to SPIFFS alongside the
 # rest of the byForm bundle. Replace it later via PUT /api/js/ap-wormhole.
-CONFIG_PLAIIIN_AP_JS="ap-wormhole"
+CONFIG_PLAIIIN_AP_JS="breath"

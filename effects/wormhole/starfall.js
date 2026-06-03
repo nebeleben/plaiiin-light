@@ -1,3 +1,6 @@
+// @mode mirror
+// @modeSwitch
+//
 // Starfall — multiple stars orbiting the wormhole ring, each racing around
 // for a few loops before burning out, then a fresh one spawns in its place
 // after a random pause. Each star drags a pow()-shaped tail behind it.

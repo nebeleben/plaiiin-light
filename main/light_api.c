@@ -926,7 +926,10 @@ static esp_err_t wormhole_post_handler(httpd_req_t *req)
             char nm[64] = {0};
             snprintf(nm, sizeof(nm), "%s", name);
             js_api_stop();
-            js_api_play(nm, JS_DEFAULT_FPS);
+            // Phase 41 — autoswitch=false: the user just set this mode by hand
+            // (or changed rings); re-applying the effect's declared @mode here
+            // would immediately revert their choice, making the toggle a no-op.
+            js_api_play_ex(nm, JS_DEFAULT_FPS, false);
         }
     }
 

@@ -1,3 +1,6 @@
+// @mode mirror
+// @modeSwitch
+//
 // KnightRider — the K.I.T.T. scanner: a bright head with a cosine-shaped
 // core and a pow() tail, sweeping across the loop. In bounce mode the head
 // runs to one end, reverses, and runs back; in cycle mode it loops cleanly

@@ -2,6 +2,7 @@
 
 #include "esp_spiffs.h"
 #include "esp_log.h"
+#include "plbc.h"  /* PLBC_MAGIC / PLBC_VERSION for the .bc freshness check */
 
 #include <dirent.h>
 #include <errno.h>
@@ -230,6 +231,22 @@ bool js_storage_bc_exists(const char *name)
     full_path_bc(name, path, sizeof(path));
     struct stat st;
     return stat(path, &st) == 0;
+}
+
+bool js_storage_bc_current(const char *name)
+{
+    if (!name_is_valid(name)) return false;
+    char path[96];
+    full_path_bc(name, path, sizeof(path));
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    /* magic(4) + version(1) — enough to tell a current .bc from a stale one. */
+    unsigned char hdr[5];
+    size_t n = fread(hdr, 1, sizeof(hdr), f);
+    fclose(f);
+    if (n != sizeof(hdr)) return false;
+    if (memcmp(hdr, PLBC_MAGIC, 4) != 0) return false;
+    return hdr[4] == PLBC_VERSION;
 }
 
 static int cmp_names(const void *a, const void *b)

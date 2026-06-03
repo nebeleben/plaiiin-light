@@ -65,28 +65,47 @@ var PLShade = (function () {
 
   // `// @param NAME MIN..MAX = DEF [DESC]`
   var RE_PARAM = /^\s*\/\/\s*@param\s+([A-Za-z_]\w*)\s+(-?[\d.eE+]+)\s*\.\.\s*(-?[\d.eE+]+)\s*=\s*(-?[\d.eE+]+)\s*(.*)$/;
+  // `// @param NAME switch = DEF [DESC]` — a 0/1 toggle (Phase 41).
+  var RE_PARAM_SWITCH = /^\s*\/\/\s*@param\s+([A-Za-z_]\w*)\s+switch\s*=\s*(-?[\d.eE+]+)\s*(.*)$/;
+  // `// @mode strip|mirror` — declared wormhole render mode (Phase 41).
+  var RE_MODE = /^\s*\/\/\s*@mode\s+(strip|mirror)\b/;
+  // `// @modeSwitch` — the effect works in both modes, so the user may change
+  // it; absent means it's locked to @mode (Phase 41).
+  var RE_MODESWITCH = /^\s*\/\/\s*@modeSwitch\b/;
   // `// @state.pixel NAME : DEF`  /  `// @state NAME : DEF`
   var RE_PSTATE = /^\s*\/\/\s*@state\.pixel\s+([A-Za-z_]\w*)\s*:\s*(-?[\d.eE+]+)/;
   var RE_STATE  = /^\s*\/\/\s*@state\s+([A-Za-z_]\w*)\s*:\s*(-?[\d.eE+]+)/;
 
   function parseAnnotations(source) {
     var lines = String(source).split("\n");
-    var params = [], frameState = [], pixelState = [];
+    var params = [], frameState = [], pixelState = [], mode = null, modeSwitch = false;
     for (var i = 0; i < lines.length; i++) {
       var m = RE_PARAM.exec(lines[i]);
       if (m) {
         params.push({
           name: m[1], min: parseFloat(m[2]), max: parseFloat(m[3]),
-          def: parseFloat(m[4]), desc: (m[5] || "").trim(),
+          def: parseFloat(m[4]), desc: (m[5] || "").trim(), type: "range",
         });
         continue;
       }
+      m = RE_PARAM_SWITCH.exec(lines[i]);
+      if (m) {
+        params.push({
+          name: m[1], min: 0, max: 1,
+          def: parseFloat(m[2]), desc: (m[3] || "").trim(), type: "switch",
+        });
+        continue;
+      }
+      m = RE_MODE.exec(lines[i]);
+      if (m) { mode = m[1]; continue; }
+      if (RE_MODESWITCH.test(lines[i])) { modeSwitch = true; continue; }
       m = RE_PSTATE.exec(lines[i]);
       if (m) { pixelState.push({ name: m[1], def: parseFloat(m[2]) }); continue; }
       m = RE_STATE.exec(lines[i]);
       if (m) { frameState.push({ name: m[1], def: parseFloat(m[2]) }); }
     }
-    return { params: params, frameState: frameState, pixelState: pixelState };
+    return { params: params, frameState: frameState, pixelState: pixelState,
+             mode: mode, modeSwitch: modeSwitch };
   }
 
   function clampByte(v) {

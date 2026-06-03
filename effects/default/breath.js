@@ -7,7 +7,7 @@
 // roughly matches a relaxed human breathing rate.
 
 // @param frequency 0.05..2.0 = 0.25 Breaths per second
-// @param floor 0..0.5 = 0.0 Minimum brightness (lifts the dark valleys)
+// @param floor 0..0.5 = 0.25 Minimum brightness (lifts the dark valleys)
 
 function shade(x, y, idx, frame, base, params) {
   // 2π / 1000 ≈ 0.00628318 — combine wall-clock ms × frequency × 2π.

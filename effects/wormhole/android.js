@@ -1,3 +1,6 @@
+// @mode mirror
+// @modeSwitch
+//
 // Android — a single arc that grows and shrinks while it rotates around the
 // loop, ported from the classic Android boot/progress spinner. The arc has
 // smoothstep-feathered ends so it fades softly in at the tail and out at the
