@@ -1,6 +1,7 @@
 // @param speed 0.05..2.0 = 0.6 Dance speed
 // @param flap 0.1..2.0 = 1.0 Wing flap intensity
 // @param cadence 0.5..6.0 = 3.0 Hop cadence
+// @param grassy 0.0..1.0 = 0.6 Grass height and wildness
 function shade(x, y, idx, frame, base, params) {
   let t = frame * params.speed * 0.05;
 
@@ -17,11 +18,8 @@ function shade(x, y, idx, frame, base, params) {
   let cy = 10.8 - bounce;
   cy = min(cy, 10.0);   // can't sink below the floor — feet stay on row 15
 
-  let dx = x - cx;
-  let dy = y - cy;
-
-  // Body (egg-shaped blob)
-  let body = (dx * dx) / 9.0 + (dy * dy) / 12.0;
+  // Body (egg-shaped blob) — dx/dy inlined to stay under the 32-local cap
+  let body = ((x - cx) * (x - cx)) / 9.0 + ((y - cy) * (y - cy)) / 12.0;
 
   // Head sits up and forward
   let hx = x - (cx + sway * 0.4);
@@ -49,14 +47,57 @@ function shade(x, y, idx, frame, base, params) {
     }
   }
 
-  // Comb (red bump on top of head)
-  let combx = x - (cx + sway * 0.4);
-  let comby = y - (cy - 7.0);
-  let comb = (combx * combx) / 2.0 + (comby * comby) / 1.5;
+  // Comb (red bump on top of head) — combx/comby inlined to save locals
+  let comb = ((x - (cx + sway * 0.4)) * (x - (cx + sway * 0.4))) / 2.0 + ((y - (cy - 7.0)) * (y - (cy - 7.0))) / 1.5;
 
-  let r = 0;
-  let g = 0;
-  let b = 0;
+  // Grass: a continuous green floor on the bottom row (15) plus ragged blades
+  // that rise a row or two and sway in a light breeze. Drawn as background, so
+  // the chicken and its feet render in front of it.
+  // grassy scales both the blade height variation and the breeze: at 0 it
+  // collapses to a flat, stiff single-row floor; toward 1 the blades grow
+  // taller, more uneven, and sway faster.
+  // (gWild inlined — the VM caps a script at 32 locals and this effect is near it)
+  let grassH = 1.0 + params.grassy * (1.0 + (sinLUT(x * 0.9) * 0.9 + sinLUT(t * (1.0 + params.grassy * 1.4) + x * 0.6) * 0.7) * 1.3);
+  let grassTop = 16.0 - grassH;
+  let isGrass = 0;
+  if (y == 15) { isGrass = 1; }
+  if (y >= grassTop) { isGrass = 1; }
+
+  // --- Faint background scene (painted first; grass + chicken draw over it).
+  // Sky: gentle vertical gradient, a touch brighter and bluer toward the top.
+  let r = 4 + (15.0 - y) * 0.3;
+  let g = 9 + (15.0 - y) * 0.5;
+  let b = 18 + (15.0 - y) * 0.9;
+
+  // Rolling hills on the horizon — a dim muted-green band behind the grass.
+  // Tall now: peaks reach ~row 7 (a pixel above the panel's midline), rolling
+  // down to ~row 11 in the valleys.
+  if (y >= 11.0 - (sinLUT(x * 0.5) + 1.0) * 2.0) {
+    r = 10; g = 26; b = 20;
+  }
+
+  // Stable behind the chicken: two posts + two rails of faint brown branch.
+  if ((x == 2 || x == 11) && y >= 5 && y <= 13) {
+    r = 58; g = 36; b = 16;
+  }
+  if (y == 6 || y == 10) {
+    r = 58; g = 36; b = 16;
+  }
+
+  // 3-pixel sun tucked into the upper-right corner — soft warm glow.
+  if ((x == 15 && y == 0) || (x == 14 && y == 0) || (x == 15 && y == 1)) {
+    r = 115; g = 85; b = 30;
+  }
+
+  if (isGrass == 1) {
+    // green blade — brighter/yellower toward the tip. grassy also drives the
+    // hue: short stiff grass (low) reads dry and olive (more red, less green),
+    // tall wild grass (high) reads lush and saturated.
+    let blade = clamp01((16.0 - y) / 3.0);
+    r = (55 - params.grassy * 35) + blade * 40;
+    g = (70 + params.grassy * 75) + sinLUT(x * 1.7) * 25 + blade * 55;
+    b = (15 + params.grassy * 22) + blade * 12;
+  }
 
   if (head < 1.0 || body < 1.0) {
     // White feathers tinted with base
