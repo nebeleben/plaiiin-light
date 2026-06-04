@@ -221,11 +221,21 @@ static int access_device_info(uint16_t conn, uint16_t attr,
     config_get_str_or(CONFIG_KEY_LAMP_TYPE, lamp_type, sizeof(lamp_type), CONFIG_PLAIIIN_LAMP_TYPE);
     snprintf(fw, sizeof(fw), "%s", CONFIG_PLAIIIN_FIRMWARE_VERSION);
 
-    char body[320];
+    // Include the LED geometry so BLE clients can size local previews / shaders
+    // correctly (Compose, Scripts preview). Without these a BLE lamp reports 1×1
+    // and the preview renders a single pixel. Small payload — well under the
+    // single-read cap. Field names match HTTP /api so the client decoders share.
+    char body[480];
     snprintf(body, sizeof(body),
              "{\"node\":\"%s\",\"vendor\":\"%s\",\"api\":\"%s\",\"fw\":\"%s\","
-             "\"lampForm\":\"%s\",\"lampType\":\"%s\"}",
-             node, vendor, api_ver, fw, lamp_form, lamp_type);
+             "\"lampForm\":\"%s\",\"lampType\":\"%s\","
+             "\"ledCount\":%d,\"physicalW\":%d,\"physicalH\":%d,"
+             "\"logicalW\":%d,\"logicalH\":%d,\"pixelGroupW\":%d,\"pixelGroupH\":%d}",
+             node, vendor, api_ver, fw, lamp_form, lamp_type,
+             led_control_get_count(),
+             led_control_get_physical_w(), led_control_get_physical_h(),
+             led_control_get_logical_w(), led_control_get_logical_h(),
+             led_control_get_pixel_group_w(), led_control_get_pixel_group_h());
     return respond_str(ctxt->om, body);
 }
 
