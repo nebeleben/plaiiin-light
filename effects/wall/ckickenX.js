@@ -51,13 +51,12 @@ function shade(x, y, idx, frame, base, params) {
   let comb = ((x - (cx + sway * 0.4)) * (x - (cx + sway * 0.4))) / 2.0 + ((y - (cy - 7.0)) * (y - (cy - 7.0))) / 1.5;
 
   // Grass: a continuous green floor on the bottom row (15) plus ragged blades
-  // that rise a row or two and sway in a light breeze. Drawn as background, so
-  // the chicken and its feet render in front of it.
-  // grassy scales both the blade height variation and the breeze: at 0 it
-  // collapses to a flat, stiff single-row floor; toward 1 the blades grow
-  // taller, more uneven, and sway faster.
-  // (gWild inlined — the VM caps a script at 32 locals and this effect is near it)
-  let grassH = 1.0 + params.grassy * (1.0 + (sinLUT(x * 0.9) * 0.9 + sinLUT(t * (1.0 + params.grassy * 1.4) + x * 0.6) * 0.7) * 1.3);
+  // that rise a row or two. Static (no breeze) — two spatial frequencies give
+  // the ragged outline. Drawn as background, so the chicken and its feet render
+  // in front of it. grassy scales the blade height + raggedness (and hue
+  // below): at 0 it collapses to a flat, stiff single-row floor; toward 1 the
+  // blades grow taller and more uneven.
+  let grassH = 1.0 + params.grassy * (1.0 + (sinLUT(x * 0.9) * 0.9 + sinLUT(x * 0.6) * 0.7) * 1.3);
   let grassTop = 16.0 - grassH;
   let isGrass = 0;
   if (y == 15) { isGrass = 1; }
