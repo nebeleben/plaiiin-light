@@ -54,6 +54,10 @@ esp_err_t factory_reset_wifi(bool reboot)
         CONFIG_KEY_PAIR_TOKEN,
         CONFIG_KEY_PAIR_MODE,
         CONFIG_KEY_SHARE_KEYS,
+        // Clear the sticky "provisioned" flag — a factory reset is the explicit,
+        // physical way to return a previously-owned lamp to fresh AP/BLE
+        // onboarding (the open provisioning AP comes back on the next boot).
+        CONFIG_KEY_PROVISIONED,
     };
     config_store_erase_keys(keys, sizeof(keys) / sizeof(keys[0]));
     confirm_blink(0, 200, 0);   // green
@@ -82,6 +86,9 @@ esp_err_t factory_reset_full(bool reboot)
         CONFIG_KEY_PAIR_TOKEN,
         CONFIG_KEY_PAIR_MODE,
         CONFIG_KEY_SHARE_KEYS,
+        // Sticky provisioning marker — see factory_reset_wifi(). A full reset
+        // also returns the lamp to fresh AP/BLE onboarding.
+        CONFIG_KEY_PROVISIONED,
         // Phase 29 — wormhole render mode + per-ring config. Wiped on a full
         // reset so a wormhole lamp returns to its default strip mode with the
         // firmware-derived ring count and all-zero physical/creative config.

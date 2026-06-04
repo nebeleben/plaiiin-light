@@ -66,6 +66,12 @@
 // 32-byte secret rendered as URL-safe base64. Wiped by factory_reset_full.
 #define CONFIG_KEY_PAIR_MODE     "pair_mode"
 #define CONFIG_KEY_PAIR_TOKEN    "pair_token"
+// "1" once the lamp has been claimed at least once (by any transport). Unlike
+// CONFIG_KEY_PAIR_MODE this is NOT cleared on unpair — it survives the owner
+// releasing ownership from their app, so a previously-owned lamp never silently
+// reopens its unauthenticated provisioning AP. Only a factory reset clears it,
+// returning the lamp to fresh AP/BLE onboarding. See wifi_init() + SECURITY.md.
+#define CONFIG_KEY_PROVISIONED   "provisioned"
 // Phase 27 — role-based sharing. JSON array of share-key entries
 // [{"id","key","role":"user|creator","label","revoked","created"}], stored
 // as one NVS string. The admin key stays in CONFIG_KEY_PAIR_TOKEN; these are

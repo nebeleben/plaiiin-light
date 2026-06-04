@@ -78,12 +78,11 @@ static esp_err_t send_err_json(httpd_req_t *req, int status, const char *msg)
 // SPIFFS and (b) hardcoded effects compiled into this firmware for the
 // current LAMPOS_FORM. Clients see one flat list and can't tell which is
 // which (intentional — keeps the script-picker UI uniform).
-static esp_err_t list_handler(httpd_req_t *req)
+int js_api_list_json(char *out, size_t cap)
 {
-    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
     char scripts[1024];
     esp_err_t err = js_storage_list(scripts, sizeof(scripts));
-    if (err != ESP_OK) return send_err_json(req, 500, "list failed");
+    if (err != ESP_OK) return -1;
 
     /* Merge hardcoded names into the array. js_storage_list returns "[…]" or
      * "[]"; we splice each hardcoded name in before the closing bracket, AND
@@ -132,12 +131,22 @@ static esp_err_t list_handler(httpd_req_t *req)
     }
 
     const char *playing = js_api_current_name();
-    char resp[1200];
+    int written;
     if (playing) {
-        snprintf(resp, sizeof(resp), "{\"scripts\":%s,\"playing\":\"%s\"}", scripts, playing);
+        written = snprintf(out, cap, "{\"scripts\":%s,\"playing\":\"%s\"}", scripts, playing);
     } else {
-        snprintf(resp, sizeof(resp), "{\"scripts\":%s,\"playing\":null}", scripts);
+        written = snprintf(out, cap, "{\"scripts\":%s,\"playing\":null}", scripts);
     }
+    if (written < 0 || (size_t)written >= cap) return -1;
+    return written;
+}
+
+static esp_err_t list_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
+    char resp[1200];
+    int n = js_api_list_json(resp, sizeof(resp));
+    if (n < 0) return send_err_json(req, 500, "list failed");
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, resp);
     return ESP_OK;
@@ -497,17 +506,24 @@ static esp_err_t delete_handler(httpd_req_t *req)
     if (pairing_http_check(req, PL_ROLE_CREATOR) != ESP_OK) return ESP_FAIL;
     const char *name = name_from_uri(req->uri);
     if (!name) return send_err_json(req, 400, "missing name");
-    /* Hardcoded effects can't be deleted — they live in firmware. */
-    if (hardcoded_effect_find(name)) {
-        return send_err_json(req, 409, "name reserved (hardcoded effect)");
-    }
-    esp_err_t err = js_storage_remove(name);
+    esp_err_t err = js_api_delete_script(name);
+    if (err == ESP_ERR_INVALID_STATE) return send_err_json(req, 409, "name reserved (hardcoded effect)");
     if (err == ESP_ERR_NOT_FOUND) return send_err_json(req, 404, "not found");
     if (err != ESP_OK) return send_err_json(req, 500, "delete failed");
-    /* Drop the .bc alongside the .js. Best-effort — missing .bc is fine. */
-    js_storage_remove_bc(name);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    return ESP_OK;
+}
+
+esp_err_t js_api_delete_script(const char *name)
+{
+    if (!name || !name[0]) return ESP_ERR_INVALID_ARG;
+    /* Hardcoded effects can't be deleted — they live in firmware. */
+    if (hardcoded_effect_find(name)) return ESP_ERR_INVALID_STATE;
+    esp_err_t err = js_storage_remove(name);
+    if (err != ESP_OK) return err;  /* ESP_ERR_NOT_FOUND or a real failure */
+    /* Drop the .bc alongside the .js. Best-effort — missing .bc is fine. */
+    js_storage_remove_bc(name);
     return ESP_OK;
 }
 

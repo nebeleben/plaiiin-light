@@ -31,10 +31,13 @@
 #include "esp_err.h"
 
 #define PLBC_MAGIC       "PLBC"
-/* v2 (Phase 41): per-param `type` byte (range vs switch) + a program-level
- * `mode` byte in the header (declared wormhole render mode). v1 .bc lack both;
- * the boot recompile pass (js_storage_bc_current) rebuilds them on upgrade. */
-#define PLBC_VERSION     2
+/* Single in-development format (kept at v1 — we break/extend it freely and
+ * recompile rather than version it). Carries a per-param `type` byte (range vs
+ * switch) and a program-level `mode` byte in the header (declared wormhole
+ * render mode). The boot recompile pass (js_storage_bc_current) rebuilds any
+ * stored .bc whose version byte doesn't match, so a format change just needs a
+ * reflash + reboot. */
+#define PLBC_VERSION     1
 
 #define PLBC_MAX_PARAMS         12
 /* Bumped from 16 → 32 in Phase 23 so multi-slot effects (e.g. shootingstar

@@ -19,6 +19,17 @@
 /** Register JS CRUD and playback HTTP endpoints. */
 esp_err_t js_api_register(httpd_handle_t server);
 
+/** Build the script-list JSON ({"scripts":[...],"playing":...}) that GET
+ *  /api/js returns — SPIFFS scripts merged with hardcoded effects plus the
+ *  currently-playing name. Shared with the BLE script-list fetch. Returns the
+ *  byte length written (>0) or <0 if the listing didn't fit in `cap`. */
+int js_api_list_json(char *out, size_t cap);
+
+/** Delete a stored script (.js + .bc). Returns ESP_OK, ESP_ERR_NOT_FOUND if no
+ *  such script, ESP_ERR_INVALID_STATE if the name is a reserved hardcoded
+ *  effect, or ESP_ERR_INVALID_ARG. Shared by HTTP DELETE and BLE. */
+esp_err_t js_api_delete_script(const char *name);
+
 // Transport-agnostic helpers — also called from bt_service.c so HTTP and BLE
 // share the same playback / upload state machines.
 

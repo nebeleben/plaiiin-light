@@ -22,3 +22,9 @@ void light_api_apply_power(bool on);
 void light_api_apply_color_solid(uint8_t r, uint8_t g, uint8_t b);
 /// 0 = ok, -1 = unknown mode string. Accepts "api" / "js" / "stream".
 int  light_api_apply_mode(const char *mode);
+
+// Stream takeover/restore — called by the WS layer (ws_server.c) when pixel
+// frames start/stop arriving, so streaming auto-suspends the JS effect and
+// auto-resumes the persisted mode on disconnect, with no client cooperation.
+void light_api_enter_stream(void);
+void light_api_exit_stream(void);

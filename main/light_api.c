@@ -101,7 +101,11 @@ void light_api_apply_power(bool on)
 {
     char mode[16] = {0};
     get_persistent_mode(mode, sizeof(mode));
-    if (strcmp(mode, "js") == 0) {
+    // While a WS client is streaming, the panel is driven frame-by-frame over
+    // the socket — the persisted JS effect must stay suspended. Without this
+    // guard, powering on (clients send stream-mode THEN power-on) would
+    // re-launch the JS player here and composite it on top of the stream.
+    if (strcmp(mode, "js") == 0 && ws_server_get_mode() != LAMP_MODE_STREAM) {
         if (on) {
             led_control_power(true);
             // start_current_js is idempotent — safe to call when the player
@@ -160,6 +164,31 @@ int light_api_apply_mode(const char *mode)
         return 0;
     }
     return -1;
+}
+
+// Auto stream takeover, driven by the WS layer the moment real pixel frames
+// arrive — so a client previewing over /ws never has to POST /api/mode
+// "stream" first, and a running JS effect can't composite under the stream.
+// Always stops the live runtime (even if mode was already STREAM) because a
+// power-on can re-launch the player after an explicit setMode("stream").
+void light_api_enter_stream(void)
+{
+    js_api_stop();                       /* suspend JS player / hardcoded effect */
+    ws_server_set_mode(LAMP_MODE_STREAM);
+}
+
+// Restore the persisted mode once the last stream socket closes. Mirrors the
+// "js"/"api" branches of apply_mode without re-persisting (stream was never
+// persisted). No-op if an explicit /api/mode call already left stream mode.
+void light_api_exit_stream(void)
+{
+    if (ws_server_get_mode() != LAMP_MODE_STREAM) return;
+    ws_server_set_mode(LAMP_MODE_API);
+    char mode[16] = {0};
+    get_persistent_mode(mode, sizeof(mode));
+    if (strcmp(mode, "js") == 0 && led_control_is_on()) {
+        (void)start_current_js();
+    }
 }
 
 // POST /api/power  body: {"on":true} or {"on":false}

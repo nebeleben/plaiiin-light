@@ -1,13 +1,60 @@
 #include "ws_server.h"
 #include "led_control.h"
 #include "wormhole.h"
+#include "light_api.h"
 #include "pairing.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
 #include <string.h>
 #include <stdlib.h>
 
 static const char *TAG = "ws_server";
 static lamp_mode_t s_mode = LAMP_MODE_API;
+
+// Per-socket state stashed in req->sess_ctx. `gen` latches the wormhole stream
+// generation this socket opened on (a later reload bumps the global counter →
+// next frame mismatches → close). `streaming` marks that this socket has taken
+// over the panel with pixel frames, so its close releases one stream hold.
+typedef struct {
+    uint32_t gen;
+    bool     streaming;
+} ws_sess_t;
+
+// Refcount of sockets currently streaming pixel frames. The 0→1 edge suspends
+// the JS effect (light_api_enter_stream); the 1→0 edge restores the persisted
+// mode (light_api_exit_stream). Guarded because httpd may run several workers.
+static portMUX_TYPE s_stream_mux = portMUX_INITIALIZER_UNLOCKED;
+static int          s_stream_refs = 0;
+
+// Returns true on the 0→1 transition (caller should enter stream mode).
+static bool ws_stream_acquire(void)
+{
+    portENTER_CRITICAL(&s_stream_mux);
+    bool first = (s_stream_refs++ == 0);
+    portEXIT_CRITICAL(&s_stream_mux);
+    return first;
+}
+
+// Returns true on the 1→0 transition (caller should restore the persisted mode).
+static bool ws_stream_release(void)
+{
+    portENTER_CRITICAL(&s_stream_mux);
+    bool last = (--s_stream_refs <= 0);
+    if (s_stream_refs < 0) s_stream_refs = 0;
+    portEXIT_CRITICAL(&s_stream_mux);
+    return last;
+}
+
+// req->free_ctx — fires when the socket session is torn down. Releases this
+// socket's stream hold (if any) so a dropped preview restores the JS effect.
+static void ws_sess_free(void *ctx)
+{
+    ws_sess_t *s = (ws_sess_t *)ctx;
+    if (s && s->streaming && ws_stream_release()) {
+        light_api_exit_stream();
+    }
+    free(s);
+}
 
 // WebSocket binary protocol commands
 #define CMD_COLOR_FRAME  0x01
@@ -188,15 +235,26 @@ static esp_err_t ws_handler(httpd_req_t *req)
             // A later wormhole_reload() bumps the global counter; the next
             // frame on this socket then sees the mismatch and closes (4002).
             if (req->sess_ctx == NULL) {
-                uint32_t *gen = (uint32_t *)malloc(sizeof(uint32_t));
-                if (gen) {
-                    *gen = wormhole_stream_generation();
-                    req->sess_ctx = gen;
-                    req->free_ctx = free;
+                ws_sess_t *s = (ws_sess_t *)calloc(1, sizeof(ws_sess_t));
+                if (s) {
+                    s->gen = wormhole_stream_generation();
+                    req->sess_ctx = s;
+                    req->free_ctx = ws_sess_free;
                 }
             }
-            uint32_t gen = req->sess_ctx ? *(uint32_t *)req->sess_ctx
-                                         : wormhole_stream_generation();
+            ws_sess_t *sess = (ws_sess_t *)req->sess_ctx;
+            uint32_t gen = sess ? sess->gen : wormhole_stream_generation();
+
+            // First pixel frame on this socket → take the panel over from any
+            // running JS effect (no /api/mode "stream" needed from the client).
+            // The 0→1 refcount edge does the actual suspend; ws_sess_free()
+            // restores the persisted mode when the last streamer disconnects.
+            if (sess && !sess->streaming && ws_pkt.len >= 1 &&
+                ws_pkt.payload[0] == CMD_COLOR_FRAME) {
+                sess->streaming = true;
+                if (ws_stream_acquire()) light_api_enter_stream();
+            }
+
             ws_result_t res = handle_ws_binary(ws_pkt.payload, ws_pkt.len, gen);
             if (res.close) {
                 ws_send_close(req, res.code);

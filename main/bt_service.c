@@ -4,6 +4,7 @@
 #include "light_api.h"
 #include "js_api.h"
 #include "js_player.h"
+#include "js_storage.h"
 #include "led_control.h"
 #include "ws_server.h"
 #include "pairing.h"
@@ -16,6 +17,7 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
+#include "host/ble_att.h"
 #include "host/ble_hs.h"
 #include "host/ble_store.h"
 #include "host/ble_uuid.h"
@@ -71,6 +73,10 @@ DEF_UUID(chr_pair_unpair,     0x10);
 DEF_UUID(chr_brightness,      0x11);
 DEF_UUID(chr_script_params,   0x12);
 DEF_UUID(chr_fps,             0x13);
+DEF_UUID(chr_fetch_meta,      0x14);
+DEF_UUID(chr_fetch_data,      0x15);
+DEF_UUID(chr_script_delete,   0x16);
+DEF_UUID(chr_script_stop,     0x17);
 
 // --- State ------------------------------------------------------------------
 
@@ -514,6 +520,135 @@ static int access_upload_status(uint16_t conn, uint16_t attr,
     return respond_str(ctxt->om, "{\"state\":\"idle\"}");
 }
 
+// --- Chunked fetch: script list + script download --------------------------
+//
+// The mirror image of the upload path. Large READ payloads — the merged script
+// list and a script's full source text — blow past the ~1 KB GATT long-read
+// ceiling, so we stream them out in MTU-sized slices.
+//   1. Peer WRITES {"op":"list"} or {"op":"read","name":"X"} to fetch_meta.
+//      The server builds the entire payload into a heap buffer and remembers
+//      its length (or records an error).
+//   2. Peer READS fetch_meta to learn {"state":"ready","total":N} (or
+//      {"state":"error",...}).
+//   3. Peer READS fetch_data repeatedly; each read returns the next slice and
+//      advances the cursor, until the peer has accumulated `total` bytes.
+// Each slice is kept strictly below ATT_MTU-1 so CoreBluetooth (and any other
+// GATT stack) never issues an automatic READ_BLOB follow-up — a blob read would
+// re-enter this callback and double-advance the cursor, corrupting the stream.
+// One transfer at a time, like upload.
+typedef struct {
+    bool   active;
+    char  *buf;
+    size_t total;
+    size_t offset;
+    char   err[96];   // non-empty → the arming write failed; READ reports it
+} fetch_state_t;
+static fetch_state_t s_fetch = {0};
+
+static void fetch_reset(void)
+{
+    if (s_fetch.buf) free(s_fetch.buf);
+    memset(&s_fetch, 0, sizeof(s_fetch));
+}
+
+static int access_fetch_meta(uint16_t conn, uint16_t attr,
+                             struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        char buf[160] = {0};
+        if (copy_mbuf_str(ctxt->om, buf, sizeof(buf)) != 0) return BLE_ATT_ERR_UNLIKELY;
+        char op[16] = {0};
+        if (!extract_json_str(buf, "op", op, sizeof(op))) return BLE_ATT_ERR_INVALID_PDU;
+        fetch_reset();
+        if (strcmp(op, "list") == 0) {
+            char *out = malloc(1400);
+            if (!out) return BLE_ATT_ERR_INSUFFICIENT_RES;
+            int n = js_api_list_json(out, 1400);
+            if (n <= 0) {
+                free(out);
+                snprintf(s_fetch.err, sizeof(s_fetch.err), "list failed");
+                s_fetch.active = true;
+                return 0;
+            }
+            s_fetch.buf = out;
+            s_fetch.total = (size_t)n;
+            s_fetch.active = true;
+            return 0;
+        }
+        if (strcmp(op, "read") == 0) {
+            char name[64] = {0};
+            if (!extract_json_str(buf, "name", name, sizeof(name))) return BLE_ATT_ERR_INVALID_PDU;
+            char *source = NULL; size_t len = 0;
+            esp_err_t err = js_storage_read(name, &source, &len);
+            if (err != ESP_OK) {
+                snprintf(s_fetch.err, sizeof(s_fetch.err), "%s",
+                         err == ESP_ERR_NOT_FOUND ? "not found" : "read failed");
+                s_fetch.active = true;
+                return 0;
+            }
+            s_fetch.buf = source;   // ownership transfers to the fetch session
+            s_fetch.total = len;
+            s_fetch.active = true;
+            return 0;
+        }
+        return BLE_ATT_ERR_INVALID_PDU;
+    }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        char st[128];
+        if (!s_fetch.active) {
+            snprintf(st, sizeof(st), "{\"state\":\"idle\"}");
+        } else if (s_fetch.err[0]) {
+            snprintf(st, sizeof(st), "{\"state\":\"error\",\"error\":\"%s\"}", s_fetch.err);
+        } else {
+            snprintf(st, sizeof(st), "{\"state\":\"ready\",\"total\":%u}",
+                     (unsigned)s_fetch.total);
+        }
+        return respond_str(ctxt->om, st);
+    }
+    return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+}
+
+static int access_fetch_data(uint16_t conn, uint16_t attr,
+                             struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    // No live session (or it errored / already drained) → empty read.
+    if (!s_fetch.active || s_fetch.err[0] || !s_fetch.buf) return 0;
+    size_t remaining = s_fetch.total - s_fetch.offset;
+    if (remaining == 0) return 0;
+    // Slice strictly below ATT_MTU-1 so the peer's stack never auto-blobs.
+    uint16_t mtu = ble_att_mtu(conn);
+    size_t chunk = (mtu > 23) ? (size_t)mtu - 3 : 20;
+    if (chunk > 512) chunk = 512;
+    size_t n = remaining < chunk ? remaining : chunk;
+    int rc = respond(ctxt->om, s_fetch.buf + s_fetch.offset, n);
+    if (rc != 0) return rc;
+    s_fetch.offset += n;
+    if (s_fetch.offset >= s_fetch.total) fetch_reset();   // fully drained
+    return 0;
+}
+
+static int access_script_delete(uint16_t conn, uint16_t attr,
+                                struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    char name[64] = {0};
+    if (copy_mbuf_str(ctxt->om, name, sizeof(name)) != 0) return BLE_ATT_ERR_UNLIKELY;
+    esp_err_t err = js_api_delete_script(name);
+    if (err == ESP_ERR_INVALID_STATE) return BLE_ATT_ERR_WRITE_NOT_PERMITTED;  // hardcoded
+    if (err != ESP_OK) return BLE_ATT_ERR_UNLIKELY;                            // not found / fail
+    return 0;
+}
+
+static int access_script_stop(uint16_t conn, uint16_t attr,
+                              struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    js_api_stop();
+    notify_str(s_h_current, "");   // tell subscribers nothing is playing now
+    return 0;
+}
+
 // Bonded peers can read pair_token to learn the shared HTTP secret without
 // the user having to copy it out of a separate UI. Available only in paired
 // mode AND only over an encrypted link (BLE_GATT_CHR_F_READ_ENC flag below).
@@ -609,7 +744,7 @@ static int access_pair_unpair(uint16_t conn, uint16_t attr,
 // allowing the operation). The pair_token + pair_claim characteristics are
 // always present but are themselves ENC-gated, so they leak nothing to a
 // passive scanner while still allowing a first-time BLE claim.
-static struct ble_gatt_chr_def s_chrs[21];
+static struct ble_gatt_chr_def s_chrs[25];
 static struct ble_gatt_svc_def s_svcs[2];
 
 static void build_service_def(bool paired)
@@ -639,6 +774,10 @@ static void build_service_def(bool paired)
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_upload_meta.u,    .access_cb = access_upload_meta,    .flags = W };
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_upload_data.u,    .access_cb = access_upload_data,    .flags = W };
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_upload_status.u,  .access_cb = access_upload_status,  .flags = R | N, .val_handle = &s_h_upload_status };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_fetch_meta.u,     .access_cb = access_fetch_meta,     .flags = R | W };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_fetch_data.u,     .access_cb = access_fetch_data,     .flags = R };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_script_delete.u,  .access_cb = access_script_delete,  .flags = W };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_script_stop.u,    .access_cb = access_script_stop,    .flags = W };
     // Pair token + claim are always present and always require an encrypted
     // (bonded) link — independent of `paired`. Claim lets a user take
     // ownership over BLE alone; token hands the minted admin key back to the
@@ -725,6 +864,23 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         return 0;
     case BLE_GAP_EVENT_ENC_CHANGE:
         ESP_LOGI(TAG, "BLE encryption change status=%d", event->enc_change.status);
+        // Central GATT stacks cache a *bonded* device's attribute table and only
+        // refresh it on a Service Changed indication, so a lamp that grew its
+        // table since the bond was created (e.g. an OTA that added the script
+        // fetch/delete/stop chars) would stay invisible until a re-pair. Indicate
+        // the whole range so the peer re-discovers.
+        //
+        // BUT only do this for an already-owned lamp reconnecting. During
+        // first-time onboarding the peer is *freshly* pairing (no stale cache to
+        // bust), and firing Service Changed mid-handshake makes it re-discover in
+        // the middle of the bonded pair_claim write/pair_token read — which
+        // stalls the claim and loops the link. At this ENC_CHANGE the claim write
+        // hasn't run yet, so an onboarding lamp is still unpaired here; gating on
+        // paired skips onboarding entirely. The post-claim reboot reconnects as
+        // paired and gets the indication then.
+        if (event->enc_change.status == 0 && pairing_is_paired()) {
+            ble_svc_gatt_changed(0x0001, 0xffff);
+        }
         return 0;
     case BLE_GAP_EVENT_REPEAT_PAIRING: {
         // The peer (e.g. iOS) still holds a bond we no longer have. Our bonds

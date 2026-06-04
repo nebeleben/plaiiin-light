@@ -16,6 +16,10 @@ static const char *TAG = "pairing";
 #define TOKEN_B64_LEN 64
 
 static bool s_paired_cached = false;
+// Sticky "has been claimed before" flag — see CONFIG_KEY_PROVISIONED. Cached at
+// init; set on the first claim and only ever cleared by a factory reset (which
+// reboots, so we reload it fresh rather than mutate this in the reset path).
+static bool s_provisioned_cached = false;
 
 static const char b64_alphabet[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -64,11 +68,17 @@ esp_err_t pairing_init(void)
     char mode[16] = {0};
     config_get_str_or(CONFIG_KEY_PAIR_MODE, mode, sizeof(mode), "unpaired");
     s_paired_cached = (strcmp(mode, "paired") == 0);
-    ESP_LOGI(TAG, "pair_mode=%s", s_paired_cached ? "paired" : "unpaired");
+    char prov[8] = {0};
+    config_get_str_or(CONFIG_KEY_PROVISIONED, prov, sizeof(prov), "0");
+    s_provisioned_cached = (prov[0] == '1');
+    ESP_LOGI(TAG, "pair_mode=%s provisioned=%d",
+             s_paired_cached ? "paired" : "unpaired", s_provisioned_cached);
     return ESP_OK;
 }
 
 bool pairing_is_paired(void) { return s_paired_cached; }
+
+bool pairing_is_provisioned(void) { return s_provisioned_cached; }
 
 // Constant-time compare — bails on the loop count, not the conditional, so a
 // network attacker can't time-distinguish an early mismatch and binary-search.
@@ -133,6 +143,10 @@ esp_err_t pairing_pair(char *out_token, size_t out_len)
     if (err != ESP_OK) return err;
     config_store_set_str(CONFIG_KEY_PAIR_MODE, "paired");
     s_paired_cached = true;
+    // Sticky: once claimed, the lamp never auto-reopens its provisioning AP on a
+    // later unpair. Survives pairing_unpair(); only a factory reset clears it.
+    config_store_set_str(CONFIG_KEY_PROVISIONED, "1");
+    s_provisioned_cached = true;
     snprintf(out_token, out_len, "%s", buf);
     ESP_LOGI(TAG, "Device paired (admin token rotated)");
     return ESP_OK;
@@ -145,7 +159,11 @@ esp_err_t pairing_unpair(void)
     // Sharing only exists on a paired lamp — drop every share key too.
     keys_clear_all();
     s_paired_cached = false;
-    ESP_LOGI(TAG, "Device unpaired");
+    // NOTE: CONFIG_KEY_PROVISIONED is deliberately NOT cleared here. Releasing
+    // ownership from the owner's app must not silently reopen the unauthenticated
+    // provisioning AP — the lamp stays BLE-only (and re-claimable over BLE) until
+    // an explicit factory reset. See wifi_init() + SECURITY.md.
+    ESP_LOGI(TAG, "Device unpaired (provisioned flag retained — no AP fallback)");
     return ESP_OK;
 }
 

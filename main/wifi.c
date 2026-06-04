@@ -123,12 +123,16 @@ esp_err_t wifi_init(void)
 
     if (config_store_has_wifi()) {
         return start_sta();
-    } else if (pairing_is_paired()) {
-        // Paired (claimed over BLE) but no WiFi creds: don't bring up the open
-        // provisioning AP — the owner drives the lamp over Bluetooth, and an
-        // AP would let anyone in radio range reach the captive portal. The
-        // lamp stays BLE-only until WiFi creds are pushed.
-        ESP_LOGI(TAG, "no WiFi creds but paired — skipping provisioning AP (BLE-only ownership)");
+    } else if (pairing_is_paired() || pairing_is_provisioned()) {
+        // No WiFi creds, but the lamp is either currently claimed OR was claimed
+        // before and then released from the owner's app. Either way it must NOT
+        // bring up the open provisioning AP: that AP is unauthenticated (the
+        // captive portal grants admin to anyone in radio range), so reopening it
+        // on unpair would silently expose full control to a passer-by. The lamp
+        // keeps advertising over BLE so the owner can drive / re-claim it; only a
+        // factory reset (which clears CONFIG_KEY_PROVISIONED) returns it to AP
+        // onboarding. See SECURITY.md.
+        ESP_LOGI(TAG, "no WiFi creds but provisioned/paired — skipping AP (BLE-only)");
         s_mode = PLAIIIN_WIFI_NONE;
         return ESP_OK;
     } else {

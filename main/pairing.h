@@ -37,6 +37,11 @@ esp_err_t pairing_init(void);
 /** True if the device is currently in paired mode. */
 bool pairing_is_paired(void);
 
+/** True if the lamp has been claimed at least once and not since factory-reset.
+ *  Sticky across unpair — used to suppress the provisioning-AP fallback so a
+ *  previously-owned lamp never reopens an unauthenticated AP. See SECURITY.md. */
+bool pairing_is_provisioned(void);
+
 /** Resolve the role a raw token grants: admin when unpaired, admin for the
  *  pair_token, user|creator for a matching non-revoked share key, else NONE. */
 pl_role_t pairing_role_for_token(const char *token);
