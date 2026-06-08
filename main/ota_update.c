@@ -204,6 +204,158 @@ static esp_err_t ota_upload_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// --- BLE OTA session --------------------------------------------------------
+//
+// Mirrors ota_upload_handler but fed by chunked GATT writes. We buffer the
+// head of the image until we have enough to read its embedded app_desc, run
+// the same per-form check, then commit the head and stream the rest straight
+// into esp_ota_write. State is a single static session — concurrency isn't a
+// goal over BLE.
+
+typedef struct {
+    bool              active;
+    esp_ota_handle_t  handle;
+    const esp_partition_t *partition;
+    size_t            total;
+    size_t            received;     // bytes committed to flash via esp_ota_write
+    uint8_t           head[1024];
+    int               head_have;
+    bool              form_checked; // true once the head was validated + written
+} ota_ble_session_t;
+
+static ota_ble_session_t s_ota = {0};
+
+size_t ota_ble_received(void) { return s_ota.active ? s_ota.received : 0; }
+
+void ota_ble_abort(void)
+{
+    if (s_ota.active) {
+        esp_ota_abort(s_ota.handle);
+    }
+    memset(&s_ota, 0, sizeof(s_ota));
+}
+
+esp_err_t ota_ble_begin(size_t total_len)
+{
+    ota_ble_abort();
+    if (total_len == 0) return ESP_ERR_INVALID_ARG;
+
+    const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
+    if (!part) {
+        ESP_LOGE(TAG, "BLE OTA: no update partition");
+        return ESP_ERR_NOT_FOUND;
+    }
+    esp_err_t err = esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &s_ota.handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "BLE OTA: esp_ota_begin failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    s_ota.active       = true;
+    s_ota.partition    = part;
+    s_ota.total        = total_len;
+    s_ota.received     = 0;
+    s_ota.head_have    = 0;
+    s_ota.form_checked = false;
+    ESP_LOGI(TAG, "BLE OTA: begin %u bytes -> '%s'",
+             (unsigned)total_len, part->label);
+    return ESP_OK;
+}
+
+// Validate + flush the buffered head once we have enough of it. Returns ESP_OK
+// after the head is written, ESP_ERR_INVALID_VERSION on a form/binary mismatch.
+static esp_err_t ota_ble_commit_head(void)
+{
+    char incoming_form[32] = {0};
+    if (!extract_form_from_buf(s_ota.head, s_ota.head_have,
+                               incoming_form, sizeof(incoming_form))) {
+        ESP_LOGE(TAG, "BLE OTA rejected: no per-form app_desc in head");
+        return ESP_ERR_INVALID_VERSION;
+    }
+    if (strcmp(incoming_form, LAMPOS_FORM_STR) != 0) {
+        ESP_LOGE(TAG, "BLE OTA rejected: form '%s' != device '%s'",
+                 incoming_form, LAMPOS_FORM_STR);
+        return ESP_ERR_INVALID_VERSION;
+    }
+    esp_err_t err = esp_ota_write(s_ota.handle, s_ota.head, s_ota.head_have);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "BLE OTA: esp_ota_write(head) failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    s_ota.received     = s_ota.head_have;
+    s_ota.form_checked = true;
+    ESP_LOGI(TAG, "BLE OTA: form '%s' ok, head %d bytes committed",
+             incoming_form, s_ota.head_have);
+    return ESP_OK;
+}
+
+esp_err_t ota_ble_write(const uint8_t *data, size_t len)
+{
+    if (!s_ota.active) return ESP_ERR_INVALID_STATE;
+    if (len == 0) return ESP_OK;
+    if (s_ota.received + (s_ota.form_checked ? 0 : s_ota.head_have) + len > s_ota.total) {
+        ESP_LOGE(TAG, "BLE OTA: overrun (%u + %u > %u)",
+                 (unsigned)s_ota.received, (unsigned)len, (unsigned)s_ota.total);
+        ota_ble_abort();
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    // Pre-form-check: accumulate into the head buffer until we have enough to
+    // read app_desc (512 B covers it) or the whole (tiny) image has arrived.
+    if (!s_ota.form_checked) {
+        size_t space = sizeof(s_ota.head) - s_ota.head_have;
+        size_t take  = len < space ? len : space;
+        memcpy(s_ota.head + s_ota.head_have, data, take);
+        s_ota.head_have += take;
+        bool have_enough = s_ota.head_have >= 512 ||
+                           (size_t)s_ota.head_have >= s_ota.total;
+        if (!have_enough) return ESP_OK;   // wait for more head bytes
+
+        esp_err_t err = ota_ble_commit_head();
+        if (err != ESP_OK) { ota_ble_abort(); return err; }
+
+        // Any bytes from this write that didn't fit in the head buffer get
+        // written straight through now.
+        if (take < len) {
+            err = esp_ota_write(s_ota.handle, data + take, len - take);
+            if (err != ESP_OK) { ota_ble_abort(); return err; }
+            s_ota.received += (len - take);
+        }
+        return ESP_OK;
+    }
+
+    esp_err_t err = esp_ota_write(s_ota.handle, data, len);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "BLE OTA: esp_ota_write failed: %s", esp_err_to_name(err));
+        ota_ble_abort();
+        return err;
+    }
+    s_ota.received += len;
+    return ESP_OK;
+}
+
+esp_err_t ota_ble_end(void)
+{
+    if (!s_ota.active) return ESP_ERR_INVALID_STATE;
+    if (!s_ota.form_checked) { ota_ble_abort(); return ESP_ERR_INVALID_STATE; }
+
+    esp_err_t err = esp_ota_end(s_ota.handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "BLE OTA: esp_ota_end failed: %s", esp_err_to_name(err));
+        memset(&s_ota, 0, sizeof(s_ota));
+        return err;
+    }
+    err = esp_ota_set_boot_partition(s_ota.partition);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "BLE OTA: set_boot_partition failed: %s", esp_err_to_name(err));
+        memset(&s_ota, 0, sizeof(s_ota));
+        return err;
+    }
+    ESP_LOGI(TAG, "BLE OTA: complete, %u bytes -> '%s'",
+             (unsigned)s_ota.received, s_ota.partition->label);
+    memset(&s_ota, 0, sizeof(s_ota));
+    return ESP_OK;
+}
+
 esp_err_t ota_update_register(httpd_handle_t server)
 {
     httpd_uri_t ota_page = {

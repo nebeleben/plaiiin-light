@@ -8,6 +8,8 @@
 #include "led_control.h"
 #include "ws_server.h"
 #include "pairing.h"
+#include "form_prompt.h"
+#include "ota_update.h"
 
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -77,6 +79,11 @@ DEF_UUID(chr_fetch_meta,      0x14);
 DEF_UUID(chr_fetch_data,      0x15);
 DEF_UUID(chr_script_delete,   0x16);
 DEF_UUID(chr_script_stop,     0x17);
+DEF_UUID(chr_device_name,     0x18);
+DEF_UUID(chr_form_set,        0x19);
+DEF_UUID(chr_ota_meta,        0x1A);
+DEF_UUID(chr_ota_data,        0x1B);
+DEF_UUID(chr_ota_status,      0x1C);
 
 // --- State ------------------------------------------------------------------
 
@@ -87,6 +94,7 @@ static uint16_t s_h_wifi_scan = 0;
 static uint16_t s_h_wifi_status = 0;
 static uint16_t s_h_upload_status = 0;
 static uint16_t s_h_current = 0;
+static uint16_t s_h_ota_status = 0;
 
 // Active upload state. One concurrent upload — BLE bandwidth + RAM make
 // concurrent transfers a non-goal.
@@ -585,6 +593,18 @@ static int access_fetch_meta(uint16_t conn, uint16_t attr,
             s_fetch.active = true;
             return 0;
         }
+        if (strcmp(op, "form") == 0) {
+            // Effective form descriptor (NVS override or firmware default).
+            // Can exceed a single GATT read, so it streams via fetch_data like
+            // a script source does.
+            char *out = malloc(2048);
+            if (!out) return BLE_ATT_ERR_INSUFFICIENT_RES;
+            form_prompt_get_effective(out, 2048);
+            s_fetch.buf = out;
+            s_fetch.total = strlen(out);
+            s_fetch.active = true;
+            return 0;
+        }
         if (strcmp(op, "read") == 0) {
             char name[64] = {0};
             if (!extract_json_str(buf, "name", name, sizeof(name))) return BLE_ATT_ERR_INVALID_PDU;
@@ -747,6 +767,156 @@ static int access_pair_unpair(uint16_t conn, uint16_t attr,
     return 0;
 }
 
+// --- Device name (BLE rename) ----------------------------------------------
+//
+// Writing a new name persists it to NVS and reboots: the name feeds the BLE
+// advertisement, mDNS hostname, SoftAP SSID and MQTT topics, all of which are
+// built once at boot. Gated on paired so only the owner renames a claimed lamp
+// (matches the HTTP rename, which needs the admin token).
+static void name_reboot_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(800));
+    esp_restart();
+}
+
+static int access_device_name(uint16_t conn, uint16_t attr,
+                              struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    if (!pairing_is_paired()) return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
+    char name[64] = {0};
+    if (copy_mbuf_str(ctxt->om, name, sizeof(name)) != 0) return BLE_ATT_ERR_UNLIKELY;
+    if (name[0] == 0) return BLE_ATT_ERR_INVALID_PDU;
+    if (config_store_set_str(CONFIG_KEY_NODE_NAME, name) != ESP_OK)
+        return BLE_ATT_ERR_UNLIKELY;
+    ESP_LOGI(TAG, "BLE rename -> '%s' — scheduling reboot", name);
+    xTaskCreate(name_reboot_task, "name_reboot", 2048, NULL, 5, NULL);
+    return 0;
+}
+
+// --- Form prompt override (BLE) --------------------------------------------
+//
+// Mirrors PUT /api/form-prompt: a non-empty body sets the per-lamp override,
+// an empty body clears it back to the firmware default. Reading the effective
+// descriptor goes through the chunked-fetch path (op "form"). Gated on paired,
+// like the HTTP route's PL_ROLE_CREATOR check.
+static int access_form_set(uint16_t conn, uint16_t attr,
+                           struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    if (!pairing_is_paired()) return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
+    uint16_t n = OS_MBUF_PKTLEN(ctxt->om);
+    if (n > 2048) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    esp_err_t err;
+    if (n == 0) {
+        const char *keys[] = { CONFIG_KEY_FORM_PROMPT };
+        err = config_store_erase_keys(keys, 1);
+    } else {
+        char *buf = malloc(n + 1);
+        if (!buf) return BLE_ATT_ERR_INSUFFICIENT_RES;
+        if (ble_hs_mbuf_to_flat(ctxt->om, buf, n, NULL) != 0) { free(buf); return BLE_ATT_ERR_UNLIKELY; }
+        buf[n] = 0;
+        err = config_store_set_str(CONFIG_KEY_FORM_PROMPT, buf);
+        free(buf);
+    }
+    return err == ESP_OK ? 0 : BLE_ATT_ERR_UNLIKELY;
+}
+
+// --- OTA over BLE -----------------------------------------------------------
+//
+// Chunked firmware flash: write {"total":N} to ota_meta to open a session,
+// stream the .bin in MTU-sized writes to ota_data, and the lamp reboots into
+// the new image once the last byte lands. ota_status carries progress / done /
+// error. The heavy lifting (esp_ota_begin/write/end + per-form binary check)
+// lives in ota_update.c; here we just shuttle bytes and report state. Gated on
+// paired — OTA is an owner-only operation.
+static char   s_ota_status[160] = {0};
+static size_t s_ota_total = 0;
+static size_t s_ota_sent  = 0;
+
+static void ota_status_set(const char *s)
+{
+    snprintf(s_ota_status, sizeof(s_ota_status), "%s", s);
+    notify_str(s_h_ota_status, s_ota_status);
+}
+
+static void ota_reboot_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(1500));
+    esp_restart();
+}
+
+static int access_ota_meta(uint16_t conn, uint16_t attr,
+                           struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    if (!pairing_is_paired()) return BLE_ATT_ERR_WRITE_NOT_PERMITTED;
+    char buf[96] = {0};
+    if (copy_mbuf_str(ctxt->om, buf, sizeof(buf)) != 0) return BLE_ATT_ERR_UNLIKELY;
+    int total = 0;
+    if (!extract_json_int(buf, "total", &total) || total <= 0) return BLE_ATT_ERR_INVALID_PDU;
+    esp_err_t err = ota_ble_begin((size_t)total);
+    if (err != ESP_OK) {
+        ota_status_set("{\"state\":\"error\",\"error\":\"begin failed\"}");
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    s_ota_total = (size_t)total;
+    s_ota_sent  = 0;
+    snprintf(s_ota_status, sizeof(s_ota_status),
+             "{\"state\":\"ready\",\"total\":%d}", total);
+    notify_str(s_h_ota_status, s_ota_status);
+    return 0;
+}
+
+static int access_ota_data(uint16_t conn, uint16_t attr,
+                           struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    if (s_ota_total == 0) return BLE_ATT_ERR_UNLIKELY;   // no open session
+    uint16_t n = OS_MBUF_PKTLEN(ctxt->om);
+    uint8_t chunk[600];
+    if (n > sizeof(chunk)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    if (ble_hs_mbuf_to_flat(ctxt->om, chunk, n, NULL) != 0) return BLE_ATT_ERR_UNLIKELY;
+
+    esp_err_t err = ota_ble_write(chunk, n);
+    if (err != ESP_OK) {
+        const char *why = (err == ESP_ERR_INVALID_VERSION)
+            ? "{\"state\":\"error\",\"error\":\"wrong firmware (form mismatch)\"}"
+            : "{\"state\":\"error\",\"error\":\"write failed\"}";
+        ota_status_set(why);
+        s_ota_total = 0; s_ota_sent = 0;
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    s_ota_sent += n;
+
+    if (s_ota_sent >= s_ota_total) {
+        err = ota_ble_end();
+        if (err != ESP_OK) {
+            ota_status_set("{\"state\":\"error\",\"error\":\"validation failed\"}");
+            s_ota_total = 0; s_ota_sent = 0;
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+        ota_status_set("{\"state\":\"done\"}");
+        s_ota_total = 0; s_ota_sent = 0;
+        ESP_LOGI(TAG, "BLE OTA: flashed, rebooting");
+        xTaskCreate(ota_reboot_task, "ota_reboot", 2048, NULL, 5, NULL);
+    } else {
+        snprintf(s_ota_status, sizeof(s_ota_status),
+                 "{\"state\":\"in_progress\",\"received\":%u,\"total\":%u}",
+                 (unsigned)s_ota_sent, (unsigned)s_ota_total);
+    }
+    return 0;
+}
+
+static int access_ota_status(uint16_t conn, uint16_t attr,
+                             struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    return respond_str(ctxt->om, s_ota_status[0] ? s_ota_status : "{\"state\":\"idle\"}");
+}
+
 // --- Service definition -----------------------------------------------------
 
 // Built at start time so we can stamp on the WRITE_ENC / READ_ENC bits when
@@ -754,7 +924,7 @@ static int access_pair_unpair(uint16_t conn, uint16_t attr,
 // allowing the operation). The pair_token + pair_claim characteristics are
 // always present but are themselves ENC-gated, so they leak nothing to a
 // passive scanner while still allowing a first-time BLE claim.
-static struct ble_gatt_chr_def s_chrs[25];
+static struct ble_gatt_chr_def s_chrs[32];
 static struct ble_gatt_svc_def s_svcs[2];
 
 static void build_service_def(bool paired)
@@ -788,6 +958,11 @@ static void build_service_def(bool paired)
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_fetch_data.u,     .access_cb = access_fetch_data,     .flags = R };
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_script_delete.u,  .access_cb = access_script_delete,  .flags = W };
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_script_stop.u,    .access_cb = access_script_stop,    .flags = W };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_device_name.u,    .access_cb = access_device_name,    .flags = W };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_form_set.u,       .access_cb = access_form_set,       .flags = W };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_ota_meta.u,       .access_cb = access_ota_meta,       .flags = W };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_ota_data.u,       .access_cb = access_ota_data,       .flags = W };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_ota_status.u,     .access_cb = access_ota_status,     .flags = R | N, .val_handle = &s_h_ota_status };
     // Pair token + claim are always present and always require an encrypted
     // (bonded) link — independent of `paired`. Claim lets a user take
     // ownership over BLE alone; token hands the minted admin key back to the
