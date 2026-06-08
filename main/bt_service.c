@@ -10,6 +10,7 @@
 #include "pairing.h"
 #include "form_prompt.h"
 #include "ota_update.h"
+#include "factory_reset.h"
 
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -84,6 +85,7 @@ DEF_UUID(chr_form_set,        0x19);
 DEF_UUID(chr_ota_meta,        0x1A);
 DEF_UUID(chr_ota_data,        0x1B);
 DEF_UUID(chr_ota_status,      0x1C);
+DEF_UUID(chr_factory_reset,   0x1D);
 
 // --- State ------------------------------------------------------------------
 
@@ -233,17 +235,23 @@ static int access_device_info(uint16_t conn, uint16_t attr,
     // correctly (Compose, Scripts preview). Without these a BLE lamp reports 1×1
     // and the preview renders a single pixel. Small payload — well under the
     // single-read cap. Field names match HTTP /api so the client decoders share.
-    char body[480];
+    // `paired` (currently owned) + `provisioned` (claimed at least once → in
+    // BLE-only mode, no provisioning AP) let clients tell that this lamp can't
+    // be WiFi-onboarded through the BLE sheet without a factory reset first.
+    char body[560];
     snprintf(body, sizeof(body),
              "{\"node\":\"%s\",\"vendor\":\"%s\",\"api\":\"%s\",\"fw\":\"%s\","
              "\"lampForm\":\"%s\",\"lampType\":\"%s\","
              "\"ledCount\":%d,\"physicalW\":%d,\"physicalH\":%d,"
-             "\"logicalW\":%d,\"logicalH\":%d,\"pixelGroupW\":%d,\"pixelGroupH\":%d}",
+             "\"logicalW\":%d,\"logicalH\":%d,\"pixelGroupW\":%d,\"pixelGroupH\":%d,"
+             "\"paired\":%s,\"provisioned\":%s}",
              node, vendor, api_ver, fw, lamp_form, lamp_type,
              led_control_get_count(),
              led_control_get_physical_w(), led_control_get_physical_h(),
              led_control_get_logical_w(), led_control_get_logical_h(),
-             led_control_get_pixel_group_w(), led_control_get_pixel_group_h());
+             led_control_get_pixel_group_w(), led_control_get_pixel_group_h(),
+             pairing_is_paired() ? "true" : "false",
+             pairing_is_provisioned() ? "true" : "false");
     return respond_str(ctxt->om, body);
 }
 
@@ -876,7 +884,10 @@ static int access_ota_data(uint16_t conn, uint16_t attr,
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
     if (s_ota_total == 0) return BLE_ATT_ERR_UNLIKELY;   // no open session
     uint16_t n = OS_MBUF_PKTLEN(ctxt->om);
-    uint8_t chunk[600];
+    // Static, not stack: the NimBLE host task stack is only 4 KB and esp_ota_write
+    // (called via ota_ble_write) is itself stack-hungry. GATT access callbacks are
+    // serialized on that one task, so a shared scratch buffer is safe here.
+    static uint8_t chunk[600];
     if (n > sizeof(chunk)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
     if (ble_hs_mbuf_to_flat(ctxt->om, chunk, n, NULL) != 0) return BLE_ATT_ERR_UNLIKELY;
 
@@ -915,6 +926,35 @@ static int access_ota_status(uint16_t conn, uint16_t attr,
 {
     if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
     return respond_str(ctxt->om, s_ota_status[0] ? s_ota_status : "{\"state\":\"idle\"}");
+}
+
+// --- Factory reset over BLE -------------------------------------------------
+//
+// Write "wifi" or "full" to wipe the lamp and reboot it into fresh AP/BLE
+// onboarding (the provisioned flag is cleared, so the open provisioning AP
+// comes back). Works on claimed lamps (WRITE_ENC bonded link when paired) and
+// unclaimed ones (plaintext). The wipe + reboot runs off-task so the write
+// response flushes first; the BLE link drops on reboot, which clients treat as
+// success. Mirrors HTTP POST /api/reset.
+static void factory_reset_task(void *arg)
+{
+    int full = (int)(intptr_t)arg;
+    vTaskDelay(pdMS_TO_TICKS(500));
+    if (full) factory_reset_full(true);   // both reboot internally
+    else      factory_reset_wifi(true);
+    vTaskDelete(NULL);
+}
+
+static int access_factory_reset(uint16_t conn, uint16_t attr,
+                                struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+    char scope[16] = {0};
+    if (copy_mbuf_str(ctxt->om, scope, sizeof(scope)) != 0) return BLE_ATT_ERR_UNLIKELY;
+    int full = (strcmp(scope, "full") == 0);
+    ESP_LOGW(TAG, "BLE factory reset (%s) — scheduling", full ? "full" : "wifi");
+    xTaskCreate(factory_reset_task, "ble_reset", 4096, (void *)(intptr_t)full, 5, NULL);
+    return 0;
 }
 
 // --- Service definition -----------------------------------------------------
@@ -963,6 +1003,7 @@ static void build_service_def(bool paired)
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_ota_meta.u,       .access_cb = access_ota_meta,       .flags = W };
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_ota_data.u,       .access_cb = access_ota_data,       .flags = W };
     s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_ota_status.u,     .access_cb = access_ota_status,     .flags = R | N, .val_handle = &s_h_ota_status };
+    s_chrs[i++] = (struct ble_gatt_chr_def){ .uuid = &chr_factory_reset.u,  .access_cb = access_factory_reset,  .flags = W };
     // Pair token + claim are always present and always require an encrypted
     // (bonded) link — independent of `paired`. Claim lets a user take
     // ownership over BLE alone; token hands the minted admin key back to the

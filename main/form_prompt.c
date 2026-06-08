@@ -252,13 +252,18 @@ void form_prompt_build_for_mode(int mode, char *out, size_t max_len)
                                        : (count / 24 > 0 ? count / 24 : 1);
 
     // Prefer the burned template file; fall back to the hardcoded descriptor.
-    char tpl[1024];
-    if (read_template_file(tpl, sizeof(tpl))) {
+    // tpl + section are 1 KB each — heap-allocate them rather than stack-allocate.
+    // This runs on the HTTP task (big stack) AND, since Phase 37, on the 4 KB
+    // NimBLE host task (BLE form-prompt read), where two 1 KB stack buffers plus
+    // the SPIFFS read frames overflow the stack and reset the chip.
+    char *tpl = malloc(1024);
+    char *section = NULL;
+    if (tpl && read_template_file(tpl, 1024)) {
         // Phase 29 — pick the @@strip / @@mirror section for the requested
         // mode. Markerless templates yield the whole file (non-wormhole forms
         // are unaffected). A missing section falls through to build_hardcoded.
-        char section[1024];
-        if (template_section(tpl, mode, section, sizeof(section))) {
+        section = malloc(1024);
+        if (section && template_section(tpl, mode, section, 1024)) {
             int n = panel_side(lamp_type);
             if (n <= 0) n = 8;
             int per = n * n;
@@ -278,9 +283,13 @@ void form_prompt_build_for_mode(int mode, char *out, size_t max_len)
             snprintf(tbl[8].val, sizeof(tbl[8].val), "%d", per > 0 ? count / per : 5);
             snprintf(tbl[9].val, sizeof(tbl[9].val), "%d", rings);
             apply_subst(section, out, max_len, tbl, (int)(sizeof(tbl) / sizeof(tbl[0])));
+            free(section);
+            free(tpl);
             return;
         }
     }
+    free(section);
+    free(tpl);
 
     build_hardcoded(out, max_len, lamp_form, lamp_type, w, h, count, mode);
 }
