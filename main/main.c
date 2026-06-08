@@ -327,7 +327,16 @@ void app_main(void)
         }
     }
 
-    // 6c. If the persisted mode is "js" and a script is selected, resume it.
+    // 6c. Restore the persisted on/off state so a reboot or power-loss brings
+    // the lamp back the way the user left it. Default ON — the common case and
+    // backward-compatible with lamps burned before this key existed.
+    bool want_on = config_get_i32_or(CONFIG_KEY_POWER_ON, 1) != 0;
+
+    // 6d. If the persisted mode is "js" and a script is selected, resume it —
+    // but only actually start the player (which lights the panel) when the
+    // lamp should be on. When it was left off we leave the player idle and
+    // the script name in place; the next power-on resumes it via
+    // light_api_apply_power() -> start_current_js().
     {
         char mode[16] = {0};
         config_get_str_or(CONFIG_KEY_LAMP_MODE, mode, sizeof(mode), "api");
@@ -339,15 +348,26 @@ void app_main(void)
                 snprintf(name, sizeof(name), "noop");
                 config_store_set_str(CONFIG_KEY_CURRENT_JS, name);
             }
-            char *src = NULL; size_t len = 0;
-            if (js_storage_read(name, &src, &len) == ESP_OK) {
-                if (js_player_start(src, JS_DEFAULT_FPS) == ESP_OK) {
-                    js_player_set_current_name(name);
-                    ESP_LOGI(TAG, "Resumed js mode with %s", name);
+            if (want_on) {
+                char *src = NULL; size_t len = 0;
+                if (js_storage_read(name, &src, &len) == ESP_OK) {
+                    if (js_player_start(src, JS_DEFAULT_FPS) == ESP_OK) {
+                        js_player_set_current_name(name);
+                        ESP_LOGI(TAG, "Resumed js mode with %s", name);
+                    }
+                    free(src);
                 }
-                free(src);
             }
         }
+    }
+
+    // 6e. Settle the panel to the restored on/off state. js-mode-on already lit
+    // up via the player above; snap the rest into place: force off when left
+    // off, or snap on for api mode (which has no player) when left on.
+    if (!want_on) {
+        led_control_power_snap(false);
+    } else if (!led_control_is_on()) {
+        led_control_power_snap(true);
     }
 
     // 7. Start HTTP server (registers JS API inside)

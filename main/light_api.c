@@ -49,6 +49,21 @@ static void schedule_basecolor_persist(int32_t packed)
     esp_timer_start_once(s_basecolor_timer, BASECOLOR_DEBOUNCE_MS * 1000);
 }
 
+// --- on/off NVS persistence ------------------------------------------------
+//
+// The lamp restores its last on/off state at boot (see main.c). Power toggles
+// are user-driven and rare, so unlike baseColor we write through immediately
+// rather than debounce. The static guard skips redundant commits (repeated
+// "off" presses, periodic HA refreshes) so flash isn't churned needlessly.
+static int s_last_persisted_power = -1;
+static void persist_power(bool on)
+{
+    int v = on ? 1 : 0;
+    if (v == s_last_persisted_power) return;
+    config_store_set_i32(CONFIG_KEY_POWER_ON, v);
+    s_last_persisted_power = v;
+}
+
 /// Read the persistent lamp mode ("api" or "js"). "stream" lives only on the
 /// websocket and is not persisted; if the websocket is in stream mode that
 /// takes precedence (returned to clients via /api/state).
@@ -99,6 +114,9 @@ static void on_fade_complete(bool was_off)
 
 void light_api_apply_power(bool on)
 {
+    // Remember the user's choice so a reboot/power-loss restores it (main.c).
+    persist_power(on);
+
     char mode[16] = {0};
     get_persistent_mode(mode, sizeof(mode));
     // While a WS client is streaming, the panel is driven frame-by-frame over

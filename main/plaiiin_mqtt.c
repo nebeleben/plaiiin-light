@@ -1,6 +1,7 @@
 #include "plaiiin_mqtt.h"
 #include "config_store.h"
 #include "led_control.h"
+#include "light_api.h"
 #include "mqtt_client.h"  // ESP-IDF MQTT
 #include "esp_log.h"
 #include "esp_event.h"
@@ -89,9 +90,10 @@ static void handle_message(const char *topic, const char *data, int data_len)
     memcpy(val, data, data_len);
 
     if (strcmp(topic, s_topic_power_set) == 0) {
-        // Accept "0" (off) or "1" (on)
+        // Accept "0" (off) or "1" (on). Route through light_api so it persists
+        // the state and resumes the JS player on power-on, same as HTTP/BLE.
         bool on = (val[0] == '1');
-        led_control_power(on);
+        light_api_apply_power(on);
         ESP_LOGI(TAG, "Power %s via MQTT", on ? "ON" : "OFF");
         mqtt_client_publish_state();
 

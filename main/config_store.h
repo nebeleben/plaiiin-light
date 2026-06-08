@@ -49,6 +49,10 @@
 // 4th arg to render() so JS animations can tint themselves to whatever HA
 // (or any other client) most recently asked for.
 #define CONFIG_KEY_BASE_COLOR    "base_color"
+// Last on/off state (i32 0|1). Persisted on every user power toggle and
+// restored at boot so a reboot or power-loss brings the lamp back the way it
+// was left. Absent (-> default on) on lamps that predate this key.
+#define CONFIG_KEY_POWER_ON      "power_on"
 // Hardware buttons (Phase 8). Each is a GPIO number; -1 disables. The driver
 // inits an iot_button per pin only when the value is >= 0, so leaving these
 // at -1 has zero runtime cost on devices without buttons wired.
