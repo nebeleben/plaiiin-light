@@ -3,12 +3,13 @@
 // smoothstep-feathered ends so it fades softly in at the tail and out at the
 // head rather than snapping on.
 //
-// On the lamp: a bright crescent sweeps steadily around the wormhole ring
-// (or the tower circumference), breathing longer and shorter as it goes.
-// Every row sees the same arc at the same angle, so the whole construct
-// reads as one rotating band of light.
+// On the lamp (tower): a bright horizontal crescent slides steadily UP the
+// full height of the tower, breathing longer and shorter as it goes, and
+// wraps from the top back to the bottom — a ring oriented vertically. Every
+// column sees the same arc at the same height, so the whole construct reads
+// as one band of light travelling along the rocket axis.
 //
-// Position around the loop is x/w, so the arc stays in sync across all rows.
+// Position up the tower is y/h, so the arc stays in sync across all columns.
 // `rotation` and the grow/shrink `growthPhase` are both derived from `time`,
 // so it is fully stateless and fps-independent.
 //
@@ -19,6 +20,7 @@
 // @param speed 0.05..3 = 0.75 Revolutions per second
 // @param minArc 0.01..0.5 = 0.05 Shortest arc length (fraction of the loop)
 // @param maxArc 0.1..1 = 0.75 Longest arc length (fraction of the loop)
+// @param axis 0..1 = 0 Travel: 0 = up/down the tower, 1 = around (left/right)
 
 function shade(x, y, idx, frame, base, params) {
   let t = time * 0.001;
@@ -44,8 +46,10 @@ function shade(x, y, idx, frame, base, params) {
   let featherRatio = 0;
   if (length > 0) { featherRatio = edgeFeather / length; }
 
-  // This pixel's position around the loop, and its offset from the arc start.
-  let position = x / w;
+  // This pixel's position along the travel axis, and its offset from the arc
+  // start. axis < 0.5 runs up the tower (y/h); axis >= 0.5 runs around it (x/w).
+  let position = y / h;
+  if (params.axis >= 0.5) { position = x / w; }
   let relative = position - rotation;
   if (relative < 0) { relative = relative + 1; }
 

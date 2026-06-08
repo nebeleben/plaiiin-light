@@ -3,12 +3,13 @@
 // coast, then decelerate before looping. The lead dot is brightest and each
 // following dot is dimmer, giving the cluster a clear head and tail.
 //
-// On the lamp: `dotCount` dots chase around the wormhole ring (or tower
-// circumference), bunching up and stretching out as the easing speeds them
-// up and slows them down. The whole pattern's start point drifts slowly so
-// it never settles into one fixed groove. Every row shows the same dots.
+// On the lamp (tower): `dotCount` horizontal bands chase UP the full height
+// of the tower, bunching up and stretching out as the easing speeds them up
+// and slows them down, wrapping from the top back to the bottom — a vertical
+// ring. The whole pattern's start point drifts slowly so it never settles
+// into one fixed groove. Every column shows the same dots.
 //
-// Position around the loop is x/w; both the per-dot phase and the drifting
+// Position up the tower is y/h; both the per-dot phase and the drifting
 // start offset come from `time`, so the effect is stateless.
 //
 // `cycleSpeed` is cycles per second of the dot motion. `dotCount` is how
@@ -24,6 +25,7 @@
 // @param tailBright 0..1 = 0.35 Brightness of the last dot vs the lead dot
 // @param floor 0..0.5 = 0.05 Minimum background brightness
 // @param drift 0..0.5 = 0.05 Speed the pattern start point creeps around
+// @param axis 0..1 = 0 Travel: 0 = up/down the tower, 1 = around (left/right)
 
 function shade(x, y, idx, frame, base, params) {
   let t = time * 0.001;
@@ -34,7 +36,9 @@ function shade(x, y, idx, frame, base, params) {
   let startOffset = t * params.drift;
   startOffset = startOffset - floor(startOffset);
 
-  let position = x / w;
+  // axis < 0.5 runs up the tower (y/h); axis >= 0.5 runs around it (x/w).
+  let position = y / h;
+  if (params.axis >= 0.5) { position = x / w; }
 
   let count = floor(params.dotCount);
   if (count < 1) { count = 1; }
