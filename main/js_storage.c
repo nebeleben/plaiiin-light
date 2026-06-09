@@ -19,6 +19,10 @@ static const char *FS_LABEL = "storage";
 
 #define MAX_NAME 48
 #define MAX_SCRIPT_BYTES (48 * 1024)
+/* Upper bound on a serialized .bc — matches the serialize buffer used by the
+ * boot compile pass (main.c). A program maxes out well under this. Used by
+ * js_storage_bc_current() to read a whole .bc for plbc_load() validation. */
+#define BC_VALIDATE_MAX 8192
 
 static bool name_is_valid(const char *name)
 {
@@ -240,13 +244,36 @@ bool js_storage_bc_current(const char *name)
     full_path_bc(name, path, sizeof(path));
     FILE *f = fopen(path, "rb");
     if (!f) return false;
-    /* magic(4) + version(1) — enough to tell a current .bc from a stale one. */
+
+    /* Cheap reject first: magic(4) + version(1). */
     unsigned char hdr[5];
     size_t n = fread(hdr, 1, sizeof(hdr), f);
+    if (n != sizeof(hdr) ||
+        memcmp(hdr, PLBC_MAGIC, 4) != 0 ||
+        hdr[4] != PLBC_VERSION) {
+        fclose(f);
+        return false;
+    }
+
+    /* Magic + version alone don't prove the .bc is loadable: the on-disk
+     * layout can change *within* a version (e.g. a new per-param field), and
+     * the old gate (version byte only) then passed a stale-but-same-version
+     * .bc that the player later rejected at play time with "bytecode
+     * truncated". So validate it the only way that can't drift: parse it with
+     * plbc_load() — the exact reader the player uses. If it doesn't load, the
+     * .bc is stale; return false so the boot pass recompiles it from .js. */
+    uint8_t *buf = (uint8_t *)malloc(BC_VALIDATE_MAX);
+    if (!buf) { fclose(f); return true; }   /* OOM: assume current, don't churn */
+    rewind(f);
+    size_t len = fread(buf, 1, BC_VALIDATE_MAX, f);
     fclose(f);
-    if (n != sizeof(hdr)) return false;
-    if (memcmp(hdr, PLBC_MAGIC, 4) != 0) return false;
-    return hdr[4] == PLBC_VERSION;
+
+    plbc_program_t *prog = (plbc_program_t *)malloc(sizeof(*prog));
+    if (!prog) { free(buf); return true; }  /* OOM: assume current */
+    bool ok = (plbc_load(buf, len, prog, NULL, 0) == ESP_OK);
+    free(prog);
+    free(buf);
+    return ok;
 }
 
 static int cmp_names(const void *a, const void *b)
