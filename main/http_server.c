@@ -10,6 +10,7 @@
 #include "pairing.h"
 #include "form_prompt.h"
 #include "wormhole.h"
+#include "wifi.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -446,6 +447,17 @@ static esp_err_t shade_runtime_handler(httpd_req_t *req)
 }
 
 static esp_err_t control_page_handler(httpd_req_t *req) { send_html(req, control_html_start, control_html_end); return ESP_OK; }
+// Root: send a freshly-typed IP straight to the dashboard. In AP (onboarding)
+// mode the device isn't on a network yet, so route to /network instead — same
+// split the captive-portal probe handlers use.
+static esp_err_t root_redirect_handler(httpd_req_t *req)
+{
+    const char *target = (wifi_get_mode() == PLAIIIN_WIFI_AP) ? "/network" : "/control";
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", target);
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
 static esp_err_t test_page_handler(httpd_req_t *req) { send_html(req, test_html_start, test_html_end); return ESP_OK; }
 static esp_err_t compose_page_handler(httpd_req_t *req) { send_html_for(req, compose_html_start, compose_html_end, "compose"); return ESP_OK; }
 static esp_err_t mqtt_page_handler(httpd_req_t *req) { send_html(req, mqtt_html_start, mqtt_html_end); return ESP_OK; }
@@ -580,6 +592,13 @@ httpd_handle_t http_server_start(void)
         .handler = storage_info_handler
     };
     httpd_register_uri_handler(server, &storage_info);
+
+    httpd_uri_t root_redirect = {
+        .uri = "/",
+        .method = HTTP_GET,
+        .handler = root_redirect_handler
+    };
+    httpd_register_uri_handler(server, &root_redirect);
 
     httpd_uri_t control_page = {
         .uri = "/control",

@@ -28,6 +28,18 @@
 .slider-row .label{font-size:.78rem;color:var(--text-dim);min-width:62px}
 .slider-row input[type=range]{flex:1;accent-color:var(--accent)}
 .slider-row .val{font-size:.85rem;min-width:36px;text-align:right}
+/* Script-parameter tunes — same knob/switch grid as the Control tab. */
+.knob-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(82px,1fr));gap:10px;margin-top:6px}
+.knob{display:flex;flex-direction:column;align-items:center;font-size:.7rem;color:var(--text-dim);user-select:none;-webkit-user-select:none}
+.knob svg{cursor:ns-resize;touch-action:none}
+.knob .lbl{margin-top:2px;text-align:center;line-height:1.1;max-width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.swk{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;font-size:.7rem;color:var(--text-dim);user-select:none;-webkit-user-select:none}
+.swk .sw{width:48px;height:26px;border-radius:13px;background:rgba(128,128,128,0.35);position:relative;cursor:pointer;transition:background .15s;margin:14px 0 8px}
+.swk .sw.on{background:var(--accent)}
+.swk .sw.disabled{opacity:.4;cursor:not-allowed}
+.swk .sw::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:left .15s}
+.swk .sw.on::after{left:25px}
+.swk .lbl{text-align:center;line-height:1.1;max-width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -80,12 +92,6 @@
 <div id="paramsBlock" style="display:none;margin-bottom:8px">
 <div style="font-size:.78rem;color:var(--text-dim);margin-bottom:4px">Script parameters</div>
 <div id="paramsList"></div>
-</div>
-
-<div class="slider-row">
-<span class="label">FPS</span>
-<input type="range" id="fpsSlider" min="1" max="30" value="30">
-<span class="val" id="fpsVal">30</span>
 </div>
 
 <div class="row-actions" style="margin-top:4px">
@@ -207,44 +213,180 @@ function loadParams(name){
     .catch(function(){renderParams([]);});
 }
 
+// Tunes render as the same knob/switch grid as the Control tab: switch-type
+// params become a sliding toggle, ranges keep the rotary knob. Both paths feed
+// paramsValues so the local preview reflects the live values, and push a
+// debounced PUT to the device.
 function renderParams(items){
   paramsValues={};
   paramsList.innerHTML='';
+  paramsList.className='knob-grid';
   if(!items.length){paramsBlock.style.display='none';return;}
   paramsBlock.style.display='';
   items.forEach(function(p){
     paramsValues[p.name]=p.value;
-    var row=document.createElement('div');
-    row.className='slider-row';
-    var lbl=document.createElement('span');
-    lbl.className='label';
-    lbl.textContent=p.name;
-    if(p.description) lbl.title=p.description;
-    var inp=document.createElement('input');
-    inp.type='range';
-    // Range sliders are integer by default — divide into ~100 steps so
-    // floats show useful resolution (density 0..1, fadeIn 50..3000…).
-    var range=p.max-p.min;
-    var step=range>=10?1:(range/100);
-    inp.min=p.min;inp.max=p.max;inp.step=step;inp.value=p.value;
-    var val=document.createElement('span');
-    val.className='val';
-    val.textContent=formatVal(p.value);
-    inp.oninput=function(){
-      var v=parseFloat(this.value);
-      val.textContent=formatVal(v);
-      paramsValues[p.name]=v;
-      schedulePut(p.name,v);
-    };
-    row.appendChild(lbl);row.appendChild(inp);row.appendChild(val);
-    paramsList.appendChild(row);
+    paramsList.appendChild(p.type==='switch'?makeToggle(p):makeKnob(p));
   });
 }
 
-function formatVal(v){
-  if(Number.isInteger(v)) return String(v);
-  // Two decimals for sub-1 ranges (density, scale), zero for ms-style ints.
-  return Math.abs(v)>=10?Math.round(v):v.toFixed(2);
+// A boolean tune (type:"switch") as a sliding switch. Updates paramsValues and
+// pushes the param; the firmware still sees a 0..1 float.
+function makeToggle(p){
+  return buildSwitch(p.name,(p.value||0)>=0.5,p.description,function(on){
+    var v=on?1:0;
+    paramsValues[p.name]=v;
+    schedulePut(p.name,v);
+  });
+}
+
+// Sliding-switch cell sized to drop into the knob grid.
+function buildSwitch(label,on,desc,onChange){
+  var wrap=document.createElement('div');wrap.className='swk';
+  var state=!!on;
+  var sw=document.createElement('div');sw.className='sw'+(state?' on':'');
+  sw.addEventListener('click',function(){
+    state=!state;sw.classList.toggle('on',state);onChange(state);
+  });
+  wrap.appendChild(sw);
+  var lbl=document.createElement('div');lbl.className='lbl';lbl.textContent=label;
+  if(desc)wrap.title=desc;
+  wrap.appendChild(lbl);
+  return wrap;
+}
+
+function makeKnob(p){
+  var wrap=document.createElement('div');wrap.className='knob';
+  var size=72;
+  // 270° usable arc, centered at 6 o'clock (-135° to +135° from top).
+  var startDeg=-135,arcDeg=270;
+  var ns='http://www.w3.org/2000/svg';
+  var svg=document.createElementNS(ns,'svg');
+  svg.setAttribute('viewBox','0 0 '+size+' '+size);
+  svg.setAttribute('width',size);svg.setAttribute('height',size);
+  var cx=size/2,cy=size/2,outerR=size/2-2,innerR=outerR-4;
+  var tickGroup=document.createElementNS(ns,'g');svg.appendChild(tickGroup);
+  var trackPath=document.createElementNS(ns,'path');
+  trackPath.setAttribute('d',arcPath(cx,cy,outerR-7,startDeg,startDeg+arcDeg));
+  trackPath.setAttribute('stroke','rgba(128,128,128,0.25)');
+  trackPath.setAttribute('stroke-width','3');trackPath.setAttribute('stroke-linecap','round');
+  trackPath.setAttribute('fill','none');svg.appendChild(trackPath);
+  var fillPath=document.createElementNS(ns,'path');
+  fillPath.setAttribute('stroke','var(--accent)');fillPath.setAttribute('stroke-width','3');
+  fillPath.setAttribute('stroke-linecap','round');fillPath.setAttribute('fill','none');
+  svg.appendChild(fillPath);
+  var face=document.createElementNS(ns,'circle');
+  face.setAttribute('cx',cx);face.setAttribute('cy',cy);face.setAttribute('r',outerR-12);
+  face.setAttribute('fill','url(#knobGlass)');face.setAttribute('stroke','rgba(255,255,255,0.06)');
+  svg.appendChild(face);
+  var pointer=document.createElementNS(ns,'line');
+  pointer.setAttribute('stroke','var(--accent)');pointer.setAttribute('stroke-width','2');
+  pointer.setAttribute('stroke-linecap','round');
+  svg.appendChild(pointer);
+  var text=document.createElementNS(ns,'text');
+  text.setAttribute('x',cx);text.setAttribute('y',cy+4);
+  text.setAttribute('text-anchor','middle');text.setAttribute('font-size','11');
+  text.setAttribute('fill','var(--text)');text.setAttribute('font-family','-apple-system,system-ui');
+  svg.appendChild(text);
+  ensureKnobDefs(svg);
+
+  var value=p.value;
+  function frac(){var s=p.max-p.min;return s>0?Math.max(0,Math.min(1,(value-p.min)/s)):0;}
+  function update(){
+    var f=frac();
+    fillPath.setAttribute('d',arcPath(cx,cy,outerR-7,startDeg,startDeg+arcDeg*f));
+    var deg=startDeg+arcDeg*f;
+    var rad=(deg-90)*Math.PI/180;
+    var len=outerR-14;
+    pointer.setAttribute('x1',cx);pointer.setAttribute('y1',cy);
+    pointer.setAttribute('x2',cx+Math.cos(rad)*len);pointer.setAttribute('y2',cy+Math.sin(rad)*len);
+    text.textContent=fmt(value,p.max-p.min);
+    tickGroup.innerHTML='';
+    var ticks=21;
+    for(var i=0;i<ticks;i++){
+      var tf=i/(ticks-1);
+      var td=startDeg+arcDeg*tf;
+      var tr=(td-90)*Math.PI/180;
+      var x1=cx+Math.cos(tr)*outerR,y1=cy+Math.sin(tr)*outerR;
+      var x2=cx+Math.cos(tr)*innerR,y2=cy+Math.sin(tr)*innerR;
+      var ln=document.createElementNS(ns,'line');
+      ln.setAttribute('x1',x1);ln.setAttribute('y1',y1);
+      ln.setAttribute('x2',x2);ln.setAttribute('y2',y2);
+      ln.setAttribute('stroke',tf<=f+0.001?'var(--accent)':'rgba(128,128,128,0.4)');
+      ln.setAttribute('stroke-width','1');
+      tickGroup.appendChild(ln);
+    }
+  }
+  update();
+
+  // Drag — vertical only. 100 px = full range. Debounced PUT on each tick.
+  var dragStart=null,dragVal=null;
+  function onDown(e){
+    e.preventDefault();
+    dragStart=e.touches?e.touches[0].clientY:e.clientY;
+    dragVal=value;
+    document.addEventListener('mousemove',onMove);
+    document.addEventListener('mouseup',onUp);
+    document.addEventListener('touchmove',onMove,{passive:false});
+    document.addEventListener('touchend',onUp);
+  }
+  function onMove(e){
+    if(dragStart==null)return;
+    e.preventDefault&&e.preventDefault();
+    var y=e.touches?e.touches[0].clientY:e.clientY;
+    var dy=dragStart-y;  // up = positive
+    var span=p.max-p.min;
+    var next=dragVal+dy/100*span;
+    if(next<p.min)next=p.min;if(next>p.max)next=p.max;
+    value=next;
+    paramsValues[p.name]=value;
+    update();
+    schedulePut(p.name,value);
+  }
+  function onUp(){
+    dragStart=null;dragVal=null;
+    document.removeEventListener('mousemove',onMove);
+    document.removeEventListener('mouseup',onUp);
+    document.removeEventListener('touchmove',onMove);
+    document.removeEventListener('touchend',onUp);
+  }
+  svg.addEventListener('mousedown',onDown);
+  svg.addEventListener('touchstart',onDown,{passive:false});
+
+  wrap.appendChild(svg);
+  var lbl=document.createElement('div');lbl.className='lbl';lbl.textContent=p.name;
+  if(p.description) wrap.title=p.description;
+  wrap.appendChild(lbl);
+  return wrap;
+}
+
+// SVG arc helper. Takes degrees-from-top (clockwise). Returns an arc path.
+function arcPath(cx,cy,r,startDeg,endDeg){
+  function pt(deg){var rad=(deg-90)*Math.PI/180;return [cx+Math.cos(rad)*r,cy+Math.sin(rad)*r];}
+  var s=pt(startDeg),e=pt(endDeg);
+  var largeArc=Math.abs(endDeg-startDeg)>180?1:0;
+  var sweep=endDeg>startDeg?1:0;
+  return 'M '+s[0]+' '+s[1]+' A '+r+' '+r+' 0 '+largeArc+' '+sweep+' '+e[0]+' '+e[1];
+}
+
+function fmt(v,span){
+  if(span>=10)return String(Math.round(v));
+  if(span<=1)return v.toFixed(2);
+  return v.toFixed(1);
+}
+
+// One shared radial gradient across all knobs, appended to the first SVG.
+function ensureKnobDefs(svg){
+  if(document.getElementById('knobGlass'))return;
+  var ns='http://www.w3.org/2000/svg';
+  var defs=document.createElementNS(ns,'defs');
+  var grad=document.createElementNS(ns,'radialGradient');
+  grad.setAttribute('id','knobGlass');
+  grad.setAttribute('cx','35%');grad.setAttribute('cy','30%');grad.setAttribute('r','70%');
+  var s1=document.createElementNS(ns,'stop');s1.setAttribute('offset','0%');s1.setAttribute('stop-color','rgba(255,255,255,0.10)');
+  var s2=document.createElementNS(ns,'stop');s2.setAttribute('offset','100%');s2.setAttribute('stop-color','rgba(0,0,0,0.18)');
+  grad.appendChild(s1);grad.appendChild(s2);
+  defs.appendChild(grad);
+  svg.insertBefore(defs,svg.firstChild);
 }
 
 function schedulePut(name,v){
@@ -350,11 +492,8 @@ bSlider.oninput=function(){
   },100);
 };
 
-// --- FPS slider (drives both upload Play and local preview cadence) ----
+// Fixed cadence for upload Play and the local preview. (FPS slider removed.)
 var fps=30;
-var fSlider=document.getElementById('fpsSlider');
-var fVal=document.getElementById('fpsVal');
-fSlider.oninput=function(){fps=parseInt(this.value)||30;fVal.textContent=fps;};
 
 // --- Local preview (browser-side; never streams to lamp) ---------------
 var gridEl=document.getElementById('previewGrid');
