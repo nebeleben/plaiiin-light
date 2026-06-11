@@ -26,7 +26,12 @@ function shade(x, y, idx, frame, base, params) {
   let speed = params.speed * (0.5 + hash(x) * 1.0);
   let trailLen = params.trailLength * h;
   if (trailLen < 1) { trailLen = 1; }
-  let period = (h + trailLen) / (speed * params.density);
+  /* The head travels from -trailLen (off-top) to h + trailLen (fully off the
+   * bottom) so the trail keeps falling off after the head exits, instead of
+   * the whole column blanking the instant the head hits the bottom row. The
+   * span is h + 2*trailLen; period scales with it so `speed` stays rows/sec. */
+  let span = h + 2 * trailLen;
+  let period = span / (speed * params.density);
   let phase = (t + hash(x + 4321) * 100) / period;
   let gen = floor(phase);
   phase = phase - gen;
@@ -34,9 +39,10 @@ function shade(x, y, idx, frame, base, params) {
   let bright = 0;
   let isHead = 0;
   if (phase < params.density) {
-    /* Head position: travels from -trailLen (off-top) to h (off-bottom).
-     * dy = head - y; positive = pixel is in the trail above the head. */
-    let head = phase / params.density * (h + trailLen) - trailLen;
+    /* Head position: travels from -trailLen (off-top) to h + trailLen (trail
+     * fully drained off the bottom). dy = head - y; positive = pixel is in
+     * the trail above the head. */
+    let head = phase / params.density * span - trailLen;
     let dy = head - y;
     if (dy >= 0 && dy < trailLen) {
       /* Trail brightness: brightest at the head, fades to 0 at the tail.
