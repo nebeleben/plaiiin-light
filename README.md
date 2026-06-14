@@ -1,26 +1,32 @@
 # PlaiiinLightOS
 
-Open firmware for ESP32 microcontrollers driving WS2812 addressable LED
+Open firmware for ESP32 microcontrollers driving addressable LED
 strips and matrices. AI-aware, scriptable, OTA-updatable, with HTTP,
-WebSocket, and BLE control surfaces. 
+WebSocket, and BLE control surfaces.
+
+Supported LED chipsets (config value → unknown values fall back to `ws2812`):
+
+| Config value | Chipset(s) | Wiring | Format |
+|---|---|---|---|
+| `ws2812` | WS2812 / WS2812B / NeoPixel | one-wire | GRB, 3 bytes/LED |
+| `sk6812` | SK6812 (RGB) | one-wire | GRB, 3 bytes/LED |
+| `sk6812w` | SK6812 (RGBW) | one-wire | GRBW, 4 bytes/LED |
+| `sk9822` | SK9822 / APA102 | two-wire (data + clock) | BGR + brightness |
 
 ### What's in this repository
 
 - `components/`, `main/`, `portal/` — the firmware source.
 - `scripts/` — build, flash, and profile-burn tooling.
-- `profiles/` — per-device build profiles (tower, wall, wormhole, …).
-- `effects/` — form-specific JavaScript effects, flashed alongside the
-  firmware on a `--full` profile burn.
+- `hardcoded/<form>/` — form-specific effects compiled into the binary
+  for that form (`tower`, `display`, `cube`, `rocket`, …).
+- `effects/<form>/` — form-specific JavaScript (`shade()`) effects flashed
+  to the device's SPIFFS `storage` partition on a `--full` profile burn
+  (not carried by OTA).
+- `profiles/<family>/<device>` — per-device NVS identity (LED count, type,
+  GPIO, lamp form) written by `profile-burn`.
 - `docs/` — the wire contract every client targets (HTTP, WebSocket,
   BLE), plus role-based access, wormhole render-mode, and BLE-share specs.
 - `LICENSE` — Apache 2.0 for everything in this repository.
-
-> **Note for external contributors.** This repository is a public mirror
-> of an internal source-of-truth and is **force-pushed** on every upstream
-> change. PRs opened here cannot merge — we read each one, re-land it
-> upstream with attribution to the original author, and your change ships
-> on the next mirror push. Issues are the primary inbound channel —
-> please file them here.
 
 ### Prerequisites
 - ESP-IDF v5.3+ (uses Python 3.12 env — Python 3.14 breaks `idf_tools`; prefix builds with `IDF_PYTHON_ENV_PATH=$HOME/.espressif/python_env/idf5.3_py3.12_env`)
@@ -30,23 +36,43 @@ WebSocket, and BLE control surfaces.
 ./scripts/setup.sh    # Installs ESP-IDF v5.3.2 and tools
 ```
 
-### Build profiles
+### Build (per form)
 
-`scripts/build.sh <profile>` composes `SDKCONFIG_DEFAULTS` from `sdkconfig.defaults` plus `profiles/<profile>/sdkconfig.defaults`, builds into `build/`, and drops two artifacts into `build/dist/`:
+There is no universal binary — each release ships one binary per lamp **form**.
+`scripts/build.sh --form <name>` compiles the matching `hardcoded/<form>/`
+effects into the image, stamps the version from `version.properties`, and drops
+two artifacts into `build/dist/`:
 
-- `<profile>-app.bin` — OTA payload (app only, ~1 MB)
-- `<profile>-flash.bin` — merged full-flash image (bootloader + partitions + otadata + app, for USB first-flash at offset 0)
+- `plaiiinlight_os-<ver>-<form>-app.bin` — OTA payload (app only, ~1 MB)
+- `plaiiinlight_os-<ver>-<form>-flash.bin` — merged full-flash image
+  (bootloader + partitions + otadata + app, for USB first-flash at offset 0)
 
-Available profiles:
+Available forms:
 
-| Profile | Target | LEDs | GPIO | lamp type / form |
-|---|---|---|---|---|
-| `tower` | 8×8 matrix table lamp | 64 | 26 | `matrix8x8` / `tower` |
-| `wall` | 16×16 matrix display | 256 | 26 | `matrix16x16` / `display` |
+| Form | Typical hardware | Example lamp type |
+|---|---|---|
+| `tower` | cylindrical matrix table lamp | `matrix16x8` / `matrix16x32` |
+| `display` | flat 16×16 wall matrix | `matrix16x16` |
+| `cube` | 5-sided LED cube | `matrix8x8` |
+| `rocket` | stacked ring segments | `strip` |
+| `wormhole` | stacked 24-LED rings (tunnel) | `strip` |
+| `strip` | single 1-D LED chain | `strip` |
 
 ```bash
-./scripts/build.sh wall
-# → build/dist/wall-app.bin   build/dist/wall-flash.bin
+./scripts/build.sh --form display
+# → build/dist/plaiiinlight_os-<ver>-display-app.bin
+#   build/dist/plaiiinlight_os-<ver>-display-flash.bin
+```
+
+`/api/ota` refuses a binary whose embedded form doesn't match the device (409),
+so pushing a `tower` binary to a `display` lamp is rejected, not a brick.
+
+Per-device hardware identity (LED count, GPIO, lamp type, form) lives in
+`profiles/<family>/<device>` and is written to NVS with `profile-burn`:
+
+```bash
+./scripts/profile-burn.sh /dev/cu.usbserial-0001 tower/tower8v2          # NVS only (~2 s)
+./scripts/profile-burn.sh --full /dev/cu.usbserial-0001 tower/tower8v2   # erase + flash + NVS + byForm effects
 ```
 
 ### Configure
@@ -56,7 +82,7 @@ idf.py menuconfig     # Set LED pin, count, WiFi, node name
 ```
 
 Key settings under "PlaiiinLightOS Configuration":
-- **LED Strip**: GPIO pin, LED count, LED type (WS2812), lamp type, lamp form
+- **LED Strip**: GPIO pin, LED count, LED type (`ws2812`, `sk6812`, `sk6812w`, `sk9822`), lamp type, lamp form
 - **WiFi**: SoftAP SSID prefix, HTTP port
 - **Node**: Name, vendor, API version
 
@@ -67,9 +93,12 @@ All settings can also be changed at runtime via the web UI at `/config` (stored 
 The initial flash must be done via USB. After that, use OTA for wireless updates.
 
 ```bash
-./scripts/build.sh
-./scripts/flash.sh /dev/ttyUSB0    # or /dev/cu.usbserial-*
+./scripts/build.sh --form display
+./scripts/profile-burn.sh --full /dev/cu.usbserial-0001 display/<device>
 ```
+
+`profile-burn --full` erases the chip, writes the merged flash image, burns the
+device's NVS identity, and installs its byForm effects in one shot.
 
 To pre-configure WiFi and LED settings without the captive portal, generate an NVS image:
 
@@ -104,20 +133,24 @@ After the initial USB flash, all subsequent firmware updates are done wirelessly
 **Via web browser:**
 1. Open `http://<device-ip>/ota`
 2. The page shows current firmware version, build date, and active partition
-3. Drop `build/plaiiinlight_os.bin` onto the upload zone (or click to browse)
+3. Drop the matching `build/dist/plaiiinlight_os-<ver>-<form>-app.bin` onto the upload zone (or click to browse)
 4. Upload progress bar shows transfer status
 5. Device flashes to the inactive OTA partition, reboots, and the page auto-reloads
 
 **Via command line:**
 ```bash
-# Build
-./scripts/build.sh
+# Build the binary for this device's form
+./scripts/build.sh --form display
 
 # Upload (replace IP with your device's address)
 curl -X POST http://<device-ip>/api/ota \
   -H "Content-Type: application/octet-stream" \
-  --data-binary @build/plaiiinlight_os.bin
+  --data-binary @build/dist/plaiiinlight_os-<ver>-display-app.bin
 ```
+
+The binary's embedded form must match the device — a cross-form upload is
+rejected with `409 Conflict`. OTA carries the app only; byForm JS effects on the
+`storage` partition are left untouched.
 
 The partition table uses dual OTA slots (`ota_0` + `ota_1`), alternating on each update. NVS config (WiFi, LED settings, brightness, last color) is preserved across all OTA updates.
 
@@ -129,7 +162,7 @@ The `/compose` page lets you describe LED patterns in natural language. An AI ge
 1. Get an API key from [console.anthropic.com](https://console.anthropic.com) (Claude) or [platform.openai.com](https://platform.openai.com) (OpenAI)
 2. Go to `http://<device-ip>/config`, scroll to **AI Integration**
 3. Select your provider, paste your API key, and set the model:
-    - Claude: `claude-haiku-4-5-20251001` (fast/cheap), `claude-sonnet-4-6`, `claude-opus-4-6`
+    - Claude: `claude-haiku-4-5` (fast/cheap), `claude-sonnet-4-6`, `claude-opus-4-8`
     - OpenAI: `gpt-4o-mini` (fast/cheap), `gpt-4o`
 4. The API key is stored in your browser's localStorage (never sent to the ESP32)
 
@@ -139,12 +172,12 @@ The `/compose` page lets you describe LED patterns in natural language. An AI ge
 3. The AI generates the pattern and displays it on the grid preview
 4. Click **Play** to stream it to the LEDs (auto-connects WebSocket)
 5. Refine iteratively: *"make it scroll faster"*, *"add blue sparkles"*, *"change background to black"*
-6. Adjust **FPS** slider for animation speed, **Brightness** slider for intensity
+6. Tweak the script's **tunes** (parameter knobs/switches) and the **Brightness** slider — the preview re-bakes live
 7. Click **Stop** to turn off the LEDs
 
 The AI supports two output formats automatically:
 - **Pixel data** (JSON) — for static images and short frame sequences
-- **Generator code** (JavaScript) — for complex animations, gradients, and math patterns. The AI writes a `render(frame, width, height)` function that runs in the browser to generate up to 300 frames.
+- **Generator code** (JavaScript) — for complex animations, gradients, and math patterns. The AI writes a per-pixel `shade(x, y, idx, frame, base, params)` shader — the same contract the device runs — which the browser previews via the shared `shade-runtime.js` emulator (up to 300 frames). **Save to device** stores it as a named script.
 
 Chat history is maintained, so follow-up prompts can reference and modify previous results.
 
@@ -171,27 +204,53 @@ Both caps apply to every frame path: `POST /api/color`, WebSocket streams, and l
 
 ### Local JS scripts
 
-PlaiiinLightOS ships with an embedded ES5 JS engine (mJS, `components/mjs`). User scripts define a `render(frame, w, h)` that returns a `[r,g,b][]` array of `w * h` pixels per frame. The device runs the script on a dedicated FreeRTOS task at the configured FPS and pushes each frame through `led_control_set_logical`, so pixel-grouping + guardrails apply automatically.
+User scripts are per-pixel **shaders**, not whole-frame renderers. Each script
+defines a `shade(x, y, idx, frame, base, params)` function that emits one colour
+per LED. Scripts are compiled to **PLBC** (PlaiiinLight Bytecode — a compact
+stack VM purpose-built for fast per-pixel evaluation on the ESP32; it replaced
+the earlier JerryScript/mJS engines, whose per-call overhead was too high). The
+device plays the bytecode on a dedicated FreeRTOS task at the configured FPS and
+pushes each frame through `led_control_set_logical`, so pixel-grouping +
+guardrails apply automatically.
 
-Scripts are stored on a dedicated 256 KB SPIFFS `storage` partition (see partition table below). Manage them at `http://<device-ip>/js` — list, edit, save, play/stop, upload, delete. The `/compose` page now has a **Save to device** button that wraps the current AI-generated JS into a `render(...)` function and PUTs it as a named script.
+Scripts are stored on a dedicated 256 KB SPIFFS `storage` partition (see
+partition table below) — both the `.js` source (source of truth for editing)
+and the compiled `.bc`. Manage them at `http://<device-ip>/js` — list, edit,
+save, play/stop, upload, delete, plus per-script **tunes** (parameter knobs).
+The `/compose` page's **Save to device** button stores the current AI-generated
+`shade()` script as a named script.
 
-Script API (same shape on device + in `/compose`):
+Script API (same contract on device + in `/compose`):
 
 ```js
-function render(frame, w, h) {
-  var out = [];
-  for (var y = 0; y < h; y++)
-    for (var x = 0; x < w; x++)
-      out.push([r, g, b]);  // 0..255 each
-  return out;  // length === w*h
+// @param speed 0.3..6 = 1.8 Average fall speed (rows per second)
+// @param headWhite 0..1 = 0.7 How much the leading pixel washes to white
+
+function shade(x, y, idx, frame, base, params) {
+  let bright = ...;          // per-pixel maths
+  emit(r, g, b);             // raw RGB 0..255, OR
+  emitBright(bright);        // scale the base colour by 0..1
+  // call exactly one emit*() per pixel
 }
 ```
 
-On save, the server eval's the script once with `frame=0` to surface parse/runtime errors before it's written to flash.
+In scope: `x, y, idx` (pixel), `frame`, `w, h` (logical grid), `time` (ms since
+play started), `playStart` (seed), `base` (`.r/.g/.b`), `params` (declared
+`@param` values). Built-ins: `sinLUT`, `cosLUT`, `floor`, `ceil`, `round`,
+`abs`, `sqrt`, `pow`, `min`, `max`, `clamp01`, `hash`, `random`, `emit`,
+`emitBright`.
+
+Parameters are declared with `// @param NAME MIN..MAX = DEF [desc]` (a tune
+knob) or `// @param NAME switch = DEF [desc]` (a toggle); they surface as the
+`/js` and `/compose` tunes and over `GET/PUT /api/js/<name>/params`. On save the
+server compiles the script to bytecode to surface parse/semantic errors before
+it's written to flash. The browser-side `shade-runtime.js` emulator mirrors the
+VM exactly so previews on `/compose`, `/js`, and the mobile/desktop clients
+match the hardware.
 
 ### Multi-size pixels (pixel grouping)
 
-A pixel group combines `pixelGroupW × pixelGroupH` physical LEDs into one logical pixel. A 16×16 matrix with group `2×2` renders as an 8×8 logical grid — `render()` returns 64 pixels and each one is tiled onto a 2×2 physical block.
+A pixel group combines `pixelGroupW × pixelGroupH` physical LEDs into one logical pixel. A 16×16 matrix with group `2×2` renders as an 8×8 logical grid — `shade()` runs once per logical pixel (64 of them) and each result is tiled onto a 2×2 physical block.
 
 Configure it at `/js → Guardrails → Pixel group` or `POST /api/limits`. `GET /api` reports both `physicalW/H` and `logicalW/H` alongside `pixelGroupW/H` so clients can size their frames correctly.
 
@@ -256,10 +315,11 @@ State is published on connect and after each change. The Last Will and Testament
 ### Web UI Pages
 | Page | Path | Description |
 |---|---|---|
-| Control | `/control` | Power on/off, color presets, color picker, brightness slider |
+| Home | `/` | Redirects to `/control` (or `/network` in AP/provisioning mode) |
+| Control | `/control` | Power on/off, color presets, color picker, brightness slider, script tunes |
 | Stream | `/stream` | Drag & drop GIF/image streaming, matrix rotation |
-| Compose | `/compose` | AI-powered LED pattern generation with chat, brightness, FPS, matrix rotation, Save-to-device |
-| Scripts | `/js` | List/edit/save/play/upload/delete local JS scripts + guardrail knobs (max brightness, max current, pixel group) |
+| Compose | `/compose` | AI-powered LED pattern generation with chat, parameter tunes, brightness, matrix rotation, Save-to-device |
+| Scripts | `/js` | List/edit/save/play/upload/delete local JS scripts, per-script tunes, guardrail knobs (max brightness, max current, pixel group) |
 | Config | `/config` | Device settings, LED strip config, AI API key |
 | Network | `/network` | WiFi SSID/password (captive portal redirects here in AP mode) |
 | MQTT | `/mqtt` | MQTT broker config, enable/disable, topic reference |
@@ -280,13 +340,22 @@ All pages share a consistent theme with day/night mode toggle (persisted in brow
 | `/api/limits` | POST | Any subset of the four fields — persisted to NVS |
 | `/api/mode` | POST | `{"mode": "stream/api"}` — Switch between API and WebSocket mode |
 | `/api/js` | GET | `{scripts:[...], playing:<name>\|null}` |
-| `/api/js/{name}` | GET | Raw JS source |
-| `/api/js/{name}` | PUT | Save JS source (validated + eval'd once before write) |
+| `/api/js/{name}` | GET | Raw JS (`shade()`) source |
+| `/api/js/{name}` | PUT | Save script (compiled to bytecode before write; errors surface here) |
 | `/api/js/{name}` | DELETE | Remove a saved script |
+| `/api/js/{name}/params` | GET | `{items:[{name,min,max,value,type,description}]}` — declared `@param` tunes |
+| `/api/js/{name}/params` | PUT | `{name:value, …}` — update tune values |
 | `/api/play` | POST | `{"file":"<name>","fps":<n>}` — Load + run script at FPS |
+| `/api/play/next` `/api/play/prev` | POST | Cycle to the next/previous saved script |
 | `/api/stop` | POST | Stop JS playback |
-| `/api/ota` | POST | Upload firmware binary (application/octet-stream) |
-| `/api/ota/info` | GET | Current firmware version, build date, partition, ESP-IDF version |
+| `/api/pair` | GET | `{"mode":"paired"\|"unpaired"}` (no auth) |
+| `/api/pair` | POST | Claim the lamp (unpaired) or rotate the token (paired) → `{mode,token}` |
+| `/api/pair` | DELETE | Release ownership (Bearer token required) |
+| `/api/reset` | POST | `{"scope":"wifi"\|"full"}` — factory reset (Bearer token required) |
+| `/api/ai/key` | GET/PUT/DELETE | AI key presence (`{hasKey,len}`) / set / clear (raw key never returned) |
+| `/api/form-prompt` | GET/PUT/DELETE | Per-lamp form descriptor injected into AI compose prompts |
+| `/api/ota` | POST | Upload firmware binary (application/octet-stream; cross-form → 409) |
+| `/api/ota/info` | GET | Current firmware version, build date, partition, form, ESP-IDF version |
 | `/config` | POST | Save device/LED config + reboot |
 | `/network` | POST | Save WiFi config + reboot |
 
@@ -306,26 +375,45 @@ Clear command: `[0x03]` = all LEDs off
 
 ### Security & Pairing
 
-PlaiiinLightOS has two operating modes for access control. The **default is `unpaired`** — anyone on the local WiFi (and anyone in BLE range) can control the lamp, exactly like earlier firmware. Opt into `paired` to lock control down to clients holding a per-device 32-byte token.
+**Onboarding.** A fresh lamp (never claimed) comes up reachable two ways at once:
 
-The token lives in NVS (`pair_token` key, base64-url, 43 chars), is generated on first `POST /api/pair`, and is wiped by `factory_reset_full`. Each transport proves possession in its own way, summarised below.
+- **WiFi** — an open provisioning SoftAP `PlaiiinLight-XXXX`; connect and enter your home WiFi at `/network`, and the lamp reboots onto your network.
+- **BLE** — the lamp advertises over Bluetooth (default lifecycle policy `auto`); a client app can claim it and hand over WiFi credentials over the encrypted link.
+
+These are **not** a mutually-exclusive mode you pick — both transports are live until the lamp is claimed. What *is* sticky is the **provisioned** flag (NVS `provisioned`): once a lamp has been claimed even once, it will **never re-open the open provisioning AP** again — reopening an unauthenticated captive portal would hand full control to any passer-by. A lamp whose owner later *releases* it stays BLE-only and re-claimable over BLE. Only a **factory reset** clears the provisioned flag and returns the lamp to fresh AP + BLE onboarding.
+
+**Ownership — paired vs unpaired.** The **default is `unpaired`**: anyone on the local WiFi, and anyone in BLE range, has full (admin) control, exactly like earlier firmware. *Claiming* the lamp moves it to **`paired`** and mints a per-device 32-byte token (NVS `pair_token`, base64-url, 43 chars); from then on control requires that token.
+
+| | Unpaired | Paired (ownership taken) |
+|---|---|---|
+| **WiFi mode** | On your network, **no owner** — anyone on the WiFi controls it | Control requires `Authorization: Bearer <token>` |
+| **BLE mode** | **Anyone in BLE range can claim it** (first-claim-wins) and become the owner | Only the bonded owner controls it; the token is readable over the encrypted link |
+
+Per-surface enforcement:
 
 | Surface | Unpaired | Paired |
 |---|---|---|
-| **HTTP `/api/*`** (color, power, mode, scripts, OTA, reset, ai/key) | Open — anyone on WiFi | Requires `Authorization: Bearer <token>`. Wrong/missing → `401 Unauthorized`. |
-| **HTTP captive portal** (`/`, `/config`, `/network`) | Open | Requires the same Bearer token, **except** when the device is in AP mode (provisioning) — recovery would otherwise be impossible after a WiFi reset. |
-| **HTTP `/api/pair`** | `POST` is open (any client may bootstrap) | `POST` requires the *current* token (rotates it); `DELETE` requires the token (unpairs); `GET` always returns mode info. |
-| **WebSocket `/ws`** (pixel streaming) | Open | Token in query: `ws://lamp/ws?token=<token>`. Validated at the upgrade handshake. |
-| **Device-served portal pages** (`/compose`, `/control`, etc.) | HTML loads; JS calls `/api/*` directly | HTML loads; the page is server-rendered with `<meta name="plk-token">` (only when the request itself was authenticated) and a tiny inline `auth.js` that wraps `fetch` to add the header. First-time browsers bootstrap from `?t=<token>` in the URL — see "Pair this browser" QR in the macOS app. |
-| **AI key on `/compose`** | Server-rendered into `<meta name="plk-aikey">` (page request only). `GET /api/ai/key` returns `{hasKey, len}` only — never the raw key. | Same — but the page is only served to authenticated requests, so the key reaches the page only via a paired session. |
-| **BLE GATT** (`device_info`, `wifi_*`, `power`, `color`, `mode`, `current_script`, `play_*`, `script_upload_*`) | Open — any peer can read/write | Writes require `BLE_GATT_CHR_F_WRITE_ENC` → forces an encrypted/bonded link. macOS surfaces a Just-Works pairing prompt on first connect. Sensitive reads (`current_script`, new `pair_token` characteristic) require `READ_ENC`. |
-| **BLE `pair_token` characteristic** | Not advertised | Present, `READ_ENC` only — bonded peers can read it to learn the HTTP token without re-typing it. |
-| **`factory_reset_wifi`** (10s long-press, or `POST /api/reset {scope:"wifi"}`) | n/a | Requires Bearer token; clears WiFi creds only — pairing is **kept** so a re-onboarded lamp stays under the same client's control. |
-| **`factory_reset_full`** (15s long-press, or `POST /api/reset {scope:"full"}`) | n/a | Requires Bearer token; also clears `pair_token` + flips back to `unpaired`. |
+| **HTTP `/api/*`** (color, power, mode, scripts, OTA, reset, ai/key) | Open — anyone on WiFi | `Authorization: Bearer <token>`; wrong/missing → `401`. |
+| **HTTP portal pages** (`/control`, `/config`, `/network`, …) | Open | Same Bearer token, **except** in AP mode (provisioning) — otherwise a WiFi-reset lamp couldn't be recovered. |
+| **`POST /api/pair`** | Open — any client may bootstrap and becomes the owner | `POST` requires the *current* token (rotates it); `DELETE` unpairs (token required); `GET` always returns mode info. |
+| **WebSocket `/ws`** (pixel streaming) | Open | Token in query: `ws://lamp/ws?token=<token>`, validated at the upgrade handshake. |
+| **Device-served portal pages** | HTML loads; JS calls `/api/*` directly | Page is server-rendered with `<meta name="plk-token">` (only when the request was authenticated) plus an inline `auth.js` that adds the header to `fetch`. First-time browsers bootstrap from `?t=<token>` — see the "Pair this browser" QR in the macOS app. |
+| **AI key on `/compose`** | Server-rendered into `<meta name="plk-aikey">` on the page request. `GET /api/ai/key` returns `{hasKey, len}` only — never the raw key. | Same, but the page is only served to authenticated requests. |
+| **BLE GATT** (`device_info`, `wifi_*`, `power`, `color`, `mode`, `current_script`, `play_*`, `pair_claim`, `pair_unpair`, `pair_token`) | Reads/writes open, **except** the claim/unpair/token chars | Writes require `WRITE_ENC` and sensitive reads `READ_ENC` → an encrypted, Just-Works-bonded link (macOS shows a pairing prompt on first connect). |
+| **BLE `pair_token` characteristic** | `READ_ENC` | Bonded owner can read it to learn the HTTP token without re-typing. |
 
-**Threat model.** The unpaired default matches the trust posture of a hobby device on a private home network (anyone already on the WiFi is "trusted"). Pairing closes the gaps that matter when that assumption breaks — guests on the same SSID, BLE-range neighbors, and accidental discovery from other apps. It is **not** designed against a determined attacker on your LAN: there is no TLS, the bearer token is sent in cleartext over HTTP, and BLE Just-Works bonding has no MITM protection. A future LE Secure Connections + passkey upgrade is planned; the LE passkey will be shown on the LED panel for matrix lamps and via a one-shot OOB code over BLE for non-matrix forms (towers, wormholes, etc.) where there's no display to read it from.
+**Factory reset.**
 
-**Bootstrapping a paired lamp from a browser:** the macOS app's "Show pair-browser QR…" item generates `http://<lamp-ip>/?t=<token>` as a QR. Scanning it on a phone or another laptop opens the device portal, the inlined `auth.js` reads `?t=`, persists it in `localStorage`, and strips the parameter from the URL. From that point the browser is treated as a paired client until you clear its storage.
+| Reset | Trigger | Clears | Keeps |
+|---|---|---|---|
+| **WiFi** | 10 s long-press (green), or `POST /api/reset {scope:"wifi"}` | WiFi creds, `pair_token` + `pair_mode`, share keys, `provisioned` flag | Hardware config, scripts, AI key |
+| **Full** | 15 s long-press (blue), or `POST /api/reset {scope:"full"}` | All of the above **plus** selected script, AI key, wormhole config | Hardware config (form, pins, LED count) |
+
+Both reset paths release pairing and clear the `provisioned` flag, returning the lamp to fresh AP + BLE onboarding, claimable by whoever onboards it next. (Earlier firmware kept pairing across a WiFi reset; it no longer does.) The HTTP `POST /api/reset` form requires the Bearer token; the long-press is the physical recovery path.
+
+**Threat model.** Pairing closes the gaps that matter once "everyone on the WiFi is trusted" stops holding — guests on the same SSID, BLE-range neighbours, and accidental discovery from other apps. It is **not** designed against a determined attacker on your LAN: there is **no TLS**, so the bearer token is sent in cleartext over HTTP and can be sniffed on an open network, and BLE Just-Works bonding has no MITM protection.
+
+**Bootstrapping a paired lamp from a browser:** the macOS app's "Show pair-browser QR…" item generates `http://<lamp-ip>/?t=<token>` as a QR. Scanning it on a phone or another laptop opens the device portal; the inlined `auth.js` reads `?t=`, persists it in `localStorage`, and strips the parameter from the URL. From that point the browser is treated as a paired client until you clear its storage.
 
 ### Technical Notes
 
@@ -347,7 +435,7 @@ The token lives in NVS (`pair_token` key, base64-url, 43 chars), is generated on
 | Saved JS scripts | SPIFFS `storage` partition | Yes (unless `storage` is rewritten) | Yes |
 | AI API key | NVS (`ai_api_key`) — wiped by `factory_reset_full`. Pre-1.5 browser-localStorage entries are migrated on first portal load. | Same as above | Yes |
 | AI provider / model / base URL | Browser localStorage (per browser) | N/A | N/A |
-| Pairing token + mode | NVS (`pair_token`, `pair_mode`) — wiped by `factory_reset_full`; kept by `factory_reset_wifi`. | Same as above | Yes |
+| Pairing token + mode | NVS (`pair_token`, `pair_mode`, `provisioned`) — wiped by **both** the WiFi and full factory reset. | Same as above | Yes |
 
 ### Partition table
 
@@ -362,7 +450,7 @@ Flash layout (4 MB):
 | `ota_1` | app | ota_1 | 0x1F0000 | 1.8 MB |
 | `storage` | data | spiffs | 0x3C0000 | 256 KB |
 
-> OTA updates only replace an app partition. Adding the `storage` partition (introduced with local JS support) requires a **one-time full USB flash** (`build/dist/<profile>-flash.bin`) to rewrite the partition table. Until then, `/api/js` returns empty and the feature is a no-op.
+> OTA updates only replace an app partition. Adding the `storage` partition (introduced with local JS support) requires a **one-time full USB flash** (`build/dist/plaiiinlight_os-<ver>-<form>-flash.bin`, e.g. via `profile-burn --full`) to rewrite the partition table. Until then, `/api/js` returns empty and the feature is a no-op.
 
 ### Error Indicators
 - **Slow red blink**: No WiFi connection (retrying)
