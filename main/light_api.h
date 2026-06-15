@@ -22,6 +22,10 @@ void light_api_apply_power(bool on);
 void light_api_apply_color_solid(uint8_t r, uint8_t g, uint8_t b);
 /// 0 = ok, -1 = unknown mode string. Accepts "api" / "js" / "stream".
 int  light_api_apply_mode(const char *mode);
+/// Current effective mode string ("api" | "js" | "stream") for status
+/// reporting — "stream" while a WS session owns the lamp, else the persisted
+/// mode. Always NUL-terminates `out`.
+void light_api_get_mode(char *out, size_t out_len);
 
 // Stream takeover/restore — called by the WS layer (ws_server.c) when pixel
 // frames start/stop arriving, so streaming auto-suspends the JS effect and

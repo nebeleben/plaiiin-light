@@ -184,6 +184,17 @@ int light_api_apply_mode(const char *mode)
     return -1;
 }
 
+void light_api_get_mode(char *out, size_t out_len)
+{
+    // Mirrors the GET /api/mode "mode" field: a live WS session reports
+    // "stream"; otherwise the persisted intent ("api" or "js").
+    if (ws_server_get_mode() == LAMP_MODE_STREAM) {
+        snprintf(out, out_len, "stream");
+        return;
+    }
+    get_persistent_mode(out, out_len);
+}
+
 // Auto stream takeover, driven by the WS layer the moment real pixel frames
 // arrive — so a client previewing over /ws never has to POST /api/mode
 // "stream" first, and a running JS effect can't composite under the stream.

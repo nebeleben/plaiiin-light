@@ -2,6 +2,7 @@
 #include "config_store.h"
 #include "led_control.h"
 #include "light_api.h"
+#include "js_api.h"        // effect next/prev playlist stepping
 #include "mqtt_client.h"  // ESP-IDF MQTT
 #include "esp_log.h"
 #include "esp_event.h"
@@ -66,6 +67,10 @@ static char s_topic_color_set[128];
 static char s_topic_color_get[128];
 static char s_topic_brightness_set[128];
 static char s_topic_brightness_get[128];
+static char s_topic_mode_set[128];
+static char s_topic_mode_get[128];
+static char s_topic_effect_next[128];
+static char s_topic_effect_prev[128];
 static char s_topic_status[128];
 
 static void build_topics(void)
@@ -80,6 +85,10 @@ static void build_topics(void)
     snprintf(s_topic_color_get, sizeof(s_topic_color_get), "%s/color/get", s_topic_prefix);
     snprintf(s_topic_brightness_set, sizeof(s_topic_brightness_set), "%s/brightness/set", s_topic_prefix);
     snprintf(s_topic_brightness_get, sizeof(s_topic_brightness_get), "%s/brightness/get", s_topic_prefix);
+    snprintf(s_topic_mode_set, sizeof(s_topic_mode_set), "%s/mode/set", s_topic_prefix);
+    snprintf(s_topic_mode_get, sizeof(s_topic_mode_get), "%s/mode/get", s_topic_prefix);
+    snprintf(s_topic_effect_next, sizeof(s_topic_effect_next), "%s/effect/next", s_topic_prefix);
+    snprintf(s_topic_effect_prev, sizeof(s_topic_effect_prev), "%s/effect/prev", s_topic_prefix);
     snprintf(s_topic_status, sizeof(s_topic_status), "%s/status", s_topic_prefix);
 }
 
@@ -127,6 +136,40 @@ static void handle_message(const char *topic, const char *data, int data_len)
         led_control_set_brightness((uint8_t)bri);
         ESP_LOGI(TAG, "Brightness %d via MQTT", bri);
         mqtt_client_publish_state();
+
+    } else if (strcmp(topic, s_topic_mode_set) == 0) {
+        // Friendly vocab: "color" -> internal "api" (solid colour), "js" as is.
+        // "stream" is WS-driven and intentionally not settable from MQTT.
+        const char *mode = NULL;
+        if      (strcmp(val, "color") == 0) mode = "api";
+        else if (strcmp(val, "js")    == 0) mode = "js";
+        if (mode) {
+            light_api_apply_mode(mode);
+            ESP_LOGI(TAG, "Mode '%s' via MQTT", val);
+            mqtt_client_publish_state();
+        } else {
+            ESP_LOGW(TAG, "Invalid mode '%s' (expected 'color' or 'js')", val);
+        }
+
+    } else if (strcmp(topic, s_topic_effect_next) == 0 ||
+               strcmp(topic, s_topic_effect_prev) == 0) {
+        // Payload ignored — these are momentary commands. Cycling effects means
+        // js mode, so switch in if we're not already there (covers color +
+        // stream); skip the redundant restart when already in js so the running
+        // effect doesn't blip.
+        bool fwd = (strcmp(topic, s_topic_effect_next) == 0);
+        char cur[16];
+        light_api_get_mode(cur, sizeof(cur));
+        if (strcmp(cur, "js") != 0) light_api_apply_mode("js");
+        char chosen[64] = {0};
+        esp_err_t rc = fwd ? js_api_play_next(chosen, sizeof(chosen))
+                           : js_api_play_prev(chosen, sizeof(chosen));
+        if (rc == ESP_OK) {
+            ESP_LOGI(TAG, "Effect %s -> '%s' via MQTT", fwd ? "next" : "prev", chosen);
+            mqtt_client_publish_state();
+        } else {
+            ESP_LOGW(TAG, "Effect %s: no scripts on device", fwd ? "next" : "prev");
+        }
     }
 }
 
@@ -141,6 +184,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             esp_mqtt_client_subscribe(s_client, s_topic_power_set, 1);
             esp_mqtt_client_subscribe(s_client, s_topic_color_set, 1);
             esp_mqtt_client_subscribe(s_client, s_topic_brightness_set, 1);
+            esp_mqtt_client_subscribe(s_client, s_topic_mode_set, 1);
+            esp_mqtt_client_subscribe(s_client, s_topic_effect_next, 1);
+            esp_mqtt_client_subscribe(s_client, s_topic_effect_prev, 1);
             esp_mqtt_client_publish(s_client, s_topic_status, "online", 0, 1, 1);
             mqtt_client_publish_state();
             break;
@@ -243,4 +289,10 @@ void mqtt_client_publish_state(void)
     char bri[8];
     snprintf(bri, sizeof(bri), "%d", led_control_get_brightness());
     esp_mqtt_client_publish(s_client, s_topic_brightness_get, bri, 0, 0, 1);
+
+    // Mode: "color" | "js" | "stream" (internal "api" surfaced as "color")
+    char mode[16];
+    light_api_get_mode(mode, sizeof(mode));
+    const char *mode_pub = (strcmp(mode, "api") == 0) ? "color" : mode;
+    esp_mqtt_client_publish(s_client, s_topic_mode_get, mode_pub, 0, 0, 1);
 }
