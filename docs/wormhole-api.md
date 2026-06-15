@@ -251,7 +251,7 @@ if no markers are present the whole file is used for both modes. Non-wormhole
 templates have no markers and are unaffected. `{placeholder}` substitution runs
 per section as before.
 
-## `@mode` script annotation (Phase 41 — parsed + auto-switching)
+## `@mode` script annotation
 
 Effect authors add a leading comment `// @mode mirror` or `// @mode strip` to
 declare which render mode a `shade()` script is written for. As of Phase 41:
