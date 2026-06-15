@@ -8,8 +8,9 @@ build their own client app, command-line tool, or home-automation bridge.
 If you find a behavior in the official apps that isn't documented here, it
 is **not** part of the contract — please open an issue.
 
-> **Status.** Stable. Breaking changes will bump `apiVersion` (currently
-> `"1"`) and be announced in this document's changelog.
+> **Status.** Stable. `apiVersion` is a semantic version (currently
+> `"1.6.0"`); the **major** component bumps on a breaking change, minor on
+> additive ones. Breaking changes are announced in this document's changelog.
 
 ## Companion docs (authoritative for each subsystem)
 
@@ -33,9 +34,11 @@ A lamp speaks three transports. Every client uses some subset.
 | WebSocket   | 80 at `/ws` | Continuous pixel streaming. Binary frames. |
 | BLE GATT    | n/a | Onboarding (no WiFi yet), low-power control. |
 
-mDNS service: `_plaiiinlight._tcp` (Bonjour / DNS-SD). The advertised TXT
-record carries `nodeName`, `apiVersion`, `paired` (`0`/`1`), `form`,
-`type`, and `ledCount`.
+mDNS: the lamp advertises on both `_plaiiinlight._tcp` and `_http._tcp`
+(Bonjour / DNS-SD). The TXT record carries `vendor`, `node` (node name),
+`fw` (firmware version), `api` (API version), `lamp` (lamp type), `path`
+(`/api`), and `paired` (`0`/`1`). Richer identity (form, geometry, LED
+count) is read from `GET /api` after discovery.
 
 ## Authentication
 
@@ -60,7 +63,7 @@ Stable endpoints. Newer endpoints are added in the companion specs.
 
 | Method | Path | Returns / Body |
 |---|---|---|
-| GET  | `/api`              | Device info — `vendor`, `apiVersion`, `firmwareVersion`, `nodeName`, `ledCount`, `ledType`, `lampType`, `lampForm`, `physicalW/H`, `logicalW/H`, `pixelGroupW/H`. |
+| GET  | `/api`              | Device info — `vendor`, `apiVersion`, `firmwareVersion`, `nodeName`, `ledPin`, `ledClkPin`, `ledCount`, `ledType`, `lampType`, `lampForm`, `physicalW/H`, `logicalW/H`, `pixelGroupW/H`, `rotation`, `origin`, `serpentine`, `serpentineAxis`, button pins. |
 | GET  | `/api/state`        | `{on, color:[r,g,b], mode, brightness, currentScript?}` |
 | GET  | `/api/whoami`       | `{role, paired}` — see sharing-api. |
 | GET  | `/api/pair`         | `{paired:bool, hasToken:bool}` (no auth). |
@@ -78,6 +81,11 @@ Stable endpoints. Newer endpoints are added in the companion specs.
 | POST | `/api/mode`        | `{mode: "stream" \| "api" \| "js"}` |
 | GET  | `/api/limits`      | `{maxBrightness, maxCurrentMa, pixelGroupW, pixelGroupH}` |
 | POST | `/api/limits`      | Any subset of the four fields. |
+| GET  | `/api/base_color`  | `{color:[r,g,b]}` — the base color JS scripts blend onto (read-only; set it via `/api/color`). |
+| GET  | `/api/fade`        | `{onMs, offMs}` — power-on / power-off fade durations. |
+| POST | `/api/fade`        | Any subset of `{onMs, offMs}`. |
+| GET  | `/api/ap_js`       | `{name}` — script auto-played while the lamp is in provisioning-AP mode. |
+| POST | `/api/ap_js`       | `{name}` |
 
 ### Local JS scripts
 
@@ -92,7 +100,7 @@ Stable endpoints. Newer endpoints are added in the companion specs.
 
 The script contract is `function shade(x, y, idx, frame, base, params)` —
 each call emits one pixel via `emit()` / `emitBright()` / `emitHSV()`. The
-shared `lampos/web/shade-runtime.js` runtime is the reference
+shared `lampos/portal/shade-runtime.js` runtime is the reference
 implementation used by the firmware and every client's preview.
 
 ### Updates & reset
@@ -159,8 +167,8 @@ firmware at all.
 
 ## Form factors & geometry
 
-A lamp's `lampForm` field is one of `tower`, `wall`, `wormhole`,
-`strip`, `cube` (and a small open set of others). For matrix lamps,
+A lamp's `lampForm` field is one of `tower`, `display`, `wormhole`,
+`strip`, `cube`, `rocket` (and a small open set of others). For matrix lamps,
 `logicalW/H` and `physicalW/H` may differ when pixel grouping is set —
 clients build frames at the **logical** size, the firmware tiles each
 logical pixel onto a `pixelGroupW × pixelGroupH` block of physical LEDs.
@@ -185,13 +193,13 @@ application-specific codes documented in [`wormhole-api.md`](wormhole-api.md).
 
 ## Versioning
 
-`GET /api` returns `apiVersion` (currently `"1"`). The contract is
+`GET /api` returns `apiVersion` (currently `"1.6.0"`). The contract is
 additive within a major version — new fields may appear, existing ones
-will not change meaning. A breaking change increments the major.
+will not change meaning. A breaking change increments the major component.
 
 ## Reference implementation
 
 The firmware in this repository implements every endpoint described above
 — start in `main/` and follow the route registrations there. The shared
 `shade()` runtime that powers JS scripts is in `portal/shade-runtime.js`
-and `components/plbc/`.
+(reference emulator) and `components/plbc/` (the on-device bytecode VM).

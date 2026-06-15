@@ -34,17 +34,18 @@ valid token but role < min_role → 403.
 - **open** (no auth): `GET /api`, `GET /api/pair`, `POST /api/pair` (unpaired
   bootstrap only), static assets, `/config` + `/network` pages in AP mode.
 - **user**: `/api/state`, `/api/power`, `/api/color`, `/api/brightness`,
-  `/api/base-color`, `/api/mode`, `/api/play`, `/api/play/next|prev|current`,
+  `GET /api/base_color`, `/api/mode`, `/api/play`, `/api/play/next|prev|current`,
   `/api/stop`, `GET /api/js`, `GET /api/js/<n>`, `/api/js/<n>/params`,
   `GET /api/grid`, `GET /api/orientation`, `GET /api/storage`,
-  `GET /api/form-prompt`, `GET /api/bt`, `GET /api/limits`, WS `/stream`,
-  `GET /api/whoami`.
+  `GET /api/form-prompt`, `GET /api/bt`, `GET /api/limits`, `GET /api/fade`,
+  `GET /api/ap_js`, WS `/ws`, `GET /api/whoami`.
 - **creator**: `PUT|DELETE /api/js/<n>`, `/api/js/validate`,
-  `/api/js/compile`, `/api/bench`, `PUT|DELETE /api/form-prompt`.
+  `/api/js/compile`, `/api/bench`, `PUT|DELETE /api/form-prompt`,
+  `POST /api/fade`, `POST /api/ap_js`, `POST /api/wormhole/creative`.
 - **admin**: `POST /api/limits`, `POST /api/grid`, `POST /api/orientation`,
-  `POST /api/bt`, `/api/mqtt`, `POST /api/ota`, `POST /api/reset`,
-  `/api/ai/key`, `POST|DELETE /api/pair`, `/api/keys*`, `POST /config`,
-  `POST /network`.
+  `POST /api/bt`, `POST /api/wormhole`, `/api/mqtt`, `POST /api/ota`,
+  `POST /api/reset`, `/api/ai/key`, `POST|DELETE /api/pair`, `/api/keys*`,
+  `POST /config`, `POST /network`.
 
 ## New endpoints
 
