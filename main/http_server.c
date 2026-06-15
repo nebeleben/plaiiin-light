@@ -463,26 +463,10 @@ static esp_err_t compose_page_handler(httpd_req_t *req) { send_html_for(req, com
 static esp_err_t mqtt_page_handler(httpd_req_t *req) { send_html(req, mqtt_html_start, mqtt_html_end); return ESP_OK; }
 static esp_err_t js_page_handler(httpd_req_t *req) { send_html(req, js_html_start, js_html_end); return ESP_OK; }
 
-// GET /api/mqtt - MQTT config
-static esp_err_t mqtt_api_get_handler(httpd_req_t *req)
-{
-    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
-    char host[128] = {0};
-    char node[64] = {0};
-    config_get_str_or(CONFIG_KEY_MQTT_HOST, host, sizeof(host), "");
-    config_get_str_or(CONFIG_KEY_NODE_NAME, node, sizeof(node), CONFIG_PLAIIIN_NODE_NAME);
-    int32_t active = config_get_i32_or(CONFIG_KEY_MQTT_ACTIVE, 0);
-    int32_t port = config_get_i32_or(CONFIG_KEY_MQTT_PORT, 1883);
-
-    char json[384];
-    snprintf(json, sizeof(json),
-        "{\"active\":%s,\"host\":\"%s\",\"port\":%ld,\"nodeName\":\"%s\"}",
-        active ? "true" : "false", host, (long)port, node);
-
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, json);
-    return ESP_OK;
-}
+// GET /api/mqtt is owned by ai_key_api.c (mqtt_get_handler) — it returns a
+// superset payload that serves both native clients ("enabled") and the
+// captive-portal page ("active"/"nodeName"). A second handler here would be
+// rejected as a duplicate URI and only risk shadowing that one, so it's gone.
 
 // POST /mqtt - save MQTT config
 static esp_err_t mqtt_save_handler(httpd_req_t *req)
@@ -625,8 +609,8 @@ httpd_handle_t http_server_start(void)
     httpd_register_uri_handler(server, &mqtt_page);
     httpd_uri_t js_page = { .uri = "/js", .method = HTTP_GET, .handler = js_page_handler };
     httpd_register_uri_handler(server, &js_page);
-    httpd_uri_t mqtt_api = { .uri = "/api/mqtt", .method = HTTP_GET, .handler = mqtt_api_get_handler };
-    httpd_register_uri_handler(server, &mqtt_api);
+    // GET /api/mqtt is registered by ai_key_api_register() (single source of
+    // truth, superset payload); only the captive-portal page + save POST here.
     httpd_uri_t mqtt_save = { .uri = "/mqtt", .method = HTTP_POST, .handler = mqtt_save_handler };
     httpd_register_uri_handler(server, &mqtt_save);
 

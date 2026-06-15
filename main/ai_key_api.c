@@ -163,11 +163,19 @@ static esp_err_t mqtt_get_handler(httpd_req_t *req)
     char host[128] = {0};
     config_get_str_or(CONFIG_KEY_MQTT_HOST, host, sizeof(host), "");
     int32_t port = config_get_i32_or(CONFIG_KEY_MQTT_PORT, 1883);
+    char node[64] = {0};
+    config_get_str_or(CONFIG_KEY_NODE_NAME, node, sizeof(node), CONFIG_PLAIIIN_NODE_NAME);
 
-    char resp[256];
+    // Superset payload so a single handler serves both consumers: native
+    // clients read "enabled"; the captive-portal page (portal/mqtt.html) reads
+    // "active" + "nodeName". Emitting both is what lets us drop the duplicate
+    // /api/mqtt GET in http_server.c that used to shadow this one with a
+    // divergent ("active"-only) shape and break native decoding.
+    char resp[384];
     snprintf(resp, sizeof(resp),
-             "{\"enabled\":%s,\"host\":\"%s\",\"port\":%ld}",
-             enabled ? "true" : "false", host, (long)port);
+             "{\"enabled\":%s,\"active\":%s,\"host\":\"%s\",\"port\":%ld,\"nodeName\":\"%s\"}",
+             enabled ? "true" : "false", enabled ? "true" : "false",
+             host, (long)port, node);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, resp);
     return ESP_OK;
