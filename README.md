@@ -145,8 +145,14 @@ After the initial USB flash, all subsequent firmware updates are done wirelessly
 # Upload (replace IP with your device's address)
 curl -X POST http://<device-ip>/api/ota \
   -H "Content-Type: application/octet-stream" \
+  -H "Expect:" \
   --data-binary @build/dist/plaiiinlight_os-<ver>-display-app.bin
 ```
+
+The `-H "Expect:"` is required: curl auto-adds `Expect: 100-continue` for large
+request bodies, and the ESP-IDF httpd doesn't complete that handshake — the
+upload resets mid-stream (often after ~128 KB, sometimes surfacing as a
+spurious 401). Suppressing the header lets the binary stream straight through.
 
 The binary's embedded form must match the device — a cross-form upload is
 rejected with `409 Conflict`. OTA carries the app only; byForm JS effects on the
