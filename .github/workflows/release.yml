@@ -1,7 +1,7 @@
 name: Release firmware
 
 # Tag-triggered firmware release. Builds one binary per lamp form
-# (tower, wormhole, display, cube, rocket) inside the official ESP-IDF
+# (tower, wormhole, display, cube, rocket, strip) inside the official ESP-IDF
 # Docker container, packages a byForm SPIFFS effects image alongside each,
 # emits ESP Web Tools manifests, and publishes everything as a GitHub
 # Release on this repository.
@@ -37,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        form: [tower, wormhole, display, cube, rocket]
+        form: [tower, wormhole, display, cube, rocket, strip]
 
     steps:
       - name: Checkout firmware at tag
@@ -217,7 +217,7 @@ jobs:
 
           ## Forms shipped
 
-          \`tower\` · \`wormhole\` · \`display\` · \`cube\` · \`rocket\`
+          \`tower\` · \`wormhole\` · \`display\` · \`cube\` · \`rocket\` · \`strip\`
 
           ## What's in each form
 
