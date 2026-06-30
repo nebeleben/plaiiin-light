@@ -99,13 +99,16 @@ static void handle_message(const char *topic, const char *data, int data_len)
     if (data_len > (int)sizeof(val) - 1) data_len = sizeof(val) - 1;
     memcpy(val, data, data_len);
 
+    // The light_api_apply_* helpers below publish the resulting state to MQTT
+    // themselves (power/mode/brightness immediately, color debounced on the
+    // baseColor settle), so these handlers don't publish again — doing so would
+    // emit a duplicate retained burst per command.
     if (strcmp(topic, s_topic_power_set) == 0) {
         // Accept "0" (off) or "1" (on). Route through light_api so it persists
         // the state and resumes the JS player on power-on, same as HTTP/BLE.
         bool on = (val[0] == '1');
         light_api_apply_power(on);
         ESP_LOGI(TAG, "Power %s via MQTT", on ? "ON" : "OFF");
-        mqtt_client_publish_state();
 
     } else if (strcmp(topic, s_topic_color_set) == 0) {
         // Parse HSV "h,s,v" where H: 0-360, S: 0-100, V: 0-100
@@ -120,7 +123,6 @@ static void handle_message(const char *topic, const char *data, int data_len)
             // color change" from Apple Home / Homebridge).
             light_api_apply_color_solid(r, g, b);
             ESP_LOGI(TAG, "Color HSV(%d,%d,%d) = RGB(%d,%d,%d) via MQTT", h, s, v, r, g, b);
-            mqtt_client_publish_state();
         } else {
             ESP_LOGW(TAG, "Invalid HSV format: '%s' (expected 'h,s,v')", val);
         }
@@ -129,9 +131,8 @@ static void handle_message(const char *topic, const char *data, int data_len)
         int bri = atoi(val);
         if (bri < 0) bri = 0;
         if (bri > 255) bri = 255;
-        led_control_set_brightness((uint8_t)bri);
+        light_api_apply_brightness((uint8_t)bri);
         ESP_LOGI(TAG, "Brightness %d via MQTT", bri);
-        mqtt_client_publish_state();
 
     } else if (strcmp(topic, s_topic_mode_set) == 0) {
         // Friendly vocab: "color" -> internal "api" (solid colour), "js" as is.
@@ -142,7 +143,6 @@ static void handle_message(const char *topic, const char *data, int data_len)
         if (mode) {
             light_api_apply_mode(mode);
             ESP_LOGI(TAG, "Mode '%s' via MQTT", val);
-            mqtt_client_publish_state();
         } else {
             ESP_LOGW(TAG, "Invalid mode '%s' (expected 'color' or 'js')", val);
         }
@@ -162,6 +162,8 @@ static void handle_message(const char *topic, const char *data, int data_len)
                            : js_api_play_prev(chosen, sizeof(chosen));
         if (rc == ESP_OK) {
             ESP_LOGI(TAG, "Effect %s -> '%s' via MQTT", fwd ? "next" : "prev", chosen);
+            // Unlike the cases above, stepping the playlist (js_api_play_next/prev)
+            // has no publishing helper, so publish here to reflect any mode flip.
             mqtt_client_publish_state();
         } else {
             ESP_LOGW(TAG, "Effect %s: no scripts on device", fwd ? "next" : "prev");
