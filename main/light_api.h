@@ -20,6 +20,8 @@ esp_err_t light_api_register(httpd_handle_t server);
 // only updates baseColor, never the framebuffer) and NVS persistence.
 void light_api_apply_power(bool on);
 void light_api_apply_color_solid(uint8_t r, uint8_t g, uint8_t b);
+/// Set global LED brightness (0-255) and publish the new state to MQTT.
+void light_api_apply_brightness(uint8_t value);
 /// 0 = ok, -1 = unknown mode string. Accepts "api" / "js" / "stream".
 int  light_api_apply_mode(const char *mode);
 /// Current effective mode string ("api" | "js" | "stream") for status

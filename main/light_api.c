@@ -7,6 +7,7 @@
 #include "js_api.h"
 #include "wormhole.h"
 #include "pairing.h"
+#include "plaiiin_mqtt.h"   // mirror app/BLE changes to MQTT subscribers
 #include "esp_log.h"
 #include "esp_timer.h"
 #include <string.h>
@@ -33,6 +34,10 @@ static void basecolor_commit_cb(void *arg)
         config_store_set_i32(CONFIG_KEY_BASE_COLOR, v);
         s_last_persisted_basecolor = v;
     }
+    // Every color change (app/HTTP or BLE) settles here ~1s after the last
+    // update, so mirror it to MQTT now. Debounced with the NVS write so a
+    // color-picker drag doesn't flood the broker with intermediate values.
+    mqtt_client_publish_state();
 }
 
 static void schedule_basecolor_persist(int32_t packed)
@@ -138,6 +143,7 @@ void light_api_apply_power(bool on)
     } else {
         led_control_power(on);
     }
+    mqtt_client_publish_state();
 }
 
 void light_api_apply_color_solid(uint8_t r, uint8_t g, uint8_t b)
@@ -161,6 +167,15 @@ void light_api_apply_color_solid(uint8_t r, uint8_t g, uint8_t b)
     schedule_basecolor_persist(packed);
 }
 
+// Brightness is a global LED-driver setting, not a per-mode one, so there's no
+// js-mode special-casing — but it still needs one shared entry point so HTTP
+// and BLE both persist-free apply it AND notify MQTT subscribers.
+void light_api_apply_brightness(uint8_t value)
+{
+    led_control_set_brightness(value);
+    mqtt_client_publish_state();
+}
+
 int light_api_apply_mode(const char *mode)
 {
     if (!mode) return -1;
@@ -168,17 +183,20 @@ int light_api_apply_mode(const char *mode)
         ws_server_set_mode(LAMP_MODE_API);
         js_api_stop();   /* stops either runtime; also clears current_name */
         config_store_set_str(CONFIG_KEY_LAMP_MODE, "api");
+        mqtt_client_publish_state();
         return 0;
     }
     if (strcmp(mode, "js") == 0) {
         ws_server_set_mode(LAMP_MODE_API);
         config_store_set_str(CONFIG_KEY_LAMP_MODE, "js");
         if (led_control_is_on()) (void)start_current_js();
+        mqtt_client_publish_state();
         return 0;
     }
     if (strcmp(mode, "stream") == 0) {
         js_api_stop();
         ws_server_set_mode(LAMP_MODE_STREAM);
+        mqtt_client_publish_state();
         return 0;
     }
     return -1;
@@ -388,7 +406,7 @@ static esp_err_t brightness_set_handler(httpd_req_t *req)
     if (val < 0) val = 0;
     if (val > 255) val = 255;
 
-    led_control_set_brightness((uint8_t)val);
+    light_api_apply_brightness((uint8_t)val);
 
     char resp[32];
     snprintf(resp, sizeof(resp), "{\"brightness\":%d}", val);

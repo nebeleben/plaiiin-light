@@ -3,6 +3,7 @@
 #include "led_control.h"
 #include "light_api.h"
 #include "js_api.h"        // effect next/prev playlist stepping
+#include "js_player.h"     // base color = the user-intent tint
 #include "mqtt_client.h"  // ESP-IDF MQTT
 #include "esp_log.h"
 #include "esp_event.h"
@@ -112,19 +113,14 @@ static void handle_message(const char *topic, const char *data, int data_len)
         if (sscanf(val, "%d,%d,%d", &h, &s, &v) == 3) {
             uint8_t r, g, b;
             hsv_to_rgb(h, s, v, &r, &g, &b);
-            int count = led_control_get_count();
-            led_color_t *colors = calloc(count, sizeof(led_color_t));
-            if (colors) {
-                for (int i = 0; i < count; i++) {
-                    colors[i].r = r;
-                    colors[i].g = g;
-                    colors[i].b = b;
-                }
-                led_control_set_all(colors, count);
-                free(colors);
-                ESP_LOGI(TAG, "Color HSV(%d,%d,%d) = RGB(%d,%d,%d) via MQTT", h, s, v, r, g, b);
-                mqtt_client_publish_state();
-            }
+            // Route through the shared helper — same path as the app/HTTP and
+            // BLE. In js mode this updates the running effect's base color so
+            // it adopts the tint, instead of a raw framebuffer write that the
+            // player would overwrite on its very next frame (looked like "no
+            // color change" from Apple Home / Homebridge).
+            light_api_apply_color_solid(r, g, b);
+            ESP_LOGI(TAG, "Color HSV(%d,%d,%d) = RGB(%d,%d,%d) via MQTT", h, s, v, r, g, b);
+            mqtt_client_publish_state();
         } else {
             ESP_LOGW(TAG, "Invalid HSV format: '%s' (expected 'h,s,v')", val);
         }
@@ -277,10 +273,13 @@ void mqtt_client_publish_state(void)
     esp_mqtt_client_publish(s_client, s_topic_power_get,
                             led_control_is_on() ? "1" : "0", 0, 0, 1);
 
-    // Color: current last_color as HSV "h,s,v"
-    led_color_t c = led_control_get_last_color();
+    // Color: the user-intent base color as HSV "h,s,v" — what /api/color sets
+    // and /api/base_color reports. In js mode last_color is just the effect's
+    // last rendered frame, so it would publish a misleading "current color".
+    uint8_t cr, cg, cb;
+    js_player_get_base_color(&cr, &cg, &cb);
     int h, s, v;
-    rgb_to_hsv(c.r, c.g, c.b, &h, &s, &v);
+    rgb_to_hsv(cr, cg, cb, &h, &s, &v);
     char hsv[24];
     snprintf(hsv, sizeof(hsv), "%d,%d,%d", h, s, v);
     esp_mqtt_client_publish(s_client, s_topic_color_get, hsv, 0, 0, 1);

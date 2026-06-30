@@ -380,7 +380,7 @@ static int access_brightness(uint16_t conn, uint16_t attr,
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
         uint8_t v = 0;
         if (read_u8(ctxt->om, &v) != 0) return BLE_ATT_ERR_INVALID_PDU;
-        led_control_set_brightness(v);
+        light_api_apply_brightness(v);
         return 0;
     }
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
