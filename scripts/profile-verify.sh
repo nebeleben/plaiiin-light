@@ -79,13 +79,21 @@ verify_one() {
                 fail=1
             fi
             if [[ "$lamp_type" =~ ^matrix([0-9]+)x([0-9]+)$ ]]; then
-                local w="${BASH_REMATCH[1]}" h="${BASH_REMATCH[2]}"
-                local expected="fire${w}x${h}"
-                # For multi-panel forms (cube) the per-panel matrix dim is the
-                # fire grid dim — fire8x8 is correct for cube's matrix8x8 too.
+                local pw="${BASH_REMATCH[1]}" ph="${BASH_REMATCH[2]}"
+                # Fire renders on the LOGICAL grid (physical ÷ pixel-group), NOT
+                # the physical LAMP_TYPE size — see hardcoded_runtime.c get_grid(),
+                # which sizes the effect from led_control_get_logical_w/h(). A
+                # 2×2-grouped 16×16 wall runs 8×8 logical and needs fire8x8, not
+                # fire16x16 (mask size mismatch → broken fire). For ungrouped
+                # panels (and cube's per-panel matrix8x8) group=1 so logical=physical.
+                local gw gh
+                gw=$(read_key "$file" PX_GROUP_W); gh=$(read_key "$file" PX_GROUP_H)
+                [ -z "$gw" ] && gw=1; [ -z "$gh" ] && gh=1
+                local lw=$(( pw / gw )) lh=$(( ph / gh ))
+                local expected="fire${lw}x${lh}"
                 if [ "$fire_pattern" != "$expected" ]; then
-                    issues+=("FIRE_PATTERN='$fire_pattern' doesn't match LAMP_TYPE='$lamp_type' (expected '$expected')")
-                    warn=1
+                    issues+=("FIRE_PATTERN='$fire_pattern' doesn't match LOGICAL grid ${lw}x${lh} (LAMP_TYPE=$lamp_type, group ${gw}x${gh}; expected '$expected')")
+                    fail=1
                 fi
             fi
         fi
