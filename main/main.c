@@ -13,6 +13,7 @@
 #include "bt_service.h"
 #include "buttons.h"
 #include "ai_key_api.h"
+#include "reset_key_api.h"
 #include "pairing.h"
 #include "keys.h"
 #include "wormhole.h"
@@ -378,6 +379,7 @@ void app_main(void)
     } else {
         js_api_register(server);
         ai_key_api_register(server);
+        reset_key_api_register(server);
         keys_api_register(server);
     }
 

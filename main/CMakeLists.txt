@@ -77,6 +77,7 @@ idf_component_register(
         "buttons.c"
         "factory_reset.c"
         "ai_key_api.c"
+        "reset_key_api.c"
         "pairing.c"
         "form_prompt.c"
         "keys.c"
@@ -90,6 +91,7 @@ idf_component_register(
     REQUIRES
         esp_http_server
         json
+        mbedtls
         esp_wifi
         esp_event
         esp_netif
