@@ -158,6 +158,8 @@ esp_err_t pairing_unpair(void)
     config_store_set_str(CONFIG_KEY_PAIR_MODE, "unpaired");
     // Sharing only exists on a paired lamp — drop every share key too.
     keys_clear_all();
+    // Recovery key belongs to the current claim — releasing ownership clears it.
+    config_store_set_str(CONFIG_KEY_RESET_KEY, "");
     s_paired_cached = false;
     // NOTE: CONFIG_KEY_PROVISIONED is deliberately NOT cleared here. Releasing
     // ownership from the owner's app must not silently reopen the unauthenticated

@@ -82,6 +82,11 @@
 // the additional limited-role keys an admin hands out. Wiped by factory
 // reset alongside the pair token. See keys.{h,c}.
 #define CONFIG_KEY_SHARE_KEYS    "share_keys"
+// Recovery-key hash — 64-char lowercase hex SHA-256 of the owner-minted
+// factory-reset recovery key. NEVER stores the plaintext. Non-empty ⇒ a
+// recovery key is armed. Wiped by both factory resets and by unpair, since it
+// is per-owner recovery data tied to the current claim. See reset_key_api.c.
+#define CONFIG_KEY_RESET_KEY     "reset_key_h"
 // Bluetooth lifecycle policy:
 //   "auto"   — BT advertises only when WiFi is unconfigured or fails to
 //              associate within ~15s after boot. Once WiFi is up, BT shuts
