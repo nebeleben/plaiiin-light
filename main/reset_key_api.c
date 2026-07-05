@@ -42,7 +42,7 @@ static esp_err_t reset_key_post_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, "{\"error\":\"not claimed\"}");
         return ESP_OK;
     }
-    char key[64];
+    char key[TOKEN_B64_LEN];   // sized from the generator's own floor, not a bare 64
     pl_token_generate(key, sizeof(key));
     char hash[65];
     sha256_hex(key, hash);

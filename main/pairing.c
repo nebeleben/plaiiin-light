@@ -11,9 +11,9 @@
 static const char *TAG = "pairing";
 
 // 32 random bytes → 43 chars URL-safe base64. We add 2 chars of headroom +
-// NUL so callers always have room for a clean copy.
+// NUL so callers always have room for a clean copy. TOKEN_B64_LEN is declared
+// in pairing.h so other modules (e.g. reset_key_api.c) size buffers from it too.
 #define TOKEN_BYTES 32
-#define TOKEN_B64_LEN 64
 
 static bool s_paired_cached = false;
 // Sticky "has been claimed before" flag — see CONFIG_KEY_PROVISIONED. Cached at

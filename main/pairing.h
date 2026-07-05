@@ -75,7 +75,12 @@ esp_err_t pairing_http_check(httpd_req_t *req, pl_role_t min_role);
 /** Websocket-upgrade variant — reads the token from `?token=`. */
 esp_err_t pairing_ws_check(httpd_req_t *req, pl_role_t min_role);
 
-/** Generate a fresh 43-char base64-url token. `out` needs ≥64 bytes.
+/** Minimum buffer size for a generated token (43 base64-url chars + NUL, with
+ *  headroom). `pl_token_generate` refuses to write into anything smaller.
+ *  Callers should size token buffers from this constant, not a bare 64. */
+#define TOKEN_B64_LEN 64
+
+/** Generate a fresh 43-char base64-url token. `out` needs ≥TOKEN_B64_LEN bytes.
  *  Shared by pairing (admin token) and keys.c (share keys). */
 void pl_token_generate(char *out, size_t out_len);
 
