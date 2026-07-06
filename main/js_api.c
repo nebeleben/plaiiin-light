@@ -698,8 +698,22 @@ static esp_err_t advance_script(int direction, char *out_name, size_t out_len)
     } else {
         next = (idx + direction + n) % n;
     }
-    snprintf(out_name, out_len, "%s", names[next]);
-    esp_err_t rc = js_api_play(names[next], JS_DEFAULT_FPS);
+    // Skip past any entry that fails to play (e.g. a .js whose .bc never
+    // compiled) so one broken script can't wall off the carousel — the walker
+    // steps in `direction` until a script actually starts. js_api_play()
+    // rejects an unplayable name (missing .bc → ESP_ERR_NOT_FOUND) *before* it
+    // stops the running effect, so these probes don't disturb playback. We try
+    // at most n entries; the current script is itself playable, so the loop
+    // always resolves (worst case, back to what was already playing).
+    esp_err_t rc = ESP_ERR_NOT_FOUND;
+    for (int tries = 0; tries < n; tries++) {
+        rc = js_api_play(names[next], JS_DEFAULT_FPS);
+        if (rc == ESP_OK) {
+            snprintf(out_name, out_len, "%s", names[next]);
+            break;
+        }
+        next = (next + direction + n) % n;
+    }
     free(names);
     return rc;
 }

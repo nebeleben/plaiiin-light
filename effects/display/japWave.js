@@ -14,15 +14,13 @@ function shade(x, y, idx, frame, base, params) {
     let crest = 0;
     let cell = 0;
     let best = 0;
-    let gi = 0;
-    let gj = 0;
 
     best = 999.0;
     crest = 0;
 
     // sample a few overlapping arc centers (seigaiha grid)
-    for (gj = -1; gj <= 1; gj++) {
-        for (gi = -1; gi <= 1; gi++) {
+    for (let gj = -1; gj <= 1; gj++) {
+        for (let gi = -1; gi <= 1; gi++) {
             cx = (floor(x / s) + gi) * s + s * 0.5;
             cy = (floor(y / s) + gj) * s + s * 0.5;
             dx = x - cx;
