@@ -58,9 +58,9 @@ esp_err_t factory_reset_wifi(bool reboot)
         // physical way to return a previously-owned lamp to fresh AP/BLE
         // onboarding (the open provisioning AP comes back on the next boot).
         CONFIG_KEY_PROVISIONED,
-        // Recovery key is per-owner data — clear it so a reset lamp comes back
-        // with no armed key.
-        CONFIG_KEY_RESET_KEY,
+        // NOTE: CONFIG_KEY_RESET_KEY is deliberately NOT wiped. The recovery
+        // key is a durable secret that must survive every reset so the owner
+        // can always recover — only an explicit generate/DELETE changes it.
     };
     config_store_erase_keys(keys, sizeof(keys) / sizeof(keys[0]));
     confirm_blink(0, 200, 0);   // green
@@ -92,8 +92,10 @@ esp_err_t factory_reset_full(bool reboot)
         // Sticky provisioning marker — see factory_reset_wifi(). A full reset
         // also returns the lamp to fresh AP/BLE onboarding.
         CONFIG_KEY_PROVISIONED,
-        // Recovery key — per-owner, cleared on full reset.
-        CONFIG_KEY_RESET_KEY,
+        // NOTE: CONFIG_KEY_RESET_KEY is deliberately NOT wiped here either —
+        // the recovery key survives a full reset (and the redeem that triggers
+        // one), so it stays usable across ownership changes until an explicit
+        // generate/DELETE. See reset_key_api.c and factory_reset_wifi() above.
         // Phase 29 — wormhole render mode + per-ring config. Wiped on a full
         // reset so a wormhole lamp returns to its default strip mode with the
         // firmware-derived ring count and all-zero physical/creative config.

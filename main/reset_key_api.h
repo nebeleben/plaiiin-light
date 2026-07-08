@@ -16,5 +16,9 @@
  *
  * The key is stored only as a hex SHA-256 (CONFIG_KEY_RESET_KEY); the plaintext
  * is shown once at mint time and never persisted or logged.
+ *
+ * Lifecycle: the stored hash is DURABLE — it survives claim/unclaim, wifi-reset,
+ * and full-reset (including the redeem that triggers one). Only POST (generate,
+ * overwrites) or DELETE (clear) changes it. See config_store.h.
  */
 esp_err_t reset_key_api_register(httpd_handle_t server);

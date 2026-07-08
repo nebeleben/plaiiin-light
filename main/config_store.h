@@ -84,8 +84,12 @@
 #define CONFIG_KEY_SHARE_KEYS    "share_keys"
 // Recovery-key hash — 64-char lowercase hex SHA-256 of the owner-minted
 // factory-reset recovery key. NEVER stores the plaintext. Non-empty ⇒ a
-// recovery key is armed. Wiped by both factory resets and by unpair, since it
-// is per-owner recovery data tied to the current claim. See reset_key_api.c.
+// recovery key is armed. DURABLE: deliberately NOT wiped by unpair or by
+// either factory reset — the key persists across claim/unclaim, wifi-reset,
+// and full-reset (including the redeem that triggers one). Only an explicit
+// generate (POST) or clear (DELETE) on /api/reset-key changes it. This trades
+// "fresh lamp for the next owner" against "owner never loses recovery access";
+// hand-off to a new owner needs a manual DELETE. See reset_key_api.c.
 #define CONFIG_KEY_RESET_KEY     "reset_key_h"
 // Bluetooth lifecycle policy:
 //   "auto"   — BT advertises only when WiFi is unconfigured or fails to
