@@ -102,7 +102,7 @@ explicitly welcome.
 
 ## Latest release
 
-**Current firmware: v1.9.10** — grab it from the
+**Current firmware: v1.9.11** — grab it from the
 [releases page](https://github.com/nebeleben/plaiiin-light/releases/latest).
 Every release ships, per form: a `flash.bin` (USB first-flash), an
 `app.bin` (OTA payload), an `effects.bin` (per-form effects image), an
@@ -110,6 +110,9 @@ ESP Web Tools manifest for browser flashing, and `SHA256SUMS`.
 
 What's new in the 1.9 line:
 
+- **v1.9.11** — web server no longer wedges when clients leave
+  connections half-open: stale sockets are purged (LRU) so the portal
+  and API stay reachable.
 - **v1.9.10** — the factory-reset recovery key is now durable: it
   survives reset and unpair, so a lost lamp can always be recovered.
 - **v1.9.9** — release-pipeline rebuild; no firmware changes.
