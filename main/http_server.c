@@ -541,6 +541,13 @@ httpd_handle_t http_server_start(void)
     config.uri_match_fn = httpd_uri_match_wildcard;
     // JS validation runs mjs_exec on the request thread — needs more stack than default 4 KB.
     config.stack_size = 16 * 1024;
+    // Evict the least-recently-used socket when all slots (max_open_sockets,
+    // default 7) are taken. Without this, clients that churn keep-alive
+    // connections (Node fetch closes idle sockets after ~4 s and reopens per
+    // poll) strand server-side sockets in CLOSE_WAIT until every slot is dead
+    // and the lamp refuses new connections entirely — recoverable only by
+    // reboot. Observed wedging half the lab fleet under Homebridge + app polling.
+    config.lru_purge_enable = true;
 
     httpd_handle_t server = NULL;
     esp_err_t err = httpd_start(&server, &config);
