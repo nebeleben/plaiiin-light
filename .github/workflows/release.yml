@@ -37,15 +37,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Every form builds for esp32 (Xtensa). `include` adds extra-SoC
-        # variants only for the forms that actually have devices on that chip —
-        # today just the strip form on esp32c3 (RISC-V) for shrumLight. The
-        # espressif/idf image already ships both toolchains, so no install step.
+        # Full form × chip cross-product: every form builds for both esp32
+        # (Xtensa) and esp32c3 (RISC-V). The espressif/idf image ships both
+        # toolchains, so no install step. esp32 assets keep the bare <form>
+        # stem; esp32c3 assets carry a -esp32c3 suffix (see naming below).
         form: [tower, wormhole, display, cube, rocket, strip]
-        chip: [esp32]
-        include:
-          - form: strip
-            chip: esp32c3
+        chip: [esp32, esp32c3]
 
     steps:
       - name: Checkout firmware at tag
@@ -243,11 +240,12 @@ jobs:
 
           ## Forms shipped
 
-          \`tower\` · \`wormhole\` · \`display\` · \`cube\` · \`rocket\` · \`strip\` (esp32)
+          \`tower\` · \`wormhole\` · \`display\` · \`cube\` · \`rocket\` · \`strip\`
 
-          SoC variants (RISC-V) carry a \`-<chip>\` suffix: \`strip-esp32c3\` (shrumLight).
-          Assets without a suffix are esp32 (Xtensa). **Match the asset to your
-          board's chip** — a lamp reports its own via \`GET /api/ota/info\` (\`target\`).
+          Every form ships for **two SoCs**: esp32 (Xtensa, no suffix) and esp32c3
+          (RISC-V, \`-esp32c3\` suffix), e.g. \`tower-flash.bin\` vs
+          \`tower-esp32c3-flash.bin\`. **Match the asset to your board's chip** — a
+          lamp reports its own via \`GET /api/ota/info\` (\`target\`).
 
           ## What's in each form
 
