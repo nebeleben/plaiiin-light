@@ -14,7 +14,9 @@ any WS2812 / SK6812 / SK9822-class LED hardware you wire up yourself.
 
 The fastest way to a running lamp — no toolchain needed — is a prebuilt
 binary: grab your form's `flash.bin` from the
-[latest release](https://github.com/nebeleben/plaiiin-light/releases/latest),
+[latest release](https://github.com/nebeleben/plaiiin-light/releases/latest)
+(`<form>-flash.bin` for classic ESP32 boards, `<form>-esp32c3-flash.bin`
+for the ESP32-C3),
 or flash straight from the browser (Chrome/Edge) using the release's
 ESP Web Tools manifest.
 
@@ -25,6 +27,7 @@ git clone https://github.com/nebeleben/plaiiin-light.git
 cd plaiiin-light
 ./scripts/setup.sh                    # installs ESP-IDF v5.3.2 + tools
 ./scripts/build.sh --form display     # tower | display | cube | rocket | wormhole | strip
+                                      # add --chip esp32c3 (or esp32s3) for those boards
 ```
 
 That drops two artifacts into `build/dist/`: a merged `…-flash.bin` for
@@ -99,8 +102,8 @@ targets are supported by the build system (`./scripts/build.sh --chip …`):
 
 | Chip | Boards (examples) | Notes |
 | --- | --- | --- |
-| **ESP32** (classic) | ESP32 Mini / D1 Mini ESP32, ESP32 DevKit | Dual-core Xtensa @ 240 MHz — the fleet default; all prebuilt release binaries target it |
-| **ESP32-C3** | C3 SuperMini, C3 DevKit | Single-core RISC-V @ 160 MHz — build with `--chip esp32c3` |
+| **ESP32** (classic) | ESP32 Mini / D1 Mini ESP32, ESP32 DevKit | Dual-core Xtensa @ 240 MHz — the fleet default; prebuilt `<form>-*.bin` release binaries |
+| **ESP32-C3** | C3 SuperMini, C3 DevKit | Single-core RISC-V @ 160 MHz — prebuilt `<form>-esp32c3-*.bin` release binaries, or build with `--chip esp32c3` |
 | **ESP32-S3** | S3 Mini, S3 DevKit | Dual-core Xtensa @ 240 MHz — build with `--chip esp32s3` |
 
 Every lamp form builds for every chip; the C3 and S3 differ only in
@@ -133,14 +136,20 @@ explicitly welcome.
 
 ## Latest release
 
-**Current firmware: v1.9.11** — grab it from the
+**Current firmware: v1.9.13** — grab it from the
 [releases page](https://github.com/nebeleben/plaiiin-light/releases/latest).
-Every release ships, per form: a `flash.bin` (USB first-flash), an
-`app.bin` (OTA payload), an `effects.bin` (per-form effects image), an
-ESP Web Tools manifest for browser flashing, and `SHA256SUMS`.
+Every release ships, per form and per chip (classic ESP32 and ESP32-C3,
+the latter with an `-esp32c3` infix): a `flash.bin` (USB first-flash),
+an `app.bin` (OTA payload), an `effects.bin` (per-form effects image),
+an ESP Web Tools manifest for browser flashing, and `SHA256SUMS`.
 
 What's new in the 1.9 line:
 
+- **v1.9.13** — prebuilt ESP32-C3 binaries for every lamp form now ship
+  with each release, alongside the classic ESP32 set.
+- **v1.9.12** — ESP32-C3 support lands: build any form with
+  `--chip esp32c3`; `/api/ota/info` now reports the chip target so
+  updaters can't cross-flash; new shrumLight (24-LED strip) profile.
 - **v1.9.11** — web server no longer wedges when clients leave
   connections half-open: stale sockets are purged (LRU) so the portal
   and API stay reachable.
