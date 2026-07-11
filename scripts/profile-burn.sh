@@ -29,6 +29,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 # --- Defaults -----------------------------------------------------------------
 BAUD=460800
 FULL=0
+CHIP=esp32   # target SoC. esp32 = Xtensa fleet default; esp32c3 = RISC-V single-core.
 
 # Locate ESP-IDF tools — we don't require the user to source export.sh first.
 PYTHON="${IDF_PYTHON:-/Users/$USER/.espressif/python_env/idf5.3_py3.12_env/bin/python}"
@@ -46,6 +47,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --full)        FULL=1; shift ;;
         --baud)        BAUD="$2"; shift 2 ;;
+        --chip)        CHIP="$2"; shift 2 ;;
         -h|--help)     sed -n '2,22p' "$0"; exit 0 ;;
         --)            shift; break ;;
         -*)            echo "unknown flag: $1" >&2; exit 2 ;;
@@ -56,9 +58,13 @@ done
 PORT="${1:-}"
 PROFILE="${2:-}"
 if [ -z "$PORT" ] || [ -z "$PROFILE" ]; then
-    echo "usage: $0 [--full] [--baud N] <port> <family>/<device>" >&2
+    echo "usage: $0 [--full] [--baud N] [--chip esp32|esp32c3] <port> <family>/<device>" >&2
     exit 2
 fi
+case "$CHIP" in
+    esp32|esp32c3|esp32s3) ;;
+    *) echo "unsupported --chip '$CHIP' (esp32, esp32c3, esp32s3)" >&2; exit 2 ;;
+esac
 
 if [[ "$PROFILE" != */* ]]; then
     echo "profile must be <family>/<device>, e.g. tower/tower8v2" >&2; exit 2
@@ -265,23 +271,27 @@ if [ "$FULL" -eq 1 ]; then
     # `--full tower` burn picks tower-app, not whatever was built last. Profiles
     # without a FORM (unlikely) fall back to the legacy '*-flash.bin' glob.
     PROFILE_FORM="$(get FORM)"
+    # Non-esp32 builds carry a -<chip> suffix in build/dist so architectures
+    # never cross (an esp32 glob won't match a C3 image and vice-versa).
+    FORM_GLOB="$PROFILE_FORM"
+    [ "$CHIP" != "esp32" ] && FORM_GLOB="$PROFILE_FORM-$CHIP"
     if [ -n "$PROFILE_FORM" ]; then
-        FLASH_BIN="$(ls -1t "$PROJECT_DIR/build/dist/"plaiiinlight_os-*-"$PROFILE_FORM"-flash.bin 2>/dev/null | head -1)"
+        FLASH_BIN="$(ls -1t "$PROJECT_DIR/build/dist/"plaiiinlight_os-*-"$FORM_GLOB"-flash.bin 2>/dev/null | head -1)"
     else
         FLASH_BIN="$(ls -1t "$PROJECT_DIR/build/dist/"plaiiinlight_os-*-flash.bin 2>/dev/null | head -1)"
     fi
     if [ ! -f "$FLASH_BIN" ]; then
         if [ -n "$PROFILE_FORM" ]; then
-            echo "no flash.bin for form '$PROFILE_FORM' in build/dist — run scripts/build.sh --form $PROFILE_FORM first" >&2
+            echo "no flash.bin for form '$PROFILE_FORM' (chip $CHIP) in build/dist — run scripts/build.sh --form $PROFILE_FORM${CHIP:+ --chip $CHIP} first" >&2
         else
             echo "no flash.bin in build/dist — run scripts/build.sh --form <name> first" >&2
         fi
         exit 1
     fi
     echo "=== --full: erase_flash ==="
-    "$PYTHON" "$ESPTOOL" --chip esp32 --port "$PORT" --baud "$BAUD" erase_flash
+    "$PYTHON" "$ESPTOOL" --chip "$CHIP" --port "$PORT" --baud "$BAUD" erase_flash
     echo "=== --full: write_flash 0x0 $(basename "$FLASH_BIN") ==="
-    "$PYTHON" "$ESPTOOL" --chip esp32 --port "$PORT" --baud "$BAUD" \
+    "$PYTHON" "$ESPTOOL" --chip "$CHIP" --port "$PORT" --baud "$BAUD" \
         write_flash 0x0 "$FLASH_BIN"
 
     # --- byForm effects + form template: SPIFFS image -----------------------
@@ -339,7 +349,7 @@ if [ "$FULL" -eq 1 ]; then
         # spiffsgen.py's defaults (page 256 / block 4096 / magic) match the
         # firmware's esp_spiffs defaults — no extra flags needed.
         "$PYTHON" "$SPIFFS_GEN" "$((ST_SIZE))" "$SPIFFS_SRC" "$SPIFFS_IMG"
-        "$PYTHON" "$ESPTOOL" --chip esp32 --port "$PORT" --baud "$BAUD" \
+        "$PYTHON" "$ESPTOOL" --chip "$CHIP" --port "$PORT" --baud "$BAUD" \
             write_flash "$ST_OFF" "$SPIFFS_IMG"
     else
         echo "=== --full: no byForm effects or template for form '${FORM_VAL:-?}' ==="
@@ -348,7 +358,7 @@ fi
 
 # --- Write NVS partition (no app touch) --------------------------------------
 echo "=== Writing NVS @ $NVS_OFFSET ==="
-"$PYTHON" "$ESPTOOL" --chip esp32 --port "$PORT" --baud "$BAUD" \
+"$PYTHON" "$ESPTOOL" --chip "$CHIP" --port "$PORT" --baud "$BAUD" \
     --after hard_reset write_flash "$NVS_OFFSET" "$BIN"
 
 echo "=== Done — $DEVICE booted with profile applied. ==="

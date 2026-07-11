@@ -18,14 +18,16 @@ set -euo pipefail
 
 # --- Argument parsing ---------------------------------------------------------
 FORM=""
+CHIP="esp32"   # target SoC; esp32 (Xtensa) is the fleet default. esp32c3 = RISC-V single-core.
 while [ $# -gt 0 ]; do
     case "$1" in
         --form)  FORM="${2:-}"; shift 2 ;;
+        --chip)  CHIP="${2:-}"; shift 2 ;;
         --help|-h)
             sed -n '2,16p' "$0"; exit 0 ;;
         *)
             echo "unknown arg: $1" >&2
-            echo "usage: $0 --form <name>" >&2
+            echo "usage: $0 --form <name> [--chip esp32|esp32c3]" >&2
             exit 2 ;;
     esac
 done
@@ -34,6 +36,10 @@ if [ -z "$FORM" ]; then
     echo "       e.g. ./scripts/build.sh --form tower" >&2
     exit 2
 fi
+case "$CHIP" in
+    esp32|esp32c3|esp32s3) ;;
+    *) echo "unsupported --chip '$CHIP' (esp32, esp32c3, esp32s3)" >&2; exit 2 ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -80,38 +86,71 @@ source "$IDF_DIR/export.sh" > /dev/null 2>&1
 
 cd "$PROJECT_DIR"
 
-export SDKCONFIG_DEFAULTS="$PROJECT_DIR/sdkconfig.defaults;$VERSION_DEFAULTS"
+# Base sdkconfig defaults. For the fleet default (esp32) we use the tracked file
+# verbatim — byte-for-byte the historical behaviour. For a different SoC we
+# derive a chip-specific copy: swap CONFIG_IDF_TARGET and, for the C3 (which
+# tops out at 160 MHz), drop the 240 MHz CPU clock the esp32 uses. The target is
+# taken from these defaults on a fresh (fullclean) build, exactly as esp32 does
+# today — no `set-target` needed.
+if [ "$CHIP" = "esp32" ]; then
+    BASE_DEFAULTS="$PROJECT_DIR/sdkconfig.defaults"
+    BOOT_OFFSET=0x1000            # esp32 classic second-stage bootloader offset
+else
+    BASE_DEFAULTS="$PROJECT_DIR/.sdkconfig.base.$CHIP.defaults"
+    sed -e 's/^CONFIG_IDF_TARGET=.*/CONFIG_IDF_TARGET="'"$CHIP"'"/' \
+        -e 's/^CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y/CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y/' \
+        "$PROJECT_DIR/sdkconfig.defaults" > "$BASE_DEFAULTS"
+    BOOT_OFFSET=0x0               # esp32c3/s3 place the bootloader at 0x0
+fi
+export SDKCONFIG_DEFAULTS="$BASE_DEFAULTS;$VERSION_DEFAULTS"
 
 # Per-form build dir so cmake's per-form configure caches don't collide if
 # someone alternates `--form tower` and `--form wormhole` in the same checkout.
-BUILD_DIR="$PROJECT_DIR/build-$FORM"
-SDK_FILE="$PROJECT_DIR/sdkconfig.$FORM"
+# Non-esp32 chips get their own suffixed dir/sdkconfig so Xtensa and RISC-V
+# build trees never share a configure cache.
+SUFFIX="$FORM"
+[ "$CHIP" != "esp32" ] && SUFFIX="$FORM-$CHIP"
+BUILD_DIR="$PROJECT_DIR/build-$SUFFIX"
+SDK_FILE="$PROJECT_DIR/sdkconfig.$SUFFIX"
 
-echo "=== Building PlaiiinLightOS  firmware=$FW_VERSION  api=$API_VERSION  form=$FORM ==="
+echo "=== Building PlaiiinLightOS  firmware=$FW_VERSION  api=$API_VERSION  form=$FORM  chip=$CHIP ==="
 rm -f "$SDK_FILE" "$SDK_FILE.old"
 # Export LAMPOS_FORM into the environment so ESP-IDF's component-requirements
 # sub-cmake (which doesn't inherit -D) still sees it.
 export LAMPOS_FORM="$FORM"
-idf.py -B "$BUILD_DIR" -D SDKCONFIG="$SDK_FILE" fullclean
+# CONFIG_IDF_TARGET can't be set through SDKCONFIG_DEFAULTS — esp32 is IDF's
+# built-in fallback and always wins. The only reliable target switch is
+# `idf.py set-target`, so non-esp32 chips wipe the build dir and set-target
+# explicitly. esp32 keeps the historical fullclean+build path unchanged.
+if [ "$CHIP" = "esp32" ]; then
+    idf.py -B "$BUILD_DIR" -D SDKCONFIG="$SDK_FILE" fullclean
+else
+    rm -rf "$BUILD_DIR"
+    idf.py -B "$BUILD_DIR" -D SDKCONFIG="$SDK_FILE" set-target "$CHIP"
+fi
 idf.py -B "$BUILD_DIR" -D SDKCONFIG="$SDK_FILE" build
 
 DIST="$PROJECT_DIR/build/dist"
 mkdir -p "$DIST"
-STAMPED="plaiiinlight_os-${FW_VERSION}-${FORM}"
+# esp32 keeps the historical <ver>-<form> stem (fleet + OTA tooling depend on
+# it); other SoCs carry a -<chip> suffix so Xtensa and RISC-V images never
+# collide in build/dist and profile-burn can pick the right architecture.
+STAMPED="plaiiinlight_os-${FW_VERSION}-${SUFFIX}"
 # Per-form project() name makes the binary plaiiinlight_os_<FORM>.bin.
 APP_BIN="$BUILD_DIR/plaiiinlight_os_${FORM}.bin"
 cp "$APP_BIN" "$DIST/${STAMPED}-app.bin"
 
-# Merge the full image for USB first-flash at offset 0.
-python -m esptool --chip esp32 merge_bin -o "$DIST/${STAMPED}-flash.bin" \
-    0x1000   "$BUILD_DIR/bootloader/bootloader.bin" \
+# Merge the full image for USB first-flash at offset 0. Bootloader offset is
+# chip-specific (0x1000 on esp32 classic, 0x0 on c3/s3).
+python -m esptool --chip "$CHIP" merge_bin -o "$DIST/${STAMPED}-flash.bin" \
+    "$BOOT_OFFSET" "$BUILD_DIR/bootloader/bootloader.bin" \
     0x8000   "$BUILD_DIR/partition_table/partition-table.bin" \
     0xf000   "$BUILD_DIR/ota_data_initial.bin" \
     0x20000  "$APP_BIN"
 
-# Per-form unstamped convenience symlinks.
-ln -sfn "${STAMPED}-app.bin"   "$DIST/plaiiinlight_os-${FORM}-app.bin"
-ln -sfn "${STAMPED}-flash.bin" "$DIST/plaiiinlight_os-${FORM}-flash.bin"
+# Per-form(-chip) unstamped convenience symlinks.
+ln -sfn "${STAMPED}-app.bin"   "$DIST/plaiiinlight_os-${SUFFIX}-app.bin"
+ln -sfn "${STAMPED}-flash.bin" "$DIST/plaiiinlight_os-${SUFFIX}-flash.bin"
 
 echo ""
 echo "=== build complete ==="

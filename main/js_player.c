@@ -27,6 +27,15 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 
+// Render task core affinity. Dual-core targets (ESP32 classic) pin rendering to
+// core 1 (APP_CPU) to keep it off the WiFi/BT core. Single-core targets (C3)
+// only have core 0, where core 1 would assert-fail — fall back to core 0.
+#if CONFIG_FREERTOS_UNICORE
+#define PLAIIIN_RENDER_CORE 0
+#else
+#define PLAIIIN_RENDER_CORE 1
+#endif
+
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -360,7 +369,7 @@ esp_err_t js_player_start(const char *source, int fps)
     xSemaphoreGive(s_lock);
 
     if (xTaskCreatePinnedToCore(player_task, "js_player", JS_TASK_STACK_SIZE,
-                                NULL, JS_TASK_PRIORITY, &s_task, 1) != pdPASS) {
+                                NULL, JS_TASK_PRIORITY, &s_task, PLAIIIN_RENDER_CORE) != pdPASS) {
         s_running = false;
         return ESP_ERR_NO_MEM;
     }
@@ -527,7 +536,7 @@ esp_err_t js_player_start_cbench(int mode, int fps)
     snprintf(s_current_name, sizeof(s_current_name), "__cbench_%d", mode);
     if (xTaskCreatePinnedToCore(c_bench_task, "c_bench", 8192,
                                 (void *)(intptr_t)mode,
-                                JS_TASK_PRIORITY, &s_task, 1) != pdPASS) {
+                                JS_TASK_PRIORITY, &s_task, PLAIIIN_RENDER_CORE) != pdPASS) {
         s_running = false;
         return ESP_ERR_NO_MEM;
     }

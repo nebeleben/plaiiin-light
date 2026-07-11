@@ -26,6 +26,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Render task core affinity — see js_player.c. Dual-core (ESP32) pins to core 1
+// to stay off the WiFi/BT core; single-core (C3) has only core 0.
+#if CONFIG_FREERTOS_UNICORE
+#define PLAIIIN_RENDER_CORE 0
+#else
+#define PLAIIIN_RENDER_CORE 1
+#endif
+
 static const char *TAG = "hc_runtime";
 
 #define HC_TASK_PRIORITY     5
@@ -217,7 +225,7 @@ esp_err_t hardcoded_runtime_start(const hardcoded_effect_t *eff, int fps)
 
     if (xTaskCreatePinnedToCore(hc_player_task, "hc_player",
                                 HC_TASK_STACK_BYTES, NULL,
-                                HC_TASK_PRIORITY, &s_task, 1) != pdPASS) {
+                                HC_TASK_PRIORITY, &s_task, PLAIIIN_RENDER_CORE) != pdPASS) {
         s_running = false;
         s_eff = NULL;
         s_current_name[0] = '\0';
