@@ -90,6 +90,37 @@ know you did:
   at [plaiiin-light.com](https://plaiiin-light.com), all speaking the
   open protocol in `docs/`.
 
+## Supported Devices
+
+### Microcontrollers
+
+Any ESP32 development board with at least 4 MB flash works. Three SoC
+targets are supported by the build system (`./scripts/build.sh --chip …`):
+
+| Chip | Boards (examples) | Notes |
+| --- | --- | --- |
+| **ESP32** (classic) | ESP32 Mini / D1 Mini ESP32, ESP32 DevKit | Dual-core Xtensa @ 240 MHz — the fleet default; all prebuilt release binaries target it |
+| **ESP32-C3** | C3 SuperMini, C3 DevKit | Single-core RISC-V @ 160 MHz — build with `--chip esp32c3` |
+| **ESP32-S3** | S3 Mini, S3 DevKit | Dual-core Xtensa @ 240 MHz — build with `--chip esp32s3` |
+
+Every lamp form builds for every chip; the C3 and S3 differ only in
+bootloader offset and (C3) CPU clock, which the build script handles.
+
+### LEDs
+
+All common addressable strip and matrix chipsets, one- and two-wire:
+
+| Chipset | Wiring | Notes |
+| --- | --- | --- |
+| **WS2812 / WS2812B** (NeoPixel) | 1 wire (data) | The default; unknown types fall back to it |
+| **SK6812** | 1 wire (data) | RGB variant |
+| **SK6812W / SK6812 RGBW** | 1 wire (data) | 4-channel RGBW, dedicated white LEDs driven natively |
+| **SK9822 / APA102** (DotStar) | 2 wire (data + clock) | SPI+DMA driver — flicker-free even with WiFi busy |
+
+The chipset, data/clock GPIOs, and LED count are per-device hardware
+identity (burned via `profile-burn`, editable on `/config`) — no firmware
+rebuild needed to switch strips.
+
 ## Specs
 
 Want the deep end? [`SPECS.md`](SPECS.md) is the full technical
