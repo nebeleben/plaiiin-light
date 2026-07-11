@@ -60,12 +60,19 @@ static esp_err_t ota_info_handler(httpd_req_t *req)
     const esp_app_desc_t *app = esp_app_get_description();
     const esp_partition_t *running = esp_ota_get_running_partition();
 
-    char json[320];
+    char json[352];
+    // "target" is CONFIG_IDF_TARGET ("esp32", "esp32c3", …) — the SoC this
+    // binary was built for. It matches the release artifact's chip suffix, so
+    // an OTA selector can pick the right-architecture binary: both esp32-strip
+    // and c3-strip report form "strip", but differ here. Without it a wrong-
+    // arch image is still rejected at esp_ota_end (chip_id mismatch), but the
+    // device would just keep failing the update instead of being offered the
+    // correct binary.
     snprintf(json, sizeof(json),
         "{\"version\":\"%s\",\"date\":\"%s\",\"time\":\"%s\","
-        "\"partition\":\"%s\",\"idf\":\"%s\",\"form\":\"%s\"}",
+        "\"partition\":\"%s\",\"idf\":\"%s\",\"form\":\"%s\",\"target\":\"%s\"}",
         app->version, app->date, app->time,
-        running->label, app->idf_ver, LAMPOS_FORM_STR);
+        running->label, app->idf_ver, LAMPOS_FORM_STR, CONFIG_IDF_TARGET);
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, json);

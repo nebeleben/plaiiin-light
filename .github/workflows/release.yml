@@ -30,14 +30,22 @@ env:
 jobs:
 
   build:
-    name: Build ${{ matrix.form }}
+    name: Build ${{ matrix.form }} (${{ matrix.chip }})
     runs-on: ubuntu-latest
     container:
       image: espressif/idf:v5.3.2
     strategy:
       fail-fast: false
       matrix:
+        # Every form builds for esp32 (Xtensa). `include` adds extra-SoC
+        # variants only for the forms that actually have devices on that chip —
+        # today just the strip form on esp32c3 (RISC-V) for shrumLight. The
+        # espressif/idf image already ships both toolchains, so no install step.
         form: [tower, wormhole, display, cube, rocket, strip]
+        chip: [esp32]
+        include:
+          - form: strip
+            chip: esp32c3
 
     steps:
       - name: Checkout firmware at tag
@@ -71,7 +79,25 @@ jobs:
           EOF
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "TAG=$TAG"         >> "$GITHUB_ENV"
-          echo "→ building $TAG (firmware=$VERSION, api=$API_VERSION)"
+
+          # Chip-aware naming, mirroring scripts/build.sh: esp32 keeps the bare
+          # <form> stem (fleet + OTA tooling depend on it); other SoCs carry a
+          # -<chip> suffix so Xtensa and RISC-V assets never collide. CHIP_FAMILY
+          # is the ESP Web Tools identifier for the browser-flash manifest.
+          CHIP="${{ matrix.chip }}"
+          FORM="${{ matrix.form }}"
+          SUFFIX="$FORM"
+          [ "$CHIP" != "esp32" ] && SUFFIX="$FORM-$CHIP"
+          case "$CHIP" in
+            esp32)   CHIP_FAMILY="ESP32" ;;
+            esp32c3) CHIP_FAMILY="ESP32-C3" ;;
+            esp32s3) CHIP_FAMILY="ESP32-S3" ;;
+            *) echo "unknown chip '$CHIP' — add its ESP Web Tools family" >&2; exit 1 ;;
+          esac
+          echo "CHIP=$CHIP"                 >> "$GITHUB_ENV"
+          echo "SUFFIX=$SUFFIX"             >> "$GITHUB_ENV"
+          echo "CHIP_FAMILY=$CHIP_FAMILY"   >> "$GITHUB_ENV"
+          echo "→ building $TAG (firmware=$VERSION, api=$API_VERSION, chip=$CHIP, suffix=$SUFFIX)"
 
       - name: Build firmware
         # Pre-source IDF's env so IDF_PYTHON_ENV_PATH lands at the correct
@@ -80,7 +106,7 @@ jobs:
         # set, so the host-style fallback it would otherwise pick never runs.
         run: |
           source "$IDF_PATH/export.sh"
-          ./scripts/build.sh --form ${{ matrix.form }}
+          ./scripts/build.sh --form ${{ matrix.form }} --chip ${{ matrix.chip }}
 
       - name: Build byForm SPIFFS effects image
         # Mirrors what scripts/profile-burn.sh --full does at the workbench:
@@ -128,7 +154,9 @@ jobs:
             exit 0
           fi
 
-          STAMPED="plaiiinlight_os-${VERSION}-${FORM}"
+          # Effects source is per-form (chip-independent JS); the output name
+          # carries the chip suffix so it pairs with the matching flash.bin.
+          STAMPED="plaiiinlight_os-${VERSION}-${SUFFIX}"
           python "$IDF_PATH/components/spiffs/spiffsgen.py" \
             "$((STORAGE_SIZE))" "$SRC" "build/dist/${STAMPED}-effects.bin"
           echo "→ wrote build/dist/${STAMPED}-effects.bin"
@@ -139,45 +167,43 @@ jobs:
         # manifest URL — by colocating the manifest with the .bin assets at
         # the same GitHub Release URL prefix, the bare filename works.
         run: |
-          FORM="${{ matrix.form }}"
-          STAMPED="plaiiinlight_os-${VERSION}-${FORM}"
-          PARTS='[{"path":"'"${FORM}-flash.bin"'","offset":0}]'
+          STAMPED="plaiiinlight_os-${VERSION}-${SUFFIX}"
+          PARTS='[{"path":"'"${SUFFIX}-flash.bin"'","offset":0}]'
           if [ -f "build/dist/${STAMPED}-effects.bin" ]; then
             OFFSET_DEC=$(printf '%d' "$STORAGE_OFFSET")
-            PARTS='[{"path":"'"${FORM}-flash.bin"'","offset":0},{"path":"'"${FORM}-effects.bin"'","offset":'"$OFFSET_DEC"'}]'
+            PARTS='[{"path":"'"${SUFFIX}-flash.bin"'","offset":0},{"path":"'"${SUFFIX}-effects.bin"'","offset":'"$OFFSET_DEC"'}]'
           fi
           mkdir -p build/dist
-          cat > "build/dist/${FORM}.manifest.json" <<EOF
+          cat > "build/dist/${SUFFIX}.manifest.json" <<EOF
           {
-            "name": "PlaiiinLightOS ${FORM}",
+            "name": "PlaiiinLightOS ${SUFFIX}",
             "version": "${VERSION}",
             "new_install_prompt_erase": true,
             "builds": [
-              { "chipFamily": "ESP32", "parts": $PARTS }
+              { "chipFamily": "${CHIP_FAMILY}", "parts": $PARTS }
             ]
           }
           EOF
           echo "→ manifest:"
-          cat "build/dist/${FORM}.manifest.json"
+          cat "build/dist/${SUFFIX}.manifest.json"
 
       - name: Stage release assets (short names)
         run: |
-          FORM="${{ matrix.form }}"
-          STAMPED="plaiiinlight_os-${VERSION}-${FORM}"
+          STAMPED="plaiiinlight_os-${VERSION}-${SUFFIX}"
           mkdir -p staging
-          cp "build/dist/${STAMPED}-flash.bin" "staging/${FORM}-flash.bin"
-          cp "build/dist/${STAMPED}-app.bin"   "staging/${FORM}-app.bin"
+          cp "build/dist/${STAMPED}-flash.bin" "staging/${SUFFIX}-flash.bin"
+          cp "build/dist/${STAMPED}-app.bin"   "staging/${SUFFIX}-app.bin"
           if [ -f "build/dist/${STAMPED}-effects.bin" ]; then
-            cp "build/dist/${STAMPED}-effects.bin" "staging/${FORM}-effects.bin"
+            cp "build/dist/${STAMPED}-effects.bin" "staging/${SUFFIX}-effects.bin"
           fi
-          cp "build/dist/${FORM}.manifest.json" "staging/${FORM}.manifest.json"
+          cp "build/dist/${SUFFIX}.manifest.json" "staging/${SUFFIX}.manifest.json"
           echo "→ staged:"
           ls -lh staging | sed 's|^|    |'
 
       - name: Upload form artifact bundle
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-${{ matrix.form }}
+          name: firmware-${{ matrix.form }}-${{ matrix.chip }}
           path: staging/
           retention-days: 14
           if-no-files-found: error
@@ -217,7 +243,11 @@ jobs:
 
           ## Forms shipped
 
-          \`tower\` · \`wormhole\` · \`display\` · \`cube\` · \`rocket\` · \`strip\`
+          \`tower\` · \`wormhole\` · \`display\` · \`cube\` · \`rocket\` · \`strip\` (esp32)
+
+          SoC variants (RISC-V) carry a \`-<chip>\` suffix: \`strip-esp32c3\` (shrumLight).
+          Assets without a suffix are esp32 (Xtensa). **Match the asset to your
+          board's chip** — a lamp reports its own via \`GET /api/ota/info\` (\`target\`).
 
           ## What's in each form
 
@@ -228,15 +258,24 @@ jobs:
           | \`<form>-effects.bin\` | byForm SPIFFS image (effects + form-template) | offset \`0x3C0000\` |
           | \`<form>.manifest.json\` | ESP Web Tools manifest for browser-based flashing | — |
 
+          (For a SoC variant, \`<form>\` is the suffixed stem, e.g. \`strip-esp32c3-flash.bin\`.)
+
           ## DIY flash recipes
 
-          **CLI (esptool):**
+          **CLI (esptool)** — pass the matching \`--chip\`; the C3 bootloader is baked at 0x0:
           \`\`\`bash
+          # esp32 form (e.g. tower)
           esptool.py --chip esp32 -p /dev/cu.usbserial-* write_flash 0x0      tower-flash.bin
           esptool.py --chip esp32 -p /dev/cu.usbserial-* write_flash 0x3C0000 tower-effects.bin
+
+          # esp32c3 variant (e.g. strip / shrumLight)
+          esptool.py --chip esp32c3 -p /dev/cu.usbmodem* write_flash 0x0      strip-esp32c3-flash.bin
+          esptool.py --chip esp32c3 -p /dev/cu.usbmodem* write_flash 0x3C0000 strip-esp32c3-effects.bin
           \`\`\`
 
-          **Browser (ESP Web Tools):** point the install button at \`tower.manifest.json\`.
+          **Browser (ESP Web Tools):** point the install button at \`<form>.manifest.json\`
+          (e.g. \`tower.manifest.json\` or \`strip-esp32c3.manifest.json\`) — the manifest's
+          \`chipFamily\` selects the right target automatically.
 
           ## Verification
 
