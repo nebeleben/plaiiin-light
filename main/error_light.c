@@ -68,6 +68,18 @@ static void error_light_task(void *arg)
                 break;
         }
     }
+    // The task owns the exit repaint (it may sleep in a case body above for
+    // up to ~1 s after clear() signals, and would otherwise blank the strip
+    // after the caller already repainted). Settle back to the real state:
+    // power_snap(true) repaints the frame buffer / last color — without it an
+    // api-mode lamp, which has no player to repaint, stays dark; when the
+    // lamp is off, blank IS the real state.
+    if (led_control_is_on()) {
+        led_control_power_snap(true);
+    } else {
+        led_control_clear();
+    }
+    s_task = NULL;
     vTaskDelete(NULL);
 }
 
@@ -89,10 +101,20 @@ void error_light_set(error_light_pattern_t pattern)
 void error_light_clear(void)
 {
     s_pattern = ERROR_LIGHT_NONE;
+    // No pattern was ever displayed — the strip still shows the restored
+    // state from boot (api-mode static color has no player to repaint it),
+    // so it must not be touched.
+    if (!s_task) return;
     s_running = false;
-    if (s_task) {
-        vTaskDelay(pdMS_TO_TICKS(100));  // Let task exit
-        s_task = NULL;
+    // Wait for the task to wind down and repaint the real state (its case
+    // bodies sleep up to ~1 s between s_running checks), so callers observe
+    // the settled strip. It nulls s_task as its last act.
+    for (int i = 0; i < 30 && s_task; i++) {
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
-    led_control_clear();
+}
+
+error_light_pattern_t error_light_get(void)
+{
+    return s_pattern;
 }

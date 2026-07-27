@@ -26,6 +26,40 @@
 
 static const char *TAG = "plaiiinlight_os";
 
+/* STA-mode connect watcher. wifi.c retries the association forever, so this
+ * task waits forever too: the on-connect actions (mDNS, MQTT, BT handoff,
+ * clearing the no-wifi indicator) must run whenever the network finally comes
+ * up — not only when it comes up within the boot-time grace window. After
+ * 30 s without a connection the no-wifi indicator turns on, but the wait
+ * continues; a router that boots slower than the lamp no longer costs mDNS
+ * and MQTT until the next reboot. */
+static void wifi_connect_watch_task(void *arg)
+{
+    (void)arg;
+    int waited_s = 0;
+    while (!wifi_is_connected()) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        if (++waited_s == 30) {
+            ESP_LOGW(TAG, "WiFi connection timeout — showing indicator, still retrying");
+            error_light_set(ERROR_LIGHT_NO_WIFI);
+        }
+    }
+    ESP_LOGI(TAG, "WiFi connected!");
+    /* Only dismiss the pattern this task put up. A config-error pattern
+     * (e.g. HTTP server failed to start) must survive the connect. */
+    if (error_light_get() == ERROR_LIGHT_NO_WIFI) {
+        error_light_clear();
+    }
+    // mDNS responder — needs a network interface, so it's started after WiFi.
+    if (mdns_service_start() != ESP_OK) {
+        ESP_LOGW(TAG, "mDNS start failed — discovery from app will use fallback scan");
+    }
+    mqtt_client_start();
+    // BT in "auto" mode hands off to WiFi once we're online.
+    bt_service_notify_wifi_connected();
+    vTaskDelete(NULL);
+}
+
 /* Install the embedded default scripts onto SPIFFS if missing, and compile
  * a .bc for each so the player can run them immediately. Idempotent — if a
  * script is already on disk the slot is skipped (the user is free to edit
@@ -386,28 +420,13 @@ void app_main(void)
     // 7b. Hardware buttons (no-op when no pins configured).
     buttons_init();
 
-    // 7. Wait for WiFi connection (if in STA mode)
+    // 7c. Watch for the WiFi connection (STA mode). The watcher runs the
+    // on-connect actions (mDNS, MQTT, BT handoff) no matter how long the
+    // association takes — see wifi_connect_watch_task above.
     if (wifi_get_mode() == PLAIIIN_WIFI_STA) {
         ESP_LOGI(TAG, "Waiting for WiFi connection...");
-        int attempts = 0;
-        while (!wifi_is_connected() && attempts < 30) {
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            attempts++;
-        }
-        if (wifi_is_connected()) {
-            ESP_LOGI(TAG, "WiFi connected!");
-            error_light_clear();
-            // mDNS responder — needs a network interface, so it's started after WiFi.
-            if (mdns_service_start() != ESP_OK) {
-                ESP_LOGW(TAG, "mDNS start failed — discovery from app will use fallback scan");
-            }
-            // 8. Start MQTT if configured
-            mqtt_client_start();
-            // BT in "auto" mode hands off to WiFi once we're online.
-            bt_service_notify_wifi_connected();
-        } else {
-            ESP_LOGW(TAG, "WiFi connection timeout");
-            error_light_set(ERROR_LIGHT_NO_WIFI);
+        if (xTaskCreate(wifi_connect_watch_task, "wifi_watch", 4096, NULL, 2, NULL) != pdPASS) {
+            ESP_LOGE(TAG, "Failed to start WiFi watcher task");
         }
     }
 

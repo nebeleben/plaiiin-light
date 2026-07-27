@@ -19,3 +19,4 @@ typedef enum {
 esp_err_t error_light_init(void);
 void error_light_set(error_light_pattern_t pattern);
 void error_light_clear(void);
+error_light_pattern_t error_light_get(void);
