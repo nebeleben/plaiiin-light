@@ -185,31 +185,78 @@ static bool extract_json_int(const char *src, const char *key, int *out)
 
 // --- WiFi scan (BLE-triggered) ---------------------------------------------
 
+// Copy an SSID into `out` JSON-escaped (quotes/backslashes) with control
+// bytes stripped — an SSID is an arbitrary byte string and must not be able
+// to break the payload the clients JSON-decode.
+static void json_escape_ssid(const uint8_t *ssid, char *out, size_t out_len)
+{
+    size_t o = 0;
+    for (size_t i = 0; i < 32 && ssid[i]; i++) {
+        uint8_t c = ssid[i];
+        if (c < 0x20) continue;
+        if (c == '"' || c == '\\') {
+            if (o + 3 > out_len) break;
+            out[o++] = '\\';
+        } else if (o + 2 > out_len) {
+            break;
+        }
+        out[o++] = (char)c;
+    }
+    out[o] = 0;
+}
+
 static void wifi_scan_task(void *arg)
 {
     (void)arg;
-    wifi_scan_config_t cfg = {0};
-    esp_err_t err = esp_wifi_scan_start(&cfg, true);   // blocking
-    if (err != ESP_OK) {
+    uint16_t count = 16;   // cap — keep payload BLE-friendly
+    wifi_ap_record_t *records = calloc(count, sizeof(wifi_ap_record_t));
+    if (!records) {
         notify_str(s_h_wifi_scan, "{\"status\":\"error\"}");
         vTaskDelete(NULL);
         return;
     }
-    uint16_t count = 0;
-    esp_wifi_scan_get_ap_num(&count);
-    if (count > 16) count = 16;   // cap — keep payload BLE-friendly
-    wifi_ap_record_t *records = calloc(count, sizeof(wifi_ap_record_t));
-    if (!records) { vTaskDelete(NULL); return; }
-    esp_wifi_scan_get_ap_records(&count, records);
+    // wifi_scan_aps borrows a STA interface when the lamp is in the
+    // onboarding states (provisioning AP / WiFi off) where a plain
+    // esp_wifi_scan_start is refused — exactly when this list matters.
+    esp_err_t err = wifi_scan_aps(records, &count);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "BLE wifi scan failed: %s", esp_err_to_name(err));
+        free(records);
+        notify_str(s_h_wifi_scan, "{\"status\":\"error\"}");
+        vTaskDelete(NULL);
+        return;
+    }
 
+    // The result must fit ONE notification: NimBLE silently truncates a
+    // notify at MTU-3, and the Android client parses each notify as a
+    // complete JSON payload. Records arrive strongest-first, so when space
+    // runs out we drop the weakest APs, not random ones.
+    uint16_t mtu = ble_att_mtu(s_conn_handle);
+    size_t limit = (mtu > 23) ? (size_t)mtu - 3 : 20;
     char buf[800];
-    int off = 0;
-    off += snprintf(buf + off, sizeof(buf) - off, "{\"networks\":[");
-    for (int i = 0; i < count && off < (int)sizeof(buf) - 64; i++) {
-        off += snprintf(buf + off, sizeof(buf) - off,
-                        "%s{\"ssid\":\"%s\",\"rssi\":%d,\"sec\":%d}",
-                        i ? "," : "", records[i].ssid, records[i].rssi,
-                        (int)records[i].authmode);
+    if (limit > sizeof(buf) - 1) limit = sizeof(buf) - 1;
+
+    size_t off = snprintf(buf, sizeof(buf), "{\"networks\":[");
+    int emitted = 0;
+    for (int i = 0; i < count; i++) {
+        char ssid[65];
+        json_escape_ssid(records[i].ssid, ssid, sizeof(ssid));
+        if (ssid[0] == 0) continue;              // hidden network — unusable
+        bool dup = false;                        // strongest AP per SSID wins
+        for (int j = 0; j < i && !dup; j++) {
+            dup = strncmp((const char *)records[i].ssid,
+                          (const char *)records[j].ssid, 32) == 0;
+        }
+        if (dup) continue;
+        char entry[128];
+        int n = snprintf(entry, sizeof(entry),
+                         "%s{\"ssid\":\"%s\",\"rssi\":%d,\"sec\":%d}",
+                         emitted ? "," : "", ssid, records[i].rssi,
+                         (int)records[i].authmode);
+        if (off + n + 2 > limit) break;          // keep room for "]}"
+        memcpy(buf + off, entry, n + 1);
+        off += n;
+        emitted++;
     }
     off += snprintf(buf + off, sizeof(buf) - off, "]}");
     free(records);

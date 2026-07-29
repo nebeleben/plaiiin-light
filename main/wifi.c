@@ -2,6 +2,7 @@
 #include "config_store.h"
 #include "pairing.h"
 #include "esp_wifi.h"
+#include "esp_check.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -11,16 +12,31 @@
 static const char *TAG = "wifi";
 static plaiiin_wifi_mode_t s_mode = PLAIIIN_WIFI_NONE;
 static bool s_connected = false;
+static esp_netif_t *s_sta_netif = NULL;
+
+// The STA netif may be needed outside STA mode: wifi_scan_aps() borrows a
+// station interface while onboarding (AP or WiFi-off states). Create once —
+// esp_netif_create_default_wifi_sta aborts on a duplicate.
+static esp_netif_t *ensure_sta_netif(void)
+{
+    if (!s_sta_netif) s_sta_netif = esp_netif_create_default_wifi_sta();
+    return s_sta_netif;
+}
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
+    // Auto-(re)connect only applies to real STA mode. During an onboarding
+    // scan the STA interface comes up with no target configured — connecting
+    // would fail and the retry loop would fight the scan.
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        if (s_mode == PLAIIIN_WIFI_STA) esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         s_connected = false;
-        ESP_LOGW(TAG, "Disconnected, retrying...");
-        esp_wifi_connect();
+        if (s_mode == PLAIIIN_WIFI_STA) {
+            ESP_LOGW(TAG, "Disconnected, retrying...");
+            esp_wifi_connect();
+        }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Connected, IP: " IPSTR, IP2STR(&event->ip_info.ip));
@@ -35,7 +51,7 @@ static esp_err_t start_sta(void)
     config_store_get_str(CONFIG_KEY_WIFI_SSID, ssid, sizeof(ssid));
     config_store_get_str(CONFIG_KEY_WIFI_PASS, pass, sizeof(pass));
 
-    esp_netif_create_default_wifi_sta();
+    ensure_sta_netif();
 
     wifi_config_t wifi_config = {0};
     strncpy((char *)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid) - 1);
@@ -43,10 +59,12 @@ static esp_err_t start_sta(void)
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    // Mode must be visible BEFORE esp_wifi_start(): the STA_START handler
+    // (event task) gates its esp_wifi_connect() on s_mode, and the event can
+    // fire before esp_wifi_start() returns.
+    s_mode = PLAIIIN_WIFI_STA;
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
-
-    s_mode = PLAIIIN_WIFI_STA;
     ESP_LOGI(TAG, "STA mode, connecting to '%s' (power save off)", ssid);
     return ESP_OK;
 }
@@ -106,6 +124,59 @@ esp_err_t wifi_provisioning_ap_stop(void)
     esp_wifi_set_mode(WIFI_MODE_NULL);
     s_mode = PLAIIIN_WIFI_NONE;
     return ESP_OK;
+}
+
+// Scan for nearby APs regardless of the current WiFi state. esp_wifi_scan
+// only runs on an active STA interface, but the BLE onboarding sheet needs
+// the list precisely when there is none: a fresh lamp runs the provisioning
+// SoftAP (AP-only), and a claimed-but-unconfigured lamp has WiFi off
+// entirely. Borrow a STA interface for the duration of the scan and restore
+// the previous state afterwards. `count` is capacity in / results out.
+esp_err_t wifi_scan_aps(wifi_ap_record_t *records, uint16_t *count)
+{
+    uint16_t capacity = *count;
+    *count = 0;
+    bool restore_ap = false, stop_after = false;
+
+    switch (s_mode) {
+    case PLAIIIN_WIFI_STA:
+        break;                          // STA is up — scan works directly
+    case PLAIIIN_WIFI_AP:
+        ensure_sta_netif();
+        ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_APSTA), TAG,
+                            "scan: APSTA switch failed");
+        restore_ap = true;
+        break;
+    case PLAIIIN_WIFI_NONE:
+        ensure_sta_netif();
+        ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG,
+                            "scan: STA switch failed");
+        if (esp_wifi_start() != ESP_OK) {
+            esp_wifi_set_mode(WIFI_MODE_NULL);
+            return ESP_FAIL;
+        }
+        stop_after = true;
+        break;
+    }
+
+    wifi_scan_config_t cfg = {0};
+    esp_err_t err = esp_wifi_scan_start(&cfg, true);   // blocking
+    if (err == ESP_OK) {
+        uint16_t found = 0;
+        esp_wifi_scan_get_ap_num(&found);
+        if (found > capacity) found = capacity;
+        err = esp_wifi_scan_get_ap_records(&found, records);
+        if (err == ESP_OK) *count = found;
+    } else {
+        ESP_LOGW(TAG, "scan failed: %s", esp_err_to_name(err));
+    }
+
+    if (restore_ap) esp_wifi_set_mode(WIFI_MODE_AP);
+    if (stop_after) {
+        esp_wifi_stop();
+        esp_wifi_set_mode(WIFI_MODE_NULL);
+    }
+    return err;
 }
 
 esp_err_t wifi_init(void)
