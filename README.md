@@ -89,8 +89,10 @@ know you did:
   `strip` — each with hand-tuned built-in effects.
 - **Multi-chipset** — WS2812/NeoPixel, SK6812 (RGB + RGBW), SK9822/APA102;
   SPI+DMA driver for flicker-free rendering with WiFi active.
-- **Native client apps** — macOS, iOS, Android, Windows, and Linux apps
-  at [plaiiin-light.com](https://plaiiin-light.com), all speaking the
+- **Native client apps** — macOS, iOS
+  ([App Store](https://apps.apple.com/app/plaiiin-light/id6787092509)),
+  Android, Windows, and Linux apps at
+  [plaiiin-light.com](https://plaiiin-light.com), all speaking the
   open protocol in `docs/`.
 
 ## Supported Devices
