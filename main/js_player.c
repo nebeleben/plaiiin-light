@@ -282,11 +282,11 @@ static void player_task(void *arg)
                 /* Tile the render buffer onto the physical strip — the SAME
                  * wormhole_expand() the WebSocket stream path uses. */
                 wormhole_expand(frame, total, phys, wh_rings, wh_mirror);
-                led_control_set_all(phys, phys_total);
+                led_control_set_all_transient(phys, phys_total);
             } else if (is_cube) {
                 /* Cube renders the full chain directly — script controls every
                  * face via idx (face = idx/64 per the form prompt). */
-                led_control_set_all(frame, total);
+                led_control_set_all_transient(frame, total);
             } else {
                 led_control_set_logical(frame, w, h);
             }

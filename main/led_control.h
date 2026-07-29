@@ -42,6 +42,10 @@ void led_control_enable(void);  // power on without restoring last color
 bool led_control_is_on(void);
 int led_control_get_count(void);
 led_color_t led_control_get_last_color(void);
+/** RAM-only override of the api-mode paint color. No NVS write, no repaint —
+ *  the next apply (power fade/snap, brightness change) paints it. Boot uses
+ *  this to make the panel paint the same color /api/state reports. */
+void led_control_set_last_color(uint8_t r, uint8_t g, uint8_t b);
 
 /** Sets the requested brightness. Will be clamped to max_brightness and to
  *  the value allowed by max_current_mA given the current buffer. */

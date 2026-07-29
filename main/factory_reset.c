@@ -78,11 +78,22 @@ esp_err_t factory_reset_full(bool reboot)
     // pins, pixel-group, orientation, button mappings) is intentionally KEPT
     // so the device is still operational on the next boot — the user just
     // needs to put it back on a network and re-pair an AI key.
-    ESP_LOGW(TAG, "Personal-data reset — wifi creds, current_js, ai_api_key, pairing");
+    ESP_LOGW(TAG, "Personal-data reset — wifi creds, mode/colors, current_js, ai_api_key, pairing");
     static const char *const keys[] = {
         CONFIG_KEY_WIFI_SSID,
         CONFIG_KEY_WIFI_PASS,
         CONFIG_KEY_CURRENT_JS,
+        // Mode and colors are personal data too — and erasing current_js
+        // while keeping lamp_mode/base_color left the lamp in a mixed
+        // old/new state after re-onboarding (js mode with no script, or a
+        // reported color the panel never painted). Wipe the whole set so a
+        // reset lamp boots into one coherent default (api mode, default
+        // color, on) — main.c's boot reconcile keeps panel and /api/state
+        // in agreement from the first boot.
+        CONFIG_KEY_LAMP_MODE,
+        CONFIG_KEY_BASE_COLOR,
+        CONFIG_KEY_LAST_COLOR,
+        CONFIG_KEY_POWER_ON,
         CONFIG_KEY_AI_API_KEY,
         // Pairing is per-device personal data — wipe on full reset so the
         // device returns to its default unpaired state for the next owner.

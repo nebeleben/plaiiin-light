@@ -178,9 +178,9 @@ static void hc_player_task(void *arg)
         if (er == ESP_OK) {
             if (is_wormhole) {
                 wormhole_expand(frame, total, phys, wh_rings, wh_mirror);
-                led_control_set_all(phys, phys_total);
+                led_control_set_all_transient(phys, phys_total);
             } else if (is_cube) {
-                led_control_set_all(frame, total);
+                led_control_set_all_transient(frame, total);
             } else {
                 led_control_set_logical(frame, w, h);
             }

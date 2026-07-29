@@ -416,7 +416,7 @@ Per-surface enforcement:
 | Reset | Trigger | Clears | Keeps |
 |---|---|---|---|
 | **WiFi** | 10 s long-press (green), or `POST /api/reset {scope:"wifi"}` | WiFi creds, `pair_token` + `pair_mode`, share keys, `provisioned` flag | Hardware config, scripts, AI key |
-| **Full** | 15 s long-press (blue), or `POST /api/reset {scope:"full"}` | All of the above **plus** selected script, AI key, wormhole config | Hardware config (form, pins, LED count) |
+| **Full** | 15 s long-press (blue), or `POST /api/reset {scope:"full"}` | All of the above **plus** selected script, lamp mode, base/last color, on/off state, AI key, wormhole config | Hardware config (form, pins, LED count), brightness |
 
 Both reset paths release pairing and clear the `provisioned` flag, returning the lamp to fresh AP + BLE onboarding, claimable by whoever onboards it next. (Earlier firmware kept pairing across a WiFi reset; it no longer does.) The HTTP `POST /api/reset` form requires the Bearer token; the long-press is the physical recovery path.
 

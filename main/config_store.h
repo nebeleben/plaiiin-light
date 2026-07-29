@@ -49,6 +49,11 @@
 // 4th arg to render() so JS animations can tint themselves to whatever HA
 // (or any other client) most recently asked for.
 #define CONFIG_KEY_BASE_COLOR    "base_color"
+// Last api-mode painted color (packed 0x00RRGGBB), owned by led_control.
+// Kept in lockstep with CONFIG_KEY_BASE_COLOR by the solid-paint path; boot
+// reconciles the two (main.c). Defined here so factory reset can wipe it
+// alongside base_color.
+#define CONFIG_KEY_LAST_COLOR    "last_color"
 // Last on/off state (i32 0|1). Persisted on every user power toggle and
 // restored at boot so a reboot or power-loss brings the lamp back the way it
 // was left. Absent (-> default on) on lamps that predate this key.

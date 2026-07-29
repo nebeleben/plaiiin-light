@@ -151,7 +151,8 @@ static ws_result_t handle_ws_binary(uint8_t *data, size_t len, uint32_t stream_g
                     return res;
                 }
                 wormhole_expand(render, count, phys, rings, mirror);
-                led_control_set_all(phys, phys_total);
+                // Transient: streamed frames must not persist as last_color.
+                led_control_set_all_transient(phys, phys_total);
                 free(render);
                 free(phys);
                 break;
@@ -185,7 +186,8 @@ static ws_result_t handle_ws_binary(uint8_t *data, size_t len, uint32_t stream_g
                 // still use set_logical so serpentine + grouping expansion run uniformly.
                 led_control_set_logical(frame, lw, lh);
             } else {
-                led_control_set_all(frame, count);
+                // Transient: streamed frames must not persist as last_color.
+                led_control_set_all_transient(frame, count);
             }
             free(frame);
             break;

@@ -146,21 +146,40 @@ void light_api_apply_power(bool on)
     mqtt_client_publish_state();
 }
 
+// Uniform api-mode paint. The persisting set_all is deliberate — this is the
+// one path (besides the raw pixel-array POST) that defines the user's color,
+// so last_color must follow it.
+static void paint_solid(uint8_t r, uint8_t g, uint8_t b)
+{
+    int n = led_control_get_count();
+    led_color_t *colors = calloc(n, sizeof(led_color_t));
+    if (!colors) return;
+    for (int i = 0; i < n; i++) {
+        colors[i].r = r; colors[i].g = g; colors[i].b = b;
+    }
+    led_control_set_all(colors, n);
+    free(colors);
+}
+
+// Repaint the base color after leaving js/stream mode. Stopping the player
+// (or closing the stream socket) leaves the last animation frame frozen on
+// the panel while /api/state reports mode "api" + baseColor — repainting
+// makes the panel show what the API says.
+static void repaint_base_color(void)
+{
+    if (!led_control_is_on()) return;
+    uint8_t r = 0, g = 0, b = 0;
+    js_player_get_base_color(&r, &g, &b);
+    paint_solid(r, g, b);
+}
+
 void light_api_apply_color_solid(uint8_t r, uint8_t g, uint8_t b)
 {
     char mode[16] = {0};
     get_persistent_mode(mode, sizeof(mode));
     bool js_mode = (strcmp(mode, "js") == 0);
     if (!js_mode) {
-        int n = led_control_get_count();
-        led_color_t *colors = calloc(n, sizeof(led_color_t));
-        if (colors) {
-            for (int i = 0; i < n; i++) {
-                colors[i].r = r; colors[i].g = g; colors[i].b = b;
-            }
-            led_control_set_all(colors, n);
-            free(colors);
-        }
+        paint_solid(r, g, b);
     }
     js_player_set_base_color(r, g, b);
     int32_t packed = ((int32_t)r << 16) | ((int32_t)g << 8) | (int32_t)b;
@@ -183,6 +202,7 @@ int light_api_apply_mode(const char *mode)
         ws_server_set_mode(LAMP_MODE_API);
         js_api_stop();   /* stops either runtime; also clears current_name */
         config_store_set_str(CONFIG_KEY_LAMP_MODE, "api");
+        repaint_base_color();
         mqtt_client_publish_state();
         return 0;
     }
@@ -235,6 +255,8 @@ void light_api_exit_stream(void)
     get_persistent_mode(mode, sizeof(mode));
     if (strcmp(mode, "js") == 0 && led_control_is_on()) {
         (void)start_current_js();
+    } else if (strcmp(mode, "api") == 0) {
+        repaint_base_color();
     }
 }
 

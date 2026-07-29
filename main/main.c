@@ -352,14 +352,33 @@ void app_main(void)
     }
 
     // 6b. Restore base color from NVS (packed 0x00RRGGBB) so JS scripts see
-    // whatever color HA last set, even after a reboot.
+    // whatever color HA last set, even after a reboot — and reconcile it with
+    // led_control's last_color so the api-mode paint matches what /api/state
+    // reports. Before this, a freshly-onboarded lamp painted last_color
+    // (unset → black) while /api/state reported the player's default base
+    // color — the app showed a color the panel never had.
     {
         int32_t packed = config_get_i32_or(CONFIG_KEY_BASE_COLOR, -1);
-        if (packed >= 0) {
-            js_player_set_base_color((uint8_t)((packed >> 16) & 0xFF),
-                                     (uint8_t)((packed >> 8)  & 0xFF),
-                                     (uint8_t)( packed        & 0xFF));
+        if (packed < 0) {
+            // No user-set color yet. Adopt led_control's persisted paint
+            // color (lamps upgraded from pre-base_color firmware), else the
+            // player's built-in default — one value for both sides.
+            led_color_t last = led_control_get_last_color();
+            if (last.r || last.g || last.b) {
+                packed = ((int32_t)last.r << 16) | ((int32_t)last.g << 8)
+                       |  (int32_t)last.b;
+            } else {
+                uint8_t br, bg, bb;
+                js_player_get_base_color(&br, &bg, &bb);
+                packed = ((int32_t)br << 16) | ((int32_t)bg << 8)
+                       |  (int32_t)bb;
+            }
         }
+        uint8_t r = (uint8_t)((packed >> 16) & 0xFF);
+        uint8_t g = (uint8_t)((packed >> 8)  & 0xFF);
+        uint8_t b = (uint8_t)( packed        & 0xFF);
+        js_player_set_base_color(r, g, b);
+        led_control_set_last_color(r, g, b);
     }
 
     // 6c. Restore the persisted on/off state so a reboot or power-loss brings

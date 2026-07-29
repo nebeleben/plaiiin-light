@@ -53,7 +53,7 @@ static int  s_serp_axis  = 0;     // 0 horizontal, 1 vertical
 
 #define LED_CHANNEL_MA_AT_255  20  // WS2812 per-channel peak at 255
 
-#define NVS_KEY_LAST_COLOR  "last_color"
+#define NVS_KEY_LAST_COLOR  CONFIG_KEY_LAST_COLOR
 #define NVS_KEY_BRIGHTNESS  "brightness"
 #define NVS_KEY_MAX_BRIGHT  "max_bright"
 #define NVS_KEY_MAX_CURR_MA "max_curr_ma"
@@ -732,6 +732,13 @@ led_color_t led_control_get_last_color(void)
     return s_last_color;
 }
 
+void led_control_set_last_color(uint8_t r, uint8_t g, uint8_t b)
+{
+    s_last_color.r = r;
+    s_last_color.g = g;
+    s_last_color.b = b;
+}
+
 void led_control_set_brightness(uint8_t brightness)
 {
     s_brightness = brightness;
@@ -918,7 +925,11 @@ esp_err_t led_control_set_logical(const led_color_t *colors, int logical_w, int 
         frame[chain_i] = colors[ly * logical_w + lx];
     }
 
-    esp_err_t err = led_control_set_all(frame, total);
+    // Transient: set_logical is the animation-frame path (JS player, hardcoded
+    // effects, WS stream). Persisting colors[0] as last_color here would stomp
+    // the user's api-mode color with a random frame pixel — and cost an NVS
+    // commit per frame. Only the api-mode solid paints persist last_color.
+    esp_err_t err = led_control_set_all_transient(frame, total);
     free(frame);
     return err;
 }
