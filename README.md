@@ -138,7 +138,7 @@ explicitly welcome.
 
 ## Latest release
 
-**Current firmware: v1.9.13** — grab it from the
+**Current firmware: v1.9.14** — grab it from the
 [releases page](https://github.com/nebeleben/plaiiin-light/releases/latest).
 Every release ships, per form and per chip (classic ESP32 and ESP32-C3,
 the latter with an `-esp32c3` infix): a `flash.bin` (USB first-flash),
@@ -147,6 +147,10 @@ an ESP Web Tools manifest for browser flashing, and `SHA256SUMS`.
 
 What's new in the 1.9 line:
 
+- **v1.9.14** — smoother onboarding: the WiFi network scan works before
+  the lamp has a connection, slow WiFi at boot no longer costs you
+  mDNS/MQTT or the portal, and the panel and `/api/state` stay in
+  agreement after setup.
 - **v1.9.13** — prebuilt ESP32-C3 binaries for every lamp form now ship
   with each release, alongside the classic ESP32 set.
 - **v1.9.12** — ESP32-C3 support lands: build any form with
