@@ -6,6 +6,7 @@
 #include "plaiiin_mqtt.h"
 #include "js_player.h"
 #include "js_storage.h"
+#include "frame_store.h"
 #include "plbc.h"
 #include <stdlib.h>
 #include "js_api.h"
@@ -429,6 +430,22 @@ void app_main(void)
         led_control_power_snap(false);
     } else if (!led_control_is_on()) {
         led_control_power_snap(true);
+    }
+
+    // 6f. Resume "frame" mode. Unlike js mode's player (started in 6d, which
+    // only launches an async task — its first real paint lands on its own
+    // task well after this point), frame_store_display() paints synchronously
+    // and requires led_control_is_on() to already be true (led_control's
+    // set_all_impl rejects writes while powered off). So this must run AFTER
+    // 6e's power snap, not alongside the 6d js branch.
+    {
+        char mode[16] = {0};
+        config_get_str_or(CONFIG_KEY_LAMP_MODE, mode, sizeof(mode), "api");
+        if (strcmp(mode, "frame") == 0 && want_on) {
+            if (frame_store_display() == ESP_OK) {
+                ESP_LOGI(TAG, "Resumed frame mode");
+            }
+        }
     }
 
     // 7. Start HTTP server (registers JS API inside)

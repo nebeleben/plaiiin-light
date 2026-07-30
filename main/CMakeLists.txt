@@ -66,6 +66,7 @@ idf_component_register(
         "ws_server.c"
         "led_control.c"
         "light_api.c"
+        "frame_store.c"
         "error_light.c"
         "ota_update.c"
         "plaiiin_mqtt.c"

@@ -6,6 +6,7 @@
 #include "js_storage.h"
 #include "js_api.h"
 #include "wormhole.h"
+#include "frame_store.h"
 #include "pairing.h"
 #include "plaiiin_mqtt.h"   // mirror app/BLE changes to MQTT subscribers
 #include "esp_log.h"
@@ -140,6 +141,9 @@ void light_api_apply_power(bool on)
             // will stop it once led_control's fade task finishes the ramp.
             led_control_power(false);
         }
+    } else if (strcmp(mode, "frame") == 0 && ws_server_get_mode() != LAMP_MODE_STREAM) {
+        led_control_power(on);
+        if (on) (void)frame_store_display();
     } else {
         led_control_power(on);
     }
@@ -177,8 +181,8 @@ void light_api_apply_color_solid(uint8_t r, uint8_t g, uint8_t b)
 {
     char mode[16] = {0};
     get_persistent_mode(mode, sizeof(mode));
-    bool js_mode = (strcmp(mode, "js") == 0);
-    if (!js_mode) {
+    bool content_mode = (strcmp(mode, "js") == 0) || (strcmp(mode, "frame") == 0);
+    if (!content_mode) {
         paint_solid(r, g, b);
     }
     js_player_set_base_color(r, g, b);
@@ -210,6 +214,14 @@ int light_api_apply_mode(const char *mode)
         ws_server_set_mode(LAMP_MODE_API);
         config_store_set_str(CONFIG_KEY_LAMP_MODE, "js");
         if (led_control_is_on()) (void)start_current_js();
+        mqtt_client_publish_state();
+        return 0;
+    }
+    if (strcmp(mode, "frame") == 0) {
+        ws_server_set_mode(LAMP_MODE_API);
+        js_api_stop();
+        config_store_set_str(CONFIG_KEY_LAMP_MODE, "frame");
+        if (led_control_is_on()) (void)frame_store_display();
         mqtt_client_publish_state();
         return 0;
     }
@@ -255,6 +267,8 @@ void light_api_exit_stream(void)
     get_persistent_mode(mode, sizeof(mode));
     if (strcmp(mode, "js") == 0 && led_control_is_on()) {
         (void)start_current_js();
+    } else if (strcmp(mode, "frame") == 0 && led_control_is_on()) {
+        (void)frame_store_display();
     } else if (strcmp(mode, "api") == 0) {
         repaint_base_color();
     }
@@ -395,6 +409,73 @@ static esp_err_t color_handler(httpd_req_t *req)
     char resp[64];
     snprintf(resp, sizeof(resp), "{\"status\":\"ok\",\"count\":%d}", idx);
     httpd_resp_sendstr(req, resp);
+    return ESP_OK;
+}
+
+// POST /api/frame — save a drawn frame (creator+). Raw RGB body, length
+// must equal the logical grid exactly. PlanV3 V2.4.
+static esp_err_t frame_post_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_CREATOR) != ESP_OK) return ESP_FAIL;
+    int w = led_control_get_logical_w();
+    int h = led_control_get_logical_h();
+    size_t want = (size_t)(w * h * 3);
+    if (req->content_len != want) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        char msg[96];
+        snprintf(msg, sizeof(msg),
+                 "{\"status\":\"error\",\"message\":\"expected %u bytes (%dx%dx3)\"}",
+                 (unsigned)want, w, h);
+        httpd_resp_sendstr(req, msg);
+        return ESP_OK;
+    }
+    uint8_t *buf = malloc(want);
+    if (!buf) { httpd_resp_send_500(req); return ESP_OK; }
+    size_t got = 0;
+    while (got < want) {
+        int r = httpd_req_recv(req, (char *)buf + got, want - got);
+        if (r <= 0) { free(buf); httpd_resp_send_500(req); return ESP_OK; }
+        got += r;
+    }
+    esp_err_t err = frame_store_save(w, h, buf, want);
+    free(buf);
+    if (err != ESP_OK) { httpd_resp_send_500(req); return ESP_OK; }
+    char mode[16] = {0};
+    get_persistent_mode(mode, sizeof(mode));
+    if (strcmp(mode, "frame") == 0 && led_control_is_on()
+        && ws_server_get_mode() != LAMP_MODE_STREAM) {
+        (void)frame_store_display();
+    }
+    httpd_resp_set_type(req, "application/json");
+    char ok[64];
+    snprintf(ok, sizeof(ok), "{\"status\":\"ok\",\"w\":%d,\"h\":%d}", w, h);
+    httpd_resp_sendstr(req, ok);
+    return ESP_OK;
+}
+
+// GET /api/frame — read the stored frame back for re-editing (user+).
+static esp_err_t frame_get_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
+    int w = led_control_get_logical_w();
+    int h = led_control_get_logical_h();
+    uint8_t *buf = NULL; size_t len = 0;
+    if (frame_store_load(w, h, &buf, &len) != ESP_OK) {
+        httpd_resp_set_status(req, "404 Not Found");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"no frame stored\"}");
+        return ESP_OK;
+    }
+    char wh[8];
+    snprintf(wh, sizeof(wh), "%d", w);
+    httpd_resp_set_hdr(req, "X-Frame-W", wh);
+    char hh[8];
+    snprintf(hh, sizeof(hh), "%d", h);
+    httpd_resp_set_hdr(req, "X-Frame-H", hh);
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_send(req, (const char *)buf, len);
+    free(buf);
     return ESP_OK;
 }
 
@@ -1155,6 +1236,22 @@ esp_err_t light_api_register(httpd_handle_t server)
         .handler = color_handler
     };
     httpd_register_uri_handler(server, &color);
+
+    // PlanV3 V2.4 — draw-to-lamp. POST saves a drawn frame (creator+); GET
+    // reads it back for re-editing (user+).
+    httpd_uri_t frame_post = {
+        .uri = "/api/frame",
+        .method = HTTP_POST,
+        .handler = frame_post_handler
+    };
+    httpd_register_uri_handler(server, &frame_post);
+
+    httpd_uri_t frame_get = {
+        .uri = "/api/frame",
+        .method = HTTP_GET,
+        .handler = frame_get_handler
+    };
+    httpd_register_uri_handler(server, &frame_get);
 
     httpd_uri_t brightness_get = {
         .uri = "/api/brightness",
