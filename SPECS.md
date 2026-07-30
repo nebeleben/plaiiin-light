@@ -424,6 +424,20 @@ Both reset paths release pairing and clear the `provisioned` flag, returning the
 
 **Bootstrapping a paired lamp from a browser:** the macOS app's "Show pair-browser QR…" item generates `http://<lamp-ip>/?t=<token>` as a QR. Scanning it on a phone or another laptop opens the device portal; the inlined `auth.js` reads `?t=`, persists it in `localStorage`, and strips the parameter from the URL. From that point the browser is treated as a paired client until you clear its storage.
 
+### Factory reset over power plug
+
+Lamps with no button and no network can be recovered by power-cycling:
+five consecutive fast power-cycles (each boot cut within 10 s) trigger the
+same full factory reset as the 15 s button hold — the lamp double-flashes
+blue, wipes WiFi credentials, pairing, share keys, mode/colors and the AI
+key, and reboots into fresh onboarding. Hardware identity (form, type,
+pins, LED count) and the durable recovery key are kept.
+
+Only true power-on resets count (`ESP_RST_POWERON`): software reboots,
+panics, watchdog resets and brownouts never advance the counter, so crash
+loops and mains flicker cannot wipe a lamp. Any boot that stays powered
+for 10 s ends the sequence.
+
 ### Technical Notes
 
 - **LED Driver**: Uses SPI+DMA (not RMT) for flicker-free operation with WiFi active. DMA transfers run independently of the CPU, immune to WiFi interrupt interference.

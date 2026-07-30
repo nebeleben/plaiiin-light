@@ -83,6 +83,9 @@ know you did:
   a `display`), with config and scripts preserved.
 - **Guardrails** — hard caps on brightness and estimated current draw
   protect your hardware on every frame path.
+- **Plug reset** — no button, no network, no problem: five fast power
+  cycles factory-reset the lamp (blue flash confirms), keeping its
+  hardware identity and recovery key.
 - **Pixel grouping & rotation** — gang physical LEDs into logical pixels
   and mount the matrix in any orientation.
 - **Six lamp forms** — `tower`, `display`, `cube`, `rocket`, `wormhole`,
