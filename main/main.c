@@ -15,6 +15,7 @@
 #include "ai_key_api.h"
 #include "reset_key_api.h"
 #include "pairing.h"
+#include "plug_reset.h"
 #include "keys.h"
 #include "wormhole.h"
 #include "esp_log.h"
@@ -228,6 +229,12 @@ void app_main(void)
 
     // 4. Init error light system
     error_light_init();
+
+    // 4b. Factory-reset-over-plug (PlanV3 V2.1). Needs LEDs up for the blue
+    //     confirm blink; must run before WiFi/BLE so a wiped lamp reboots
+    //     into fresh onboarding without ever having advertised old state.
+    //     May not return on the triggering boot.
+    plug_reset_check();
 
     // 5. Init WiFi (STA or AP based on saved config). AP-mode LED setup is
     //    deferred to step 6a — it needs js_player_init to have run so we can

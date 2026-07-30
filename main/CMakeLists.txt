@@ -78,6 +78,7 @@ idf_component_register(
         "factory_reset.c"
         "ai_key_api.c"
         "reset_key_api.c"
+        "plug_reset.c"
         "pairing.c"
         "form_prompt.c"
         "keys.c"

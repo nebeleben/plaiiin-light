@@ -136,6 +136,14 @@
 #define CONFIG_KEY_WH_PHYS       "wh_phys"
 #define CONFIG_KEY_WH_CREATIVE   "wh_creative"
 
+// PlanV3 Phase V2.1 — consecutive fast power-on boot counter for the
+// factory-reset-over-plug feature. Incremented on ESP_RST_POWERON boots,
+// cleared by 10 s of uptime; at 5 the lamp factory-resets. Deliberately
+// absent from both factory-reset erase lists: plug_reset.c zeroes it
+// itself before triggering, and it is operational state, not personal
+// data. See plug_reset.{h,c}.
+#define CONFIG_KEY_PLUG_CNT      "plug_cnt"
+
 esp_err_t config_store_init(void);
 esp_err_t config_store_get_str(const char *key, char *out, size_t max_len);
 esp_err_t config_store_set_str(const char *key, const char *value);
