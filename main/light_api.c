@@ -378,11 +378,15 @@ static esp_err_t color_handler(httpd_req_t *req)
     // In js mode the player owns the framebuffer — writing a solid color here
     // would race against the next render() output and look like a flicker.
     // We still update baseColor so the running script picks up the new tint
-    // on its very next frame.
+    // on its very next frame. Frame mode is the same story: the displayed
+    // frame is content, not the user's solid-color intent (e.g. an HA
+    // set_color hitting this same endpoint must not wipe a drawn frame) —
+    // baseColor still updates so a later switch back to api mode reflects it.
     char mode[16] = {0};
     get_persistent_mode(mode, sizeof(mode));
     bool js_mode = (strcmp(mode, "js") == 0);
-    if (!js_mode) {
+    bool content_mode = js_mode || (strcmp(mode, "frame") == 0);
+    if (!content_mode) {
         led_control_set_all(colors, idx);
     }
 
