@@ -1270,7 +1270,10 @@ static esp_err_t swarm_ping_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// GET /api/swarm/stats -> {"tx":n,"rx":n,"txFail":n,"lastFrom":"aa:bb:cc:dd:ee:ff"}
+// GET /api/swarm/stats -> {"tx":n,"rx":n,"txFail":n,"lastFrom":"aa:bb:cc:dd:ee:ff",
+//                           "dropAuth":n,"dropReplay":n,"relayed":n,"applied":n}
+// PlanV3 V2.5 Task 3 — folds swarm.c's protocol-layer counters (Task 2) in
+// alongside swarm_radio's link-layer counters (Task 1).
 static esp_err_t swarm_stats_handler(httpd_req_t *req)
 {
     if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
@@ -1279,14 +1282,152 @@ static esp_err_t swarm_stats_handler(httpd_req_t *req)
     swarm_radio_stats(&tx, &rx, &tx_fail);
     uint8_t mac[6] = {0};
     swarm_radio_last_from(mac);
-    char resp[160];
+    uint32_t drop_auth = 0, drop_replay = 0, relayed = 0, applied = 0;
+    swarm_debug_stats(&drop_auth, &drop_replay, &relayed, &applied);
+    char resp[256];
     snprintf(resp, sizeof(resp),
              "{\"tx\":%lu,\"rx\":%lu,\"txFail\":%lu,"
-             "\"lastFrom\":\"%02x:%02x:%02x:%02x:%02x:%02x\"}",
+             "\"lastFrom\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
+             "\"dropAuth\":%lu,\"dropReplay\":%lu,\"relayed\":%lu,\"applied\":%lu}",
              (unsigned long)tx, (unsigned long)rx, (unsigned long)tx_fail,
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+             (unsigned long)drop_auth, (unsigned long)drop_replay,
+             (unsigned long)relayed, (unsigned long)applied);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, resp);
+    return ESP_OK;
+}
+
+// PlanV3 V2.5 Task 3 — /api/swarm provisioning. Admin-gated like the Task 1
+// ping/stats debug surface. The 64-hex swarm key is only ever read off the
+// wire and handed to swarm_join(), which persists it to NVS; it is never
+// echoed back in a response or written to a log line.
+
+// GET /api/swarm -> {"member":bool,"id":"<16hex or empty>","enabled":bool,"channel":N}
+static esp_err_t swarm_get_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
+
+    char id[17] = {0};
+    swarm_get_id(id, sizeof(id));
+    char resp[128];
+    snprintf(resp, sizeof(resp),
+             "{\"member\":%s,\"id\":\"%s\",\"enabled\":%s,\"channel\":%d}",
+             swarm_is_member() ? "true" : "false", id,
+             swarm_is_enabled() ? "true" : "false", swarm_get_channel());
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, resp);
+    return ESP_OK;
+}
+
+// POST /api/swarm  body: {"id":"<16hex>","key":"<64hex>","channel":N} -> join.
+// channel is optional (0 = unset/current, matching swarm_join). 400
+// {"status":"error","message":"invalid id/key/channel"} on malformed input;
+// swarm_join validates hex format + channel range and implies enable, so
+// there is no separate enable step here on success.
+static esp_err_t swarm_post_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
+
+    int content_len = req->content_len;
+    if (content_len <= 0 || content_len > 512) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"invalid id/key/channel\"}");
+        return ESP_OK;
+    }
+    char *buf = malloc(content_len + 1);
+    if (!buf) { httpd_resp_send_500(req); return ESP_OK; }
+    int received = 0;
+    while (received < content_len) {
+        int ret = httpd_req_recv(req, buf + received, content_len - received);
+        if (ret <= 0) { free(buf); httpd_resp_send_500(req); return ESP_OK; }
+        received += ret;
+    }
+    buf[content_len] = '\0';
+
+    char id[32] = {0};
+    char key[80] = {0};
+    int channel = 0;
+    bool have_id = false, have_key = false;
+
+    char *p;
+    if ((p = strstr(buf, "\"id\"")) != NULL && (p = strchr(p, ':')) != NULL
+        && (p = strchr(p, '"')) != NULL) {
+        p++;
+        const char *end = strchr(p, '"');
+        if (end && (size_t)(end - p) < sizeof(id)) {
+            memcpy(id, p, end - p);
+            have_id = true;
+        }
+    }
+    if ((p = strstr(buf, "\"key\"")) != NULL && (p = strchr(p, ':')) != NULL
+        && (p = strchr(p, '"')) != NULL) {
+        p++;
+        const char *end = strchr(p, '"');
+        if (end && (size_t)(end - p) < sizeof(key)) {
+            memcpy(key, p, end - p);
+            have_key = true;
+        }
+    }
+    if ((p = strstr(buf, "\"channel\"")) != NULL && (p = strchr(p, ':')) != NULL) {
+        channel = atoi(p + 1);
+    }
+    // Key material lives only in `buf` (freed now) and the stack `key`
+    // buffer handed to swarm_join below — never logged, never in `resp`.
+    free(buf);
+
+    if (!have_id || !have_key || swarm_join(id, key, channel) != ESP_OK) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"invalid id/key/channel\"}");
+        return ESP_OK;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    return ESP_OK;
+}
+
+// DELETE /api/swarm -> leave: wipes the identity keys (sw_id/sw_key/sw_on)
+// and disables. Always succeeds, even when already not a member.
+static esp_err_t swarm_delete_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
+
+    swarm_leave();
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    return ESP_OK;
+}
+
+// POST /api/swarm/enable  body: {"enabled":true|false} -> toggle without
+// losing membership. Enabling when not a member is rejected (400):
+// swarm_set_enabled() returns ESP_ERR_INVALID_STATE for that case; disabling
+// a non-member is always a harmless no-op (200).
+static esp_err_t swarm_enable_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
+
+    char buf[64] = {0};
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret <= 0) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"invalid enabled\"}");
+        return ESP_OK;
+    }
+    bool enabled = (strstr(buf, "true") != NULL);
+
+    if (swarm_set_enabled(enabled) != ESP_OK) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"not a swarm member\"}");
+        return ESP_OK;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
     return ESP_OK;
 }
 
@@ -1483,6 +1624,26 @@ esp_err_t light_api_register(httpd_handle_t server)
         .uri = "/api/swarm/stats", .method = HTTP_GET, .handler = swarm_stats_handler
     };
     httpd_register_uri_handler(server, &swarm_stats);
+
+    // PlanV3 V2.5 Task 3 — /api/swarm provisioning (join/leave/enable). GET,
+    // POST and DELETE on the same "/api/swarm" URI are three distinct
+    // registrations, plus the enable sub-route — 4 new handler slots total.
+    httpd_uri_t swarm_get = {
+        .uri = "/api/swarm", .method = HTTP_GET, .handler = swarm_get_handler
+    };
+    httpd_register_uri_handler(server, &swarm_get);
+    httpd_uri_t swarm_post = {
+        .uri = "/api/swarm", .method = HTTP_POST, .handler = swarm_post_handler
+    };
+    httpd_register_uri_handler(server, &swarm_post);
+    httpd_uri_t swarm_delete = {
+        .uri = "/api/swarm", .method = HTTP_DELETE, .handler = swarm_delete_handler
+    };
+    httpd_register_uri_handler(server, &swarm_delete);
+    httpd_uri_t swarm_enable = {
+        .uri = "/api/swarm/enable", .method = HTTP_POST, .handler = swarm_enable_handler
+    };
+    httpd_register_uri_handler(server, &swarm_enable);
 
     return ESP_OK;
 }
