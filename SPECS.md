@@ -280,7 +280,9 @@ lamp was on when it lost power).
 - **Streaming**: a live WebSocket connection suspends frame mode (the
   stream owns the panel for as long as it's connected); the stored frame
   is repainted automatically the moment the stream closes.
-- **State**: `GET /api/state` reports `"mode":"frame"` throughout.
+- **State**: `GET /api/state` reports `"mode":"frame"` whenever the lamp
+  is in frame mode and not streaming — it reports `"mode":"stream"` for
+  the duration of a live WebSocket connection, same as the other modes.
 - **Wormhole lamps**: frame mode paints the logical grid directly in every
   render mode — there's no per-ring mirror-tiling special case the way
   there is for streamed/`js` content on wormhole forms.

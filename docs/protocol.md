@@ -114,10 +114,11 @@ the duration of any live WebSocket stream, resuming the moment the
 stream closes. Entering `frame` mode stops the local JS player.
 
 `baseColor` behaves exactly as it does in `js` mode: `POST /api/color`
-(solid `{color:[r,g,b]}` or per-pixel `{colors:[[r,g,b], …]}`) updates
-and persists `baseColor`, and it is returned by `GET /api/base_color` /
-`GET /api/state`, but it does **not** repaint the panel — the drawn
-frame stays on screen.
+— body `{colors:[[r,g,b], …]}` in every case, a single-entry array
+(`{colors:[[r,g,b]]}`) for a "solid color" update — updates and persists
+`baseColor` from the first entry, and it is returned by
+`GET /api/base_color` / `GET /api/state`, but it does **not** repaint the
+panel — the drawn frame stays on screen.
 
 | Method | Path | Body / Returns |
 |---|---|---|
@@ -209,7 +210,7 @@ Used primarily for onboarding (no WiFi yet) and low-power control.
 | `wifi_pass`       | `…03` | write          | — |
 | `power`           | `…04` | read / write   | Single byte. |
 | `color`           | `…05` | write          | `r g b` (3 bytes). |
-| `mode`            | `…06` | read / write   | One of `stream` · `api` · `js`. |
+| `mode`            | `…06` | read / write   | One of `stream` · `api` · `js` · `frame`. |
 | `current_script`  | `…07` | read           | UTF-8 script name. |
 | `play_<n>`        | `…08…` | write         | Script-specific play knobs. |
 | `script_upload_*` | `…09…` | write         | Chunked script upload. |
