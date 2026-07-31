@@ -47,7 +47,9 @@ void light_api_get_persistent_mode(char *out, size_t out_len);
 //    24 |    1 | on/off (0|1)
 //    25 |    3 | color r,g,b
 //    28 |    1 | brightness
-//    29 |    1 | mode (0 = api, 1 = js)
+//    29 |    1 | mode (0 = api, 1 = js, 2 = no-change — origin is in
+//               frame/stream/any other mode; receivers apply on/color/
+//               brightness and skip mode+effect entirely)
 //    30 |    1 | effect-name length L (0-32)
 //    31 |    L | effect name (no NUL)
 //  31+L |   16 | HMAC-SHA256 over bytes [0, 31+L), truncated to 16 bytes
@@ -87,7 +89,7 @@ typedef struct {
     bool     on;
     uint8_t  r, g, b;
     uint8_t  brightness;
-    uint8_t  mode;         // 0 = api, 1 = js
+    uint8_t  mode;         // 0 = api, 1 = js, 2 = no-change (skip mode+effect on apply)
     char     name[SW_MAX_NAME_LEN + 1];
 } swarm_snapshot_t;
 
@@ -212,9 +214,24 @@ static void swarm_load_seq(void)
     // Boot/activation restores persisted+64: every session persists sw_seq
     // every 64 increments, so at most 63 sends could have happened past the
     // last persisted value before a crash/power-loss — starting 64 above it
-    // guarantees this session never reuses a sequence number a peer may have
-    // already seen from us.
-    s_seq = (uint32_t)persisted + 64;
+    // guarantees a *fresh boot* never reuses a sequence number a peer may
+    // have already seen from us.
+    //
+    // swarm_activate() (and therefore this function) can also run more than
+    // once per boot — e.g. enable-off -> enable-on, or a re-join — without
+    // s_seq ever having reset to 0. Fix (review round 1, finding 3): never
+    // let re-activation LOWER the live counter. persisted+64 is only a
+    // lower bound recovered from NVS for the "just booted, s_seq still at
+    // its 0 initializer" case; once this session has actually been sending,
+    // s_seq is the source of truth and is already >= persisted+64 (NVS is
+    // written FROM s_seq, never the other way after boot). Clobbering it
+    // back down here would make every peer reject our next several dozen
+    // broadcasts as replays until the counter climbed back past their
+    // last-seen value.
+    uint32_t candidate = (uint32_t)persisted + 64;
+    if (candidate > s_seq) {
+        s_seq = candidate;
+    }
 }
 
 static uint32_t swarm_next_seq(void)
@@ -293,7 +310,7 @@ static bool swarm_parse(const uint8_t *data, size_t len, swarm_snapshot_t *out, 
     out->b = data[27];
     out->brightness = data[28];
     out->mode = data[29];
-    if (out->mode > 1) return false;
+    if (out->mode > 2) return false;   // 0=api, 1=js, 2=no-change
 
     uint8_t name_len = data[30];
     if (name_len > SW_MAX_NAME_LEN) return false;
@@ -359,25 +376,51 @@ static void swarm_apply(const swarm_snapshot_t *pkt)
 
     if (pkt->mode == 1) {
         // js — a lamp in frame mode receiving js DOES switch (swarm wins).
-        if (pkt->name[0]) {
-            esp_err_t rc = js_api_play(pkt->name, JS_DEFAULT_FPS);
-            if (rc == ESP_OK) {
-                // Flips the persisted lamp_mode string too (idempotent: the
-                // script is already running by the time this runs, so the
-                // start_current_js() fast-path inside just no-ops).
-                light_api_apply_mode("js");
+        //
+        // Review round 1 fixes:
+        //   finding 1 (critical) — only attempt to play when the packet
+        //     says the lamp is ON. js_player_start() unconditionally
+        //     re-enables the LEDs if they're off, so an unguarded play call
+        //     here fought light_api_apply_power(false) above and left an
+        //     "off" origin's peers stuck on. Mirrors light_api_apply_mode's
+        //     own js branch, which only calls start_current_js() when
+        //     led_control_is_on().
+        //   finding 2 (important) — skip the play call entirely when the
+        //     receiver is already running this exact script, mirroring
+        //     start_current_js()'s js_api_is_running()+name-match fast path
+        //     (light_api.c) — otherwise every accepted packet (e.g. a
+        //     peer's brightness-only nudge) restarted the animation from
+        //     frame 0 on every receiver.
+        bool ok_to_flip_mode = true;
+        if (pkt->on && pkt->name[0]) {
+            const char *cur = js_api_current_name();
+            bool already_playing = js_api_is_running() && cur && strcmp(cur, pkt->name) == 0;
+            if (!already_playing) {
+                esp_err_t rc = js_api_play(pkt->name, JS_DEFAULT_FPS);
+                ok_to_flip_mode = (rc == ESP_OK);
             }
-            // else: script missing locally — "color fallback". Leave mode
-            // and the currently-playing effect alone; on/color/brightness
-            // above still applied.
-        } else {
-            // No effect name in the packet (origin has nothing playing) —
-            // still honor the mode switch itself.
+        }
+        // else: off, or no effect name in the packet — nothing to play;
+        // light_api_apply_mode("js") below still updates the persisted
+        // mode string, and (being is_on-guarded itself) won't start
+        // anything while off.
+        if (ok_to_flip_mode) {
+            // Idempotent: if we just played (or the fast path found it
+            // already playing), start_current_js()'s own fast path inside
+            // this call just no-ops.
             light_api_apply_mode("js");
         }
-    } else {
+        // else: script missing locally — "color fallback". Leave mode and
+        // the currently-playing effect alone; on/color/brightness above
+        // still applied.
+    } else if (pkt->mode == 0) {
         light_api_apply_mode("api");
     }
+    // else pkt->mode == 2 ("no-change" — origin's persisted mode is neither
+    // api nor js, e.g. frame/stream): skip mode+effect entirely, per the
+    // review-round-1 protocol pin (docs/superpowers/plans/
+    // 2026-07-31-swarm-firmware.md, commit 4ba13de). on/brightness/color
+    // above were already applied unconditionally.
 
     s_applying = false;
 }
@@ -482,13 +525,21 @@ static void swarm_broadcast_snapshot(void)
 
     char mode[16] = {0};
     light_api_get_persistent_mode(mode, sizeof(mode));
-    // The wire format only encodes api(0)/js(1) — "frame itself never
-    // propagates" (pin). A lamp whose persisted mode is "frame" (or the
-    // transient "stream", which isn't persisted at all) broadcasts mode=0:
-    // there is no third wire value, and forcing peers into "frame" isn't
-    // possible or intended by the packet format. See the Task 2 report for
-    // the full rationale.
-    uint8_t mode_bit = (strcmp(mode, "js") == 0) ? 1 : 0;
+    // Review round 1, finding 4 (protocol decision, plan commit 4ba13de):
+    // the wire format encodes api(0)/js(1)/no-change(2). A lamp whose
+    // persisted mode is neither api nor js (frame, stream, or anything
+    // future) broadcasts mode=2 — receivers apply on/color/brightness and
+    // leave mode+effect alone, so "frame itself never propagates" actually
+    // holds (previously this encoded as api(0), which yanked js-mode peers
+    // into api on every frame-mode color/brightness tweak).
+    uint8_t mode_bit;
+    if (strcmp(mode, "js") == 0) {
+        mode_bit = 1;
+    } else if (strcmp(mode, "api") == 0) {
+        mode_bit = 0;
+    } else {
+        mode_bit = 2;   // frame, stream (transient, never persisted here anyway), or future modes
+    }
     const char *name = (mode_bit == 1) ? js_api_current_name() : NULL;
 
     uint32_t seq = swarm_next_seq();
