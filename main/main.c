@@ -19,6 +19,7 @@
 #include "plug_reset.h"
 #include "keys.h"
 #include "wormhole.h"
+#include "swarm_radio.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -458,6 +459,14 @@ void app_main(void)
         ai_key_api_register(server);
         reset_key_api_register(server);
         keys_api_register(server);
+    }
+
+    // 7a. PlanV3 V2.5 Task 1 — ESP-NOW swarm radio spike. Must run after the
+    //     WiFi driver is started (wifi_init(), step 5) AND after the HTTP
+    //     server is up, so init can never race association. Non-fatal on
+    //     failure — the lamp keeps working normally without swarm features.
+    if (swarm_radio_init() != ESP_OK) {
+        ESP_LOGW(TAG, "swarm_radio_init failed — swarm features disabled");
     }
 
     // 7b. Hardware buttons (no-op when no pins configured).

@@ -9,8 +9,10 @@
 #include "frame_store.h"
 #include "pairing.h"
 #include "plaiiin_mqtt.h"   // mirror app/BLE changes to MQTT subscribers
+#include "swarm_radio.h"    // PlanV3 V2.5 Task 1 — ESP-NOW coexistence spike
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_mac.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -1222,6 +1224,53 @@ static esp_err_t wormhole_creative_handler(httpd_req_t *req)
     return wormhole_send_state(req);
 }
 
+// PlanV3 V2.5 Task 1 — swarm_radio coexistence spike. Admin-gated debug
+// surface for the ESP-NOW GO/NO-GO bench test; kept afterward as ongoing
+// diagnostics. POST /api/swarm/ping broadcasts a 32-byte plaintext test
+// packet: "PLSW-SPIKE" (10B) + this lamp's STA MAC (6B) + a monotonic
+// sequence number (4B, native-endian) + zero padding to 32B.
+static esp_err_t swarm_ping_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
+
+    static uint32_t s_ping_seq = 0;
+    uint8_t pkt[32] = {0};
+    memcpy(pkt, "PLSW-SPIKE", 10);
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    memcpy(pkt + 10, mac, sizeof(mac));
+    uint32_t seq = ++s_ping_seq;
+    memcpy(pkt + 16, &seq, sizeof(seq));
+
+    esp_err_t err = swarm_radio_send(pkt, sizeof(pkt));
+    char resp[96];
+    snprintf(resp, sizeof(resp), "{\"sent\":%s,\"seq\":%lu}",
+             err == ESP_OK ? "true" : "false", (unsigned long)seq);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, resp);
+    return ESP_OK;
+}
+
+// GET /api/swarm/stats -> {"tx":n,"rx":n,"txFail":n,"lastFrom":"aa:bb:cc:dd:ee:ff"}
+static esp_err_t swarm_stats_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
+
+    uint32_t tx = 0, rx = 0, tx_fail = 0;
+    swarm_radio_stats(&tx, &rx, &tx_fail);
+    uint8_t mac[6] = {0};
+    swarm_radio_last_from(mac);
+    char resp[160];
+    snprintf(resp, sizeof(resp),
+             "{\"tx\":%lu,\"rx\":%lu,\"txFail\":%lu,"
+             "\"lastFrom\":\"%02x:%02x:%02x:%02x:%02x:%02x\"}",
+             (unsigned long)tx, (unsigned long)rx, (unsigned long)tx_fail,
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, resp);
+    return ESP_OK;
+}
+
 esp_err_t light_api_register(httpd_handle_t server)
 {
     // Hook into the LED fade lifecycle so we can stop the JS player AFTER a
@@ -1405,6 +1454,16 @@ esp_err_t light_api_register(httpd_handle_t server)
         .uri = "/api/wormhole/creative", .method = HTTP_POST, .handler = wormhole_creative_handler
     };
     httpd_register_uri_handler(server, &wormhole_creative);
+
+    // PlanV3 V2.5 Task 1 — swarm_radio coexistence spike debug surface.
+    httpd_uri_t swarm_ping = {
+        .uri = "/api/swarm/ping", .method = HTTP_POST, .handler = swarm_ping_handler
+    };
+    httpd_register_uri_handler(server, &swarm_ping);
+    httpd_uri_t swarm_stats = {
+        .uri = "/api/swarm/stats", .method = HTTP_GET, .handler = swarm_stats_handler
+    };
+    httpd_register_uri_handler(server, &swarm_stats);
 
     return ESP_OK;
 }

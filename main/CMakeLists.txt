@@ -85,6 +85,7 @@ idf_component_register(
         "keys.c"
         "wormhole.c"
         "hardcoded_runtime.c"
+        "swarm_radio.c"
         ${LAMPOS_HC_FORM_SRCS}
         ${LAMPOS_GEN_SRCS}
     INCLUDE_DIRS
