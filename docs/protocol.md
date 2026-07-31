@@ -78,7 +78,7 @@ Stable endpoints. Newer endpoints are added in the companion specs.
 | POST | `/api/color`       | `{colors: [[r,g,b], …]}` — one entry per logical LED (clamped 0–255). |
 | POST | `/api/brightness`  | `{brightness: 0..255}` (persisted to NVS). |
 | GET  | `/api/brightness`  | `{brightness}` |
-| POST | `/api/mode`        | `{mode: "stream" \| "api" \| "js"}` |
+| POST | `/api/mode`        | `{mode: "stream" \| "api" \| "js" \| "frame"}` |
 | GET  | `/api/limits`      | `{maxBrightness, maxCurrentMa, pixelGroupW, pixelGroupH}` |
 | POST | `/api/limits`      | Any subset of the four fields. |
 | GET  | `/api/base_color`  | `{color:[r,g,b]}` — the base color JS scripts blend onto (read-only; set it via `/api/color`). |
@@ -102,6 +102,65 @@ The script contract is `function shade(x, y, idx, frame, base, params)` —
 each call emits one pixel via `emit()` / `emitBright()` / `emitHSV()`. The
 shared `lampos/portal/shade-runtime.js` runtime is the reference
 implementation used by the firmware and every client's preview.
+
+### Draw mode (`/api/frame`)
+
+`frame` is a fourth value for `mode` (alongside `stream`, `api`, `js`):
+a single still image, uploaded by a client and remembered by the lamp.
+Enter it with the existing `POST /api/mode {"mode":"frame"}` — no
+separate endpoint. It is persisted like the other modes (survives
+reboot; the stored frame is repainted on power-on) and is suspended for
+the duration of any live WebSocket stream, resuming the moment the
+stream closes. Entering `frame` mode stops the local JS player.
+
+`baseColor` behaves exactly as it does in `js` mode: `POST /api/color`
+(solid `{color:[r,g,b]}` or per-pixel `{colors:[[r,g,b], …]}`) updates
+and persists `baseColor`, and it is returned by `GET /api/base_color` /
+`GET /api/state`, but it does **not** repaint the panel — the drawn
+frame stays on screen.
+
+| Method | Path | Body / Returns |
+|---|---|---|
+| POST | `/api/frame` | Raw `application/octet-stream` body, **exactly** `logicalW * logicalH * 3` bytes — row-major RGB over the **logical** grid (pixel-group tiling, rotation, and serpentine wiring are applied by the firmware, not the client). Requires **creator** role or above. |
+| GET  | `/api/frame` | `application/octet-stream` — the stored frame in the same raw layout, with `X-Frame-W` / `X-Frame-H` response headers giving its width/height. Requires **user** role or above. |
+
+`POST /api/frame`:
+- Wrong body length → `400` with
+  `{"status":"error","message":"expected N bytes (WxHx3)"}`, where `N`,
+  `W`, `H` reflect the lamp's current logical grid. The frame is not
+  saved.
+- Correct length → saved to flash. Returns `{"status":"ok","w":W,"h":H}`.
+  The panel repaints immediately **only if** the lamp is already in
+  `frame` mode, powered on, and not currently receiving a WebSocket
+  stream; otherwise the save is silent until the lamp next enters/resumes
+  `frame` mode.
+
+`GET /api/frame`:
+- No frame has ever been saved, **or** the stored geometry doesn't match
+  the lamp's current logical grid (e.g. pixel grouping changed since the
+  frame was drawn) → `404` with
+  `{"status":"error","message":"no frame stored"}`. A geometry mismatch
+  is treated identically to "nothing stored" — the lamp never paints a
+  frame at the wrong size.
+- Otherwise → `200` with the raw bytes and the `X-Frame-W`/`X-Frame-H`
+  headers.
+
+**On-flash format.** The lamp keeps at most one frame, at
+`/storage/frame.bin`: 4-byte magic `"PLFR"`, then width and height as
+**u16 little-endian**, then the raw row-major RGB payload
+(`width * height * 3` bytes, no padding). The loader rejects the file
+(same as "not found") if the magic doesn't match or the stored
+width/height differ from the lamp's current logical grid.
+
+**Wormhole lamps.** Unlike streamed or `js` content, frame mode paints the
+logical grid directly on wormhole-form lamps — there is no per-ring
+mirror-tiling step. This is a deliberate simplification; see
+[`wormhole-api.md`](wormhole-api.md) for how the other render modes
+differ.
+
+**Clients.** The macOS/iOS/Android apps' **Draw** tab (creator role or
+above) is the reference producer, but `/api/frame` is a normal part of
+the wire contract — any client may implement its own editor against it.
 
 ### Updates & reset
 

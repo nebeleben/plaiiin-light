@@ -257,6 +257,40 @@ it's written to flash. The browser-side `shade-runtime.js` emulator mirrors the
 VM exactly so previews on `/compose`, `/js`, and the mobile/desktop clients
 match the hardware.
 
+### Draw mode (frame)
+
+`frame` is a fourth lamp mode (alongside `api`, `js`, `stream`) that paints
+and remembers a single still image drawn by a client. Enter it via the
+existing mode endpoint, `POST /api/mode {"mode":"frame"}`; the JS player
+stops immediately if it was running. Like the other modes it's persisted
+to NVS, so a reboot resumes the stored frame (repainted on power-on if the
+lamp was on when it lost power).
+
+- **Content**: `POST /api/frame` uploads a raw RGB image sized exactly to
+  the lamp's **logical** grid (`logicalW × logicalH × 3` bytes, row-major,
+  no header) and saves it to flash; it repaints immediately when the lamp
+  is already in frame mode, on, and not mid-stream. `GET /api/frame` reads
+  the stored image back — useful for re-opening a drawing in an editor.
+  Pixel grouping, rotation, and serpentine wiring are applied by the
+  firmware at paint time, same as every other content path.
+- **baseColor contract**: identical to `js` mode — `POST /api/color`
+  (solid or per-pixel body) still updates and persists `baseColor` but
+  does **not** repaint the panel, so a connected color picker doesn't
+  fight the drawn image.
+- **Streaming**: a live WebSocket connection suspends frame mode (the
+  stream owns the panel for as long as it's connected); the stored frame
+  is repainted automatically the moment the stream closes.
+- **State**: `GET /api/state` reports `"mode":"frame"` throughout.
+- **Wormhole lamps**: frame mode paints the logical grid directly in every
+  render mode — there's no per-ring mirror-tiling special case the way
+  there is for streamed/`js` content on wormhole forms.
+
+The intended producer is the **Draw** tab in the macOS/iOS/Android apps
+(creator role or above), but the contract is open — any client can save
+and read frames via `/api/frame`. See
+[protocol.md](docs/protocol.md#draw-mode-apiframe) for the exact byte
+layout, status codes, and on-flash format.
+
 ### Multi-size pixels (pixel grouping)
 
 A pixel group combines `pixelGroupW × pixelGroupH` physical LEDs into one logical pixel. A 16×16 matrix with group `2×2` renders as an 8×8 logical grid — `shade()` runs once per logical pixel (64 of them) and each result is tiled onto a 2×2 physical block.
@@ -347,7 +381,9 @@ All pages share a consistent theme with day/night mode toggle (persisted in brow
 | `/api/brightness` | POST | `{"brightness": 128}` — Set brightness (0-255, saved to NVS) |
 | `/api/limits` | GET | `{maxBrightness, maxCurrentMa, pixelGroupW, pixelGroupH}` |
 | `/api/limits` | POST | Any subset of the four fields — persisted to NVS |
-| `/api/mode` | POST | `{"mode": "stream/api"}` — Switch between API and WebSocket mode |
+| `/api/mode` | POST | `{"mode": "stream/api/js/frame"}` — Switch lamp mode |
+| `/api/frame` | POST | Raw RGB body, `logicalW*logicalH*3` bytes (creator+) — save + display a drawn frame |
+| `/api/frame` | GET | Raw RGB body + `X-Frame-W`/`X-Frame-H` headers (user+) — read back the stored frame |
 | `/api/js` | GET | `{scripts:[...], playing:<name>\|null}` |
 | `/api/js/{name}` | GET | Raw JS (`shade()`) source |
 | `/api/js/{name}` | PUT | Save script (compiled to bytecode before write; errors surface here) |
@@ -456,6 +492,7 @@ for 10 s ends the sequence.
 | Max brightness / max current / pixel group | NVS | Same as above | Yes |
 | Last color | NVS | Same as above | Yes |
 | Saved JS scripts | SPIFFS `storage` partition | Yes (unless `storage` is rewritten) | Yes |
+| Drawn frame (frame mode) | SPIFFS `storage` partition (`frame.bin`) | Yes (unless `storage` is rewritten) | Yes |
 | AI API key | NVS (`ai_api_key`) — wiped by `factory_reset_full`. Pre-1.5 browser-localStorage entries are migrated on first portal load. | Same as above | Yes |
 | AI provider / model / base URL | Browser localStorage (per browser) | N/A | N/A |
 | Pairing token + mode | NVS (`pair_token`, `pair_mode`, `provisioned`) — wiped by **both** the WiFi and full factory reset. | Same as above | Yes |
