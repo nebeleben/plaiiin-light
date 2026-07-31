@@ -23,3 +23,9 @@ bool frame_store_exists(int w, int h);
 /** Load + paint the stored frame onto the panel via the logical-grid path
  *  (grouping/orientation apply). Returns the load error when absent. */
 esp_err_t frame_store_display(void);
+/** Erase the stored frame, if any. Called by factory_reset_full() as part of
+ *  the personal-data wipe — a previous owner's drawing must never survive a
+ *  reset and get served to the next pairer over GET /api/frame. No-op (fails
+ *  harmlessly) if there's no file, or if the SPIFFS partition isn't mounted
+ *  yet (e.g. the plug-reset path, which runs before js_storage_init()). */
+void frame_store_erase(void);

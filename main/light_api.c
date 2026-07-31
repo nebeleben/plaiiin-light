@@ -237,7 +237,7 @@ int light_api_apply_mode(const char *mode)
 void light_api_get_mode(char *out, size_t out_len)
 {
     // Mirrors the GET /api/mode "mode" field: a live WS session reports
-    // "stream"; otherwise the persisted intent ("api" or "js").
+    // "stream"; otherwise the persisted intent ("api", "js" or "frame").
     if (ws_server_get_mode() == LAMP_MODE_STREAM) {
         snprintf(out, out_len, "stream");
         return;
@@ -407,7 +407,8 @@ static esp_err_t color_handler(httpd_req_t *req)
     free(colors);
     free(buf);
 
-    ESP_LOGI(TAG, "Set %d LED colors%s", idx, js_mode ? " (baseColor only — js mode)" : "");
+    ESP_LOGI(TAG, "Set %d LED colors%s", idx,
+             content_mode ? (js_mode ? " (baseColor only — js mode)" : " (baseColor only — frame mode)") : "");
 
     httpd_resp_set_type(req, "application/json");
     char resp[64];

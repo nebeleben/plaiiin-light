@@ -65,6 +65,14 @@ bool frame_store_exists(int w, int h)
     return true;
 }
 
+void frame_store_erase(void)
+{
+    // remove() on an unmounted VFS (no /storage SPIFFS attached yet) just
+    // returns an error harmlessly — nothing to clean up in that case, the
+    // caller doesn't need to check.
+    remove(FRAME_PATH);
+}
+
 esp_err_t frame_store_display(void)
 {
     int w = led_control_get_logical_w();

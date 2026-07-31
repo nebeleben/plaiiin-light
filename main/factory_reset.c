@@ -1,6 +1,7 @@
 #include "factory_reset.h"
 #include "config_store.h"
 #include "error_light.h"
+#include "frame_store.h"
 #include "led_control.h"
 #include "mdns_service.h"
 
@@ -116,6 +117,10 @@ esp_err_t factory_reset_full(bool reboot)
         CONFIG_KEY_WH_CREATIVE,
     };
     config_store_erase_keys(keys, sizeof(keys) / sizeof(keys[0]));
+    // The drawn frame is personal data too (Draw/frame mode) — without this
+    // it survives on SPIFFS past the wipe and GET /api/frame would still
+    // serve the previous owner's picture to whoever pairs the lamp next.
+    frame_store_erase();
     confirm_blink(0, 100, 255);   // blue
     mdns_service_stop();
     if (reboot) { vTaskDelay(pdMS_TO_TICKS(200)); esp_restart(); }

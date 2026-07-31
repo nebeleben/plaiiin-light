@@ -22,11 +22,11 @@ void light_api_apply_power(bool on);
 void light_api_apply_color_solid(uint8_t r, uint8_t g, uint8_t b);
 /// Set global LED brightness (0-255) and publish the new state to MQTT.
 void light_api_apply_brightness(uint8_t value);
-/// 0 = ok, -1 = unknown mode string. Accepts "api" / "js" / "stream".
+/// 0 = ok, -1 = unknown mode string. Accepts "api" / "js" / "frame" / "stream".
 int  light_api_apply_mode(const char *mode);
-/// Current effective mode string ("api" | "js" | "stream") for status
-/// reporting — "stream" while a WS session owns the lamp, else the persisted
-/// mode. Always NUL-terminates `out`.
+/// Current effective mode string ("api" | "js" | "frame" | "stream") for
+/// status reporting — "stream" while a WS session owns the lamp, else the
+/// persisted mode. Always NUL-terminates `out`.
 void light_api_get_mode(char *out, size_t out_len);
 
 // Stream takeover/restore — called by the WS layer (ws_server.c) when pixel
