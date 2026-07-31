@@ -10,6 +10,7 @@
 #include "pairing.h"
 #include "plaiiin_mqtt.h"   // mirror app/BLE changes to MQTT subscribers
 #include "swarm_radio.h"    // PlanV3 V2.5 Task 1 — ESP-NOW coexistence spike
+#include "swarm.h"          // PlanV3 V2.5 Task 2 — swarm_notify_state() hooks
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_mac.h"
@@ -150,6 +151,7 @@ void light_api_apply_power(bool on)
         led_control_power(on);
     }
     mqtt_client_publish_state();
+    swarm_notify_state();   // PlanV3 V2.5 — mirror to swarm (no-op if not an active member)
 }
 
 // Uniform api-mode paint. The persisting set_all is deliberate — this is the
@@ -190,6 +192,7 @@ void light_api_apply_color_solid(uint8_t r, uint8_t g, uint8_t b)
     js_player_set_base_color(r, g, b);
     int32_t packed = ((int32_t)r << 16) | ((int32_t)g << 8) | (int32_t)b;
     schedule_basecolor_persist(packed);
+    swarm_notify_state();   // PlanV3 V2.5 — mirror to swarm (no-op if not an active member)
 }
 
 // Brightness is a global LED-driver setting, not a per-mode one, so there's no
@@ -199,6 +202,7 @@ void light_api_apply_brightness(uint8_t value)
 {
     led_control_set_brightness(value);
     mqtt_client_publish_state();
+    swarm_notify_state();   // PlanV3 V2.5 — mirror to swarm (no-op if not an active member)
 }
 
 int light_api_apply_mode(const char *mode)
@@ -210,6 +214,7 @@ int light_api_apply_mode(const char *mode)
         config_store_set_str(CONFIG_KEY_LAMP_MODE, "api");
         repaint_base_color();
         mqtt_client_publish_state();
+        swarm_notify_state();   // PlanV3 V2.5 — mirror to swarm (no-op if not an active member)
         return 0;
     }
     if (strcmp(mode, "js") == 0) {
@@ -217,6 +222,7 @@ int light_api_apply_mode(const char *mode)
         config_store_set_str(CONFIG_KEY_LAMP_MODE, "js");
         if (led_control_is_on()) (void)start_current_js();
         mqtt_client_publish_state();
+        swarm_notify_state();   // PlanV3 V2.5 — mirror to swarm (no-op if not an active member)
         return 0;
     }
     if (strcmp(mode, "frame") == 0) {
@@ -225,12 +231,15 @@ int light_api_apply_mode(const char *mode)
         config_store_set_str(CONFIG_KEY_LAMP_MODE, "frame");
         if (led_control_is_on()) (void)frame_store_display();
         mqtt_client_publish_state();
+        swarm_notify_state();   // PlanV3 V2.5 — mirror to swarm (no-op if not an active member;
+                                 // the packet format has no "frame" wire value — see swarm.c)
         return 0;
     }
     if (strcmp(mode, "stream") == 0) {
         js_api_stop();
         ws_server_set_mode(LAMP_MODE_STREAM);
         mqtt_client_publish_state();
+        swarm_notify_state();   // PlanV3 V2.5 — mirror to swarm (no-op if not an active member)
         return 0;
     }
     return -1;
@@ -244,6 +253,16 @@ void light_api_get_mode(char *out, size_t out_len)
         snprintf(out, out_len, "stream");
         return;
     }
+    get_persistent_mode(out, out_len);
+}
+
+// PlanV3 V2.5 — swarm.c's state-snapshot builder needs the raw persisted
+// mode (never "stream"): the packet's mode field only encodes api/js, so a
+// transient stream takeover shouldn't leak into what gets broadcast to the
+// swarm. Thin wrapper so swarm.c doesn't need its own copy of the
+// CONFIG_KEY_LAMP_MODE read.
+void light_api_get_persistent_mode(char *out, size_t out_len)
+{
     get_persistent_mode(out, out_len);
 }
 

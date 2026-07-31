@@ -115,6 +115,17 @@ esp_err_t factory_reset_full(bool reboot)
         CONFIG_KEY_WH_RINGS,
         CONFIG_KEY_WH_PHYS,
         CONFIG_KEY_WH_CREATIVE,
+        // PlanV3 Phase V2.5 — swarm mode. Membership (id/key), the pinned
+        // channel and the TX sequence counter are personal/relationship data
+        // (which swarm this lamp belongs to) — wipe on full reset alongside
+        // pairing. Deliberately NOT in factory_reset_wifi's list above: a
+        // plain WiFi reset stays on the same physical network and should
+        // keep the lamp in its swarm.
+        CONFIG_KEY_SW_ID,
+        CONFIG_KEY_SW_KEY,
+        CONFIG_KEY_SW_CHAN,
+        CONFIG_KEY_SW_ON,
+        CONFIG_KEY_SW_SEQ,
     };
     config_store_erase_keys(keys, sizeof(keys) / sizeof(keys[0]));
     // The drawn frame is personal data too (Draw/frame mode) — without this

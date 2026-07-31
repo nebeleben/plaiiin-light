@@ -10,8 +10,13 @@ static const uint8_t kBroadcastMac[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
 static bool s_initialized = false;
 
-// Each counter has exactly one writer context (documented per-field below),
-// so plain `volatile` is enough here — no atomics/locks needed.
+// s_tx and s_rx each have exactly one writer context (documented per-field
+// below); s_tx_fail has TWO — the synchronous esp_now_send() failure path
+// (caller's task) and the async send callback's ESP_NOW_SEND_FAIL case
+// (esp_now internal task). Plain `volatile` is still enough for all three:
+// these are diagnostic counters, not synchronization primitives, and a
+// torn/lost increment under the s_tx_fail race is a cosmetic stats blip,
+// not a correctness bug — no atomics/locks needed.
 static volatile uint32_t s_tx = 0;       // written by swarm_radio_send() callers
 static volatile uint32_t s_rx = 0;       // written by the esp_now recv callback
 static volatile uint32_t s_tx_fail = 0;  // written by send() (sync fail) + the esp_now send callback (async fail)

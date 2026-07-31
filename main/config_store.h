@@ -144,6 +144,21 @@
 // data. See plug_reset.{h,c}.
 #define CONFIG_KEY_PLUG_CNT      "plug_cnt"
 
+// PlanV3 Phase V2.5 — swarm mode (masterless lamp-to-lamp state propagation
+// over ESP-NOW, see swarm.{h,c}). One swarm per lamp: a client provisions a
+// shared 16-hex id + 64-hex HMAC key + WiFi channel; every member then
+// mirrors on/off, color, brightness and mode/effect changes to every other
+// member. All five keys below are wiped ONLY by factory_reset_full, NOT by
+// factory_reset_wifi or the plug-reset path — a plain WiFi reset stays on
+// the same physical network and keeps the lamp in its swarm; only the full
+// personal-data reset releases membership (matches the share_keys/pair_token
+// precedent).
+#define CONFIG_KEY_SW_ID         "sw_id"    // 16-hex swarm id
+#define CONFIG_KEY_SW_KEY        "sw_key"   // 64-hex HMAC-SHA256 key — SECRET, never logged/returned by any GET
+#define CONFIG_KEY_SW_CHAN       "sw_chan"  // i32 — WiFi channel pinned for AP-less (unassociated) operation; 0 = unset/current
+#define CONFIG_KEY_SW_ON         "sw_on"    // i32 0|1 — swarm feature enabled
+#define CONFIG_KEY_SW_SEQ        "sw_seq"   // i32 — last-persisted TX sequence number (boot restores persisted+64)
+
 esp_err_t config_store_init(void);
 esp_err_t config_store_get_str(const char *key, char *out, size_t max_len);
 esp_err_t config_store_set_str(const char *key, const char *value);

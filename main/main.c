@@ -20,6 +20,7 @@
 #include "keys.h"
 #include "wormhole.h"
 #include "swarm_radio.h"
+#include "swarm.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -468,6 +469,14 @@ void app_main(void)
     if (swarm_radio_init() != ESP_OK) {
         ESP_LOGW(TAG, "swarm_radio_init failed — swarm features disabled");
     }
+
+    // 7a2. PlanV3 V2.5 Task 2 — swarm core: loads the NVS swarm block and,
+    //      if this lamp is an active member, activates (RX callback + worker
+    //      task). Must run after swarm_radio_init() just above regardless of
+    //      whether that call succeeded — swarm_init() only uses the radio if
+    //      it later needs to send/receive, and swarm_radio_send() itself
+    //      already no-ops (ESP_ERR_INVALID_STATE) if init never completed.
+    swarm_init();
 
     // 7b. Hardware buttons (no-op when no pins configured).
     buttons_init();

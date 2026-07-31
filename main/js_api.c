@@ -6,6 +6,7 @@
 #include "config_store.h"
 #include "pairing.h"
 #include "wormhole.h"
+#include "swarm.h"          // PlanV3 V2.5 Task 2 — swarm_notify_state() on play success
 #include <stdbool.h>
 
 #include "esp_log.h"
@@ -546,6 +547,10 @@ esp_err_t js_api_play_ex(const char *name, int fps, bool autoswitch)
         esp_err_t err = hardcoded_runtime_start(hc, fps);
         if (err != ESP_OK) return err;
         config_store_set_str(CONFIG_KEY_CURRENT_JS, name);
+        // PlanV3 V2.5 — covers js_api_play/play_next/play_prev's success
+        // path (all funnel through here); no-op if not an active swarm
+        // member, or while applying a received swarm snapshot.
+        swarm_notify_state();
         return ESP_OK;
     }
 
@@ -583,6 +588,7 @@ esp_err_t js_api_play_ex(const char *name, int fps, bool autoswitch)
     err = js_player_start(NULL, fps);
     if (err != ESP_OK) return err;
     config_store_set_str(CONFIG_KEY_CURRENT_JS, name);
+    swarm_notify_state();   // PlanV3 V2.5 — see the hardcoded-effect branch above
     return ESP_OK;
 }
 
