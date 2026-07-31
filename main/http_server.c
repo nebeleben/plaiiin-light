@@ -537,7 +537,17 @@ httpd_handle_t http_server_start(void)
     // Sized with headroom: every page + REST endpoint costs one slot, so this
     // grows whenever we add an /api/* route. Hitting the cap causes silent
     // failures in late registrations (e.g. /api/stop returning 404).
-    config.max_uri_handlers = 80;
+    // PlanV3 V2.5 Task 3 fix round 1: the swarm provisioning endpoints
+    // pushed the real count past 80 (captive_portal_register(), js_api's
+    // 12-route register_or_warn() loop, ai_key_api, reset_key_api, and
+    // keys_api ALL register onto this same server — there is only one
+    // httpd_start() call in this codebase, no separate AP-mode instance).
+    // Bumped to 96 for headroom. httpd_register_uri_handler() fails
+    // *silently* (ESP_ERR_HTTPD_HANDLERS_FULL, unchecked at most call
+    // sites) once this cap is hit, so any future module adding routes
+    // must re-total the whole registration call graph, not just its own
+    // new handlers.
+    config.max_uri_handlers = 96;
     config.uri_match_fn = httpd_uri_match_wildcard;
     // JS validation runs mjs_exec on the request thread — needs more stack than default 4 KB.
     config.stack_size = 16 * 1024;
