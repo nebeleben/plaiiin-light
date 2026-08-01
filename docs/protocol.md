@@ -40,6 +40,11 @@ mDNS: the lamp advertises on both `_plaiiinlight._tcp` and `_http._tcp`
 (`/api`), and `paired` (`0`/`1`). Richer identity (form, geometry, LED
 count) is read from `GET /api` after discovery.
 
+A lamp that's a **swarm** member also speaks a fourth, lamp-to-lamp-only
+wire format over raw ESP-NOW broadcast — not a client transport, so it
+isn't in the table above. See
+[Swarm mode](#swarm-mode-esp-now-plsw-v1) below.
+
 ## Authentication
 
 A lamp is in one of two pairing modes:
@@ -171,6 +176,24 @@ the wire contract — any client may implement its own editor against it.
 | GET  | `/api/ota/info`     | `{version, buildDate, partition, idfVersion}` |
 | POST | `/api/reset`        | `{scope: "wifi" \| "full"}` |
 
+### Swarm provisioning (`/api/swarm*`)
+
+Admin role. These endpoints provision and monitor a lamp's **swarm**
+membership — the lamp-to-lamp ESP-NOW propagation described in full under
+[Swarm mode](#swarm-mode-esp-now-plsw-v1) below. `id` is 16 hex
+characters (8 raw bytes); `key` is 64 hex characters (32 raw bytes, the
+HMAC-SHA256 key); `channel` is a WiFi channel number (1–14) or `0` for
+"unset/use whatever channel the radio is already on."
+
+| Method | Path | Body / Returns |
+|---|---|---|
+| GET  | `/api/swarm`        | `{"member":bool,"id":"<16hex or empty>","enabled":bool,"channel":N}` — the key is **never** returned. |
+| POST | `/api/swarm`        | `{"id":"<16hex>","key":"<64hex>","channel":N}` → join (implies enable). `200 {"status":"ok"}`; `400 {"status":"error","message":"invalid id/key/channel"}` on malformed input. |
+| DELETE | `/api/swarm`      | Leave: erases the swarm identity (`sw_id`, `sw_key`) and disables (`sw_on`). Always `200 {"status":"ok"}`, even when already not a member. |
+| POST | `/api/swarm/enable` | `{"enabled":bool}` — toggle participation without losing membership. `200 {"status":"ok"}`; `400 {"status":"error","message":"not a swarm member"}` when enabling a non-member (disabling a non-member is a harmless no-op, `200`). |
+| GET  | `/api/swarm/stats`  | `{"tx":n,"rx":n,"txFail":n,"lastFrom":"aa:bb:cc:dd:ee:ff","dropAuth":n,"dropReplay":n,"relayed":n,"applied":n}` — link-layer counters (`tx`/`rx`/`txFail`/`lastFrom`) plus protocol-layer counters (`dropAuth`/`dropReplay`/`relayed`/`applied`). |
+| POST | `/api/swarm/ping`   | Debug only: broadcasts a 32-byte plaintext test packet (`"PLSW-SPIKE"` + sender MAC + sequence, zero-padded) and bumps `tx`. Not part of the authenticated protocol below. |
+
 ### Config pages (HTML)
 
 The lamp also serves HTML pages for direct browser use: `/`, `/control`,
@@ -224,6 +247,90 @@ a passkey upgrade is on the roadmap.
 [`ble-share.md`](ble-share.md) documents a separate **client-to-client** BLE flow
 for handing share keys between phones — that one does not touch the
 firmware at all.
+
+## Swarm mode (ESP-NOW, PLSW v1)
+
+This documents PlaiiinLightOS's lamp-to-lamp broadcast protocol byte for
+byte, so a third-party firmware or bridge can join a swarm without access
+to this repository. It is **not** a client-to-lamp transport — lamps
+speak it to each other over raw ESP-NOW broadcast
+(`FF:FF:FF:FF:FF:FF`), riding whatever WiFi channel the sender is on
+(the AP's channel while associated; the swarm's stored channel while
+AP-less). Clients provision swarms and read status over the ordinary
+HTTP surface — see [Swarm provisioning](#swarm-provisioning-apiswarm)
+above.
+
+### Packet format — "PLSW" v1
+
+Raw ESP-NOW broadcast payload, little-endian multi-byte fields, ≤250
+bytes total:
+
+| Offset | Size | Field | Notes |
+|---|---|---|---|
+| 0 | 4 | magic | ASCII `PLSW` |
+| 4 | 1 | version | `1` |
+| 5 | 8 | swarm id | Raw bytes of the 16-hex swarm id (decoded, not ASCII hex) |
+| 13 | 6 | origin | Origin lamp's STA MAC address |
+| 19 | 4 | seq | u32 LE, strictly increasing per origin |
+| 23 | 1 | hop | `0` = original broadcast, `1` = relayed once |
+| 24 | 1 | on | `0`\|`1` |
+| 25 | 3 | color | `r, g, b`, one byte each |
+| 28 | 1 | brightness | `0`–`255` |
+| 29 | 1 | mode | `0` = `api`, `1` = `js`, `2` = no-change (origin is in `frame`/`stream`/any other mode — receivers apply on/color/brightness only and skip mode+effect) |
+| 30 | 1 | effect name length (L) | `0`–`32` |
+| 31 | L | effect name | ASCII, no NUL terminator |
+| 31+L | 16 | HMAC | HMAC-SHA256 over bytes `[0, 31+L)`, keyed with the 32-byte swarm key, truncated to the first 16 bytes |
+
+**HMAC coverage includes the hop byte.** Offset 23 (`hop`) is inside the
+signed region, so a relaying lamp that flips `hop` from `0` to `1` must
+**recompute** the tag over the mutated bytes with the shared swarm key
+before re-broadcasting — the original origin's tag no longer validates
+once `hop` changes. A receiver verifies against whichever tag arrived
+with the packet, using a constant-time comparison of the 16-byte
+truncated HMAC.
+
+### Semantics
+
+- **Snapshot, not delta.** Every packet is the origin's complete current
+  state at broadcast time.
+- **Apply rules:** receivers always apply on/off, brightness, and color
+  (color updates `baseColor`, per the `js`/`frame` blend contract already
+  documented above). Mode is applied only when it's `api` (0) or `js`
+  (1); mode `2` means "skip mode and effect, apply the rest." When mode
+  is `js` and the receiver has a saved script matching the effect name,
+  it plays it; otherwise the receiver keeps its current effect/mode (the
+  "color fallback") and still applies on/color/brightness. A power-off
+  packet never restarts a stopped effect; a receiver already playing the
+  named script is not restarted.
+- **Coalescing:** an origin coalesces local changes and broadcasts at
+  most once per ~100 ms (≤10 Hz) rather than one packet per change.
+- **Replay/de-dupe:** a receiver tracks the last-seen `seq` per origin
+  MAC (up to 16 origins, LRU-evicted) and accepts a packet only if `seq`
+  is strictly greater than the last one accepted from that origin; an
+  unrecognized origin is accepted and inserted. `seq` is persisted to NVS
+  every 64 increments and restored as `persisted + 64` at boot, so a
+  rebooted origin never reuses a sequence number a peer has already
+  accepted.
+- **Relay-once flooding:** a lamp that accepts a `hop == 0` packet
+  re-broadcasts it once with `hop = 1` (and a recomputed tag, see above)
+  after a random 10–50 ms jitter; `hop == 1` packets are never relayed
+  further. A lamp ignores packets whose origin MAC is its own.
+- **Auth failure / wrong swarm:** a packet whose magic, version, swarm
+  id, or HMAC doesn't match is dropped silently and counted (`dropAuth`
+  in `/api/swarm/stats`); a packet that fails the replay check is counted
+  separately (`dropReplay`).
+- **Channel:** an associated lamp's ESP-NOW rides its AP's WiFi channel
+  automatically. An AP-less lamp pins its radio to the `channel` value
+  stored at join time. This path ships **unverified on hardware** — both
+  bench lamps used for verification stayed associated to the same home
+  AP.
+- **Best-effort delivery:** ESP-NOW broadcast has no ack/retry; a dropped
+  packet is not resent, but because packets carry full snapshots, the
+  next change (or the next coalesced broadcast) self-heals any missed
+  state.
+- **Multi-hop caveat:** relay-once flooding is implemented and shipped,
+  but hardware verification so far covers only a 2-lamp bench (single
+  hop, no relay traversal actually exercised).
 
 ## Form factors & geometry
 

@@ -293,6 +293,104 @@ and read frames via `/api/frame`. See
 [protocol.md](docs/protocol.md#draw-mode-apiframe) for the exact byte
 layout, status codes, and on-flash format.
 
+### Swarm mode
+
+Masterless lamp-to-lamp state propagation over **ESP-NOW** — the
+connectionless ESP32-to-ESP32 broadcast riding the WiFi radio. Change one
+lamp (any surface: HTTP, BLE, MQTT, a physical button) and every other
+member of its swarm follows, typically within a couple hundred
+milliseconds. There is no hub, no cloud, and no "master" lamp — every
+member broadcasts its own state changes and relays what it hears, once.
+
+A lamp belongs to **at most one swarm at a time**. Membership is
+provisioned by a client over the lamp's existing authenticated HTTP
+surface (`/api/swarm`, admin role): the client generates a random 16-hex
+swarm id and a 32-byte (64-hex) swarm key and pushes both to every member
+lamp. Swarm mode can be toggled on/off without losing that provisioning —
+`POST /api/swarm/enable` stops send/receive while leaving the NVS block
+intact; only `DELETE /api/swarm` (leave) or a full factory reset erases
+it.
+
+**Security model.** Swarm packets are authenticated, not encrypted —
+anyone in radio range can see a packet's shape, but only holders of the
+swarm key can forge one a member will accept:
+
+- Every packet carries an **HMAC-SHA256** over the whole packet (magic
+  through effect name), truncated to 16 bytes, keyed with the
+  client-provisioned 32-byte swarm key, verified with a constant-time
+  compare.
+- Each origin (identified by its STA MAC) stamps a **strictly increasing
+  sequence number**; a receiver tracks the last-seen seq per origin (up
+  to 16 origins, LRU-evicted) and accepts only `seq` strictly greater
+  than the last one seen from that origin — a captured packet can never
+  be replayed at a receiver that already saw it or anything newer from
+  the same origin.
+- Sequence numbers survive reboot: the counter is persisted to NVS every
+  64 increments, and boot restores **persisted + 64** — verified on
+  hardware that a rebooted origin never reuses a sequence number a peer
+  has already accepted.
+- Every member **relays what it hears exactly once** (hop 0 →
+  re-broadcast as hop 1 after a random 10–50 ms jitter; hop 1 is never
+  relayed further), giving multi-hop range without needing any topology.
+  A lamp ignores its own packets on receive.
+- Packets that don't decode, don't match the configured swarm id, or fail
+  the HMAC check are dropped silently and counted (`dropAuth` /
+  `dropReplay` in `/api/swarm/stats`) — never logged with key material.
+
+**Propagation.** Packets carry a full state **snapshot** of the origin
+(on/off, color, brightness, mode, effect name), not a delta. Local
+changes are coalesced — a burst of rapid changes (a color-picker drag)
+collapses to roughly one broadcast per 100 ms (≤10 Hz), not one packet
+per change. Receivers always apply on/off, brightness, and color (color
+lands on `baseColor`, the same blend semantics `js`/`frame` mode already
+use); mode only ever propagates as `api` or `js` — a lamp locally in
+`frame` or `stream` is switched by an incoming swarm packet (swarm wins),
+but a lamp whose *own* current mode is something else when it originates
+a change sends a third mode value telling receivers to apply on/color/
+brightness only and leave mode + effect untouched. Effect propagation is
+**by name**: a receiver with a saved script of that name plays it; one
+without keeps its current effect/mode and still applies the rest of the
+snapshot (the "color fallback") — no script content ever crosses the
+swarm. A power-off snapshot never restarts a stopped effect, and a
+receiver already running the named script isn't re-started.
+
+**NVS block** (survives OTA and USB reflash unless the `nvs` partition
+itself is skipped):
+
+| Key | Type | Meaning |
+|---|---|---|
+| `sw_id` | string (16 hex) | Swarm id |
+| `sw_key` | string (64 hex) | HMAC-SHA256 key — **secret at rest**, never returned by any GET, never logged |
+| `sw_chan` | i32 | WiFi channel pinned for AP-less operation (0 = unset/current) |
+| `sw_on` | i32 0\|1 | Swarm feature enabled |
+| `sw_seq` | i32 | Last-persisted TX sequence number |
+
+All five keys are wiped **only** by a full factory reset
+(`factory_reset_full`) — a WiFi-only reset (10 s button hold, or
+`POST /api/reset {"scope":"wifi"}`) leaves swarm membership untouched.
+This matches the precedent set by share keys: swarm config is durable
+device configuration, not network-transient state.
+
+**Channel caveat (honesty note).** When a lamp is associated to its home
+AP, ESP-NOW rides the AP's WiFi channel automatically — nothing to
+configure. A lamp running AP-less (BLE-only onboarding, no WiFi
+association) instead pins its radio to the swarm's stored `sw_chan`, set
+at join time — this path is implemented and shipped, but has **not yet
+been hardware-verified**; both bench lamps used for verification were
+associated to the same home AP. Verifying the AP-less path is tracked as
+a follow-up (PlanV3 Phase V2.5).
+
+**Other caveats.** Multi-hop relay (hop 0 → 1) is implemented and
+shipped, but hardware verification so far covers only a 2-lamp bench —
+single-hop, no actual relay traversal exercised; a 3+-lamp multi-hop test
+is a follow-up. Broadcast delivery is best-effort — ESP-NOW has no
+application-layer ack/retry — but because every packet is a full state
+snapshot rather than a delta, a dropped packet self-heals on the origin's
+next change.
+
+See [`docs/protocol.md`](docs/protocol.md#swarm-mode-esp-now-plsw-v1) for
+the byte-precise packet format and the `/api/swarm*` wire contract.
+
 ### Multi-size pixels (pixel grouping)
 
 A pixel group combines `pixelGroupW × pixelGroupH` physical LEDs into one logical pixel. A 16×16 matrix with group `2×2` renders as an 8×8 logical grid — `shade()` runs once per logical pixel (64 of them) and each result is tiled onto a 2×2 physical block.
@@ -401,6 +499,12 @@ All pages share a consistent theme with day/night mode toggle (persisted in brow
 | `/api/reset` | POST | `{"scope":"wifi"\|"full"}` — factory reset (Bearer token required) |
 | `/api/ai/key` | GET/PUT/DELETE | AI key presence (`{hasKey,len}`) / set / clear (raw key never returned) |
 | `/api/form-prompt` | GET/PUT/DELETE | Per-lamp form descriptor injected into AI compose prompts |
+| `/api/swarm` | GET | `{member, id, enabled, channel}` — swarm status (admin; key never returned) |
+| `/api/swarm` | POST | `{"id":"<16hex>","key":"<64hex>","channel":N}` — join a swarm (admin, implies enable) |
+| `/api/swarm` | DELETE | Leave the swarm (admin) |
+| `/api/swarm/enable` | POST | `{"enabled":bool}` — toggle without losing membership (admin) |
+| `/api/swarm/stats` | GET | Radio + protocol counters — tx/rx/drops/relayed/applied (admin) |
+| `/api/swarm/ping` | POST | Debug: broadcast a plaintext test packet (admin) |
 | `/api/ota` | POST | Upload firmware binary (application/octet-stream; cross-form → 409) |
 | `/api/ota/info` | GET | Current firmware version, build date, partition, form, ESP-IDF version |
 | `/config` | POST | Save device/LED config + reboot |
@@ -454,7 +558,7 @@ Per-surface enforcement:
 | Reset | Trigger | Clears | Keeps |
 |---|---|---|---|
 | **WiFi** | 10 s long-press (green), or `POST /api/reset {scope:"wifi"}` | WiFi creds, `pair_token` + `pair_mode`, share keys, `provisioned` flag | Hardware config, scripts, AI key |
-| **Full** | 15 s long-press (blue), or `POST /api/reset {scope:"full"}` | All of the above **plus** selected script, lamp mode, base/last color, on/off state, AI key, wormhole config | Hardware config (form, pins, LED count), brightness |
+| **Full** | 15 s long-press (blue), or `POST /api/reset {scope:"full"}` | All of the above **plus** selected script, lamp mode, base/last color, on/off state, AI key, wormhole config, swarm membership/config (`sw_id`/`sw_key`/`sw_chan`/`sw_on`/`sw_seq`) | Hardware config (form, pins, LED count), brightness |
 
 Both reset paths release pairing and clear the `provisioned` flag, returning the lamp to fresh AP + BLE onboarding, claimable by whoever onboards it next. (Earlier firmware kept pairing across a WiFi reset; it no longer does.) The HTTP `POST /api/reset` form requires the Bearer token; the long-press is the physical recovery path.
 
@@ -498,6 +602,7 @@ for 10 s ends the sequence.
 | AI API key | NVS (`ai_api_key`) — wiped by `factory_reset_full`. Pre-1.5 browser-localStorage entries are migrated on first portal load. | Same as above | Yes |
 | AI provider / model / base URL | Browser localStorage (per browser) | N/A | N/A |
 | Pairing token + mode | NVS (`pair_token`, `pair_mode`, `provisioned`) — wiped by **both** the WiFi and full factory reset. | Same as above | Yes |
+| Swarm config (id/key/channel/enabled/seq) | NVS (`sw_id`, `sw_key`, `sw_chan`, `sw_on`, `sw_seq`) — wiped by `factory_reset_full` only, not the WiFi reset. | Same as above | Yes |
 
 ### Partition table
 
