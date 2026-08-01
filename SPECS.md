@@ -308,8 +308,10 @@ surface (`/api/swarm`, admin role): the client generates a random 16-hex
 swarm id and a 32-byte (64-hex) swarm key and pushes both to every member
 lamp. Swarm mode can be toggled on/off without losing that provisioning —
 `POST /api/swarm/enable` stops send/receive while leaving the NVS block
-intact; only `DELETE /api/swarm` (leave) or a full factory reset erases
-it.
+intact. `DELETE /api/swarm` (leave) erases the identity and enabled flag
+(`sw_id`, `sw_key`, `sw_on`) but leaves `sw_chan`/`sw_seq` behind (harmless
+config, not identity); only a full factory reset erases the whole NVS
+block, all five keys included.
 
 **Security model.** Swarm packets are authenticated, not encrypted —
 anyone in radio range can see a packet's shape, but only holders of the
@@ -330,12 +332,41 @@ swarm key can forge one a member will accept:
   hardware that a rebooted origin never reuses a sequence number a peer
   has already accepted.
 - Every member **relays what it hears exactly once** (hop 0 →
-  re-broadcast as hop 1 after a random 10–50 ms jitter; hop 1 is never
+  re-broadcast as hop 1 after a random 10–49 ms jitter; hop 1 is never
   relayed further), giving multi-hop range without needing any topology.
   A lamp ignores its own packets on receive.
 - Packets that don't decode, don't match the configured swarm id, or fail
   the HMAC check are dropped silently and counted (`dropAuth` /
   `dropReplay` in `/api/swarm/stats`) — never logged with key material.
+
+**Threat model / blast radius.** The above authenticates packets, not
+members — the trust boundary is the swarm key itself, and that key has no
+per-member identity or revocation built on top of it:
+
+- There is **one symmetric key per swarm**, shared by every member. A
+  member that's removed (or a device that's compromised or stolen) keeps
+  a fully valid key even after `DELETE /api/swarm` runs on it elsewhere —
+  that call only erases the *removed* lamp's own copy, it does nothing to
+  the copy an attacker (or the ex-member) already has. There is no
+  revocation mechanism: the only way to safely evict a member is to
+  **re-key every remaining lamp** (generate a fresh id + key, push to
+  every lamp that should stay, in particular *not* to the one being
+  removed). Clients implementing a "remove member" UI must treat it as
+  re-key-all, not as a per-lamp operation.
+- The swarm key is provisioned over the lamp's plain HTTP API (`POST
+  /api/swarm`), which means the key **transits the network in
+  cleartext** at provisioning time — consistent with the bearer-token
+  exposure already called out under
+  [Security & Pairing](#security--pairing) (**no TLS**, so anything sent
+  over HTTP can be sniffed on an open network). Unlike a bearer token,
+  though, this key is a long-lived shared secret with no rotation, so
+  anyone who observes that one provisioning request (shared WiFi, a
+  compromised AP, a network tap) captures standing access to the whole
+  swarm, not just one request's worth of access.
+- NVS storage of `sw_key` is **unencrypted** (see the NVS block table
+  below — same as every other secret this firmware persists). Physical
+  access to any one member (USB, a pulled flash dump) yields the swarm
+  key for every member, not just that lamp.
 
 **Propagation.** Packets carry a full state **snapshot** of the origin
 (on/off, color, brightness, mode, effect name), not a delta. Local
@@ -503,7 +534,7 @@ All pages share a consistent theme with day/night mode toggle (persisted in brow
 | `/api/swarm` | POST | `{"id":"<16hex>","key":"<64hex>","channel":N}` — join a swarm (admin, implies enable) |
 | `/api/swarm` | DELETE | Leave the swarm (admin) |
 | `/api/swarm/enable` | POST | `{"enabled":bool}` — toggle without losing membership (admin) |
-| `/api/swarm/stats` | GET | Radio + protocol counters — tx/rx/drops/relayed/applied (admin) |
+| `/api/swarm/stats` | GET | Radio + protocol counters — tx/rx/drops/relayed/applied, plus `stackFree` (worker task stack high-water mark, bytes) (admin) |
 | `/api/swarm/ping` | POST | Debug: broadcast a plaintext test packet (admin) |
 | `/api/ota` | POST | Upload firmware binary (application/octet-stream; cross-form → 409) |
 | `/api/ota/info` | GET | Current firmware version, build date, partition, form, ESP-IDF version |

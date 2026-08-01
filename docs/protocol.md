@@ -191,7 +191,7 @@ HMAC-SHA256 key); `channel` is a WiFi channel number (1–14) or `0` for
 | POST | `/api/swarm`        | `{"id":"<16hex>","key":"<64hex>","channel":N}` → join (implies enable). `200 {"status":"ok"}`; `400 {"status":"error","message":"invalid id/key/channel"}` on malformed input. |
 | DELETE | `/api/swarm`      | Leave: erases the swarm identity (`sw_id`, `sw_key`) and disables (`sw_on`). Always `200 {"status":"ok"}`, even when already not a member. |
 | POST | `/api/swarm/enable` | `{"enabled":bool}` — toggle participation without losing membership. `200 {"status":"ok"}`; `400 {"status":"error","message":"not a swarm member"}` when enabling a non-member (disabling a non-member is a harmless no-op, `200`). |
-| GET  | `/api/swarm/stats`  | `{"tx":n,"rx":n,"txFail":n,"lastFrom":"aa:bb:cc:dd:ee:ff","dropAuth":n,"dropReplay":n,"relayed":n,"applied":n}` — link-layer counters (`tx`/`rx`/`txFail`/`lastFrom`) plus protocol-layer counters (`dropAuth`/`dropReplay`/`relayed`/`applied`). |
+| GET  | `/api/swarm/stats`  | `{"tx":n,"rx":n,"txFail":n,"lastFrom":"aa:bb:cc:dd:ee:ff","dropAuth":n,"dropReplay":n,"relayed":n,"applied":n,"stackFree":n}` — link-layer counters (`tx`/`rx`/`txFail`/`lastFrom`) plus protocol-layer counters (`dropAuth`/`dropReplay`/`relayed`/`applied`), plus `stackFree`: the swarm worker task's FreeRTOS stack high-water mark in bytes (0 if the worker isn't running). |
 | POST | `/api/swarm/ping`   | Debug only: broadcasts a 32-byte plaintext test packet (`"PLSW-SPIKE"` + sender MAC + sequence, zero-padded) and bumps `tx`. Not part of the authenticated protocol below. |
 
 ### Config pages (HTML)
@@ -313,7 +313,7 @@ truncated HMAC.
   accepted.
 - **Relay-once flooding:** a lamp that accepts a `hop == 0` packet
   re-broadcasts it once with `hop = 1` (and a recomputed tag, see above)
-  after a random 10–50 ms jitter; `hop == 1` packets are never relayed
+  after a random 10–49 ms jitter; `hop == 1` packets are never relayed
   further. A lamp ignores packets whose origin MAC is its own.
 - **Auth failure / wrong swarm:** a packet whose magic, version, swarm
   id, or HMAC doesn't match is dropped silently and counted (`dropAuth`
