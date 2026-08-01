@@ -423,6 +423,14 @@ static esp_err_t color_handler(httpd_req_t *req)
         js_player_set_base_color(r, g, b);
         int32_t packed = ((int32_t)r << 16) | ((int32_t)g << 8) | (int32_t)b;
         schedule_basecolor_persist(packed);
+        // PlanV3 V2.5 fix round 2, bug 1 — this handler predates
+        // light_api_apply_color_solid and duplicates its paint/persist logic
+        // inline instead of calling it, so it never carried that function's
+        // swarm_notify_state() hook. Placed here (not gated on content_mode)
+        // so it covers BOTH branches above: the plain array-paint case and
+        // the js/frame content_mode case, since baseColor changed in every
+        // idx>0 case regardless of whether led_control_set_all() ran.
+        swarm_notify_state();
     }
 
     free(colors);

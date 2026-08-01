@@ -231,6 +231,19 @@ static void swarm_load_seq(void)
     uint32_t candidate = (uint32_t)persisted + 64;
     if (candidate > s_seq) {
         s_seq = candidate;
+        // Fix round 2, bug 2: persist the boosted floor immediately, not
+        // just at swarm_next_seq()'s steady every-64-increments cadence.
+        // Without this, two reboots that both land inside the same
+        // un-persisted 64-window read the SAME stale `persisted` value from
+        // NVS, compute the SAME candidate, and re-send sequence numbers a
+        // peer already saw last boot — its de-dupe LRU correctly rejects
+        // them as replays (reproduced live: 5 broadcasts dropped across a
+        // double-reboot in Task 4's bench pass). Writing the new floor back
+        // out here means every boot/(re-)activation strictly advances what
+        // the NEXT boot will read, even if this session sends nothing at
+        // all before crashing again. One extra NVS write per boot/
+        // activation — negligible wear next to the steady-state cadence.
+        config_store_set_i32(CONFIG_KEY_SW_SEQ, (int32_t)s_seq);
     }
 }
 
