@@ -146,6 +146,7 @@ static uint32_t s_dedupe_clock = 0;   // logical LRU clock, worker-task-only
 static QueueHandle_t s_rx_queue = NULL;
 static bool s_rx_cb_installed = false;
 static bool s_task_started = false;
+static TaskHandle_t s_worker_task_handle = NULL;
 
 // =============================================================================
 // Hex helpers
@@ -461,7 +462,7 @@ static void swarm_radio_recv_cb(const uint8_t *mac, const uint8_t *data, size_t 
 
 static void swarm_relay(const swarm_rx_item_t *item, size_t hdr_len)
 {
-    // 10-50 ms jitter before rebroadcasting, to spread simultaneous
+    // 10-49 ms jitter before rebroadcasting, to spread simultaneous
     // relays from multiple lamps that all heard the same origin packet.
     vTaskDelay(pdMS_TO_TICKS(10 + (esp_random() % 40)));
 
@@ -628,12 +629,27 @@ static void swarm_activate(void)
     }
     if (!s_task_started && s_rx_queue) {
         if (xTaskCreate(swarm_worker_task, "swarm_worker", 4096, NULL,
-                         tskIDLE_PRIORITY + 2, NULL) == pdPASS) {
+                         tskIDLE_PRIORITY + 2, &s_worker_task_handle) == pdPASS) {
             s_task_started = true;
         } else {
             ESP_LOGE(TAG, "failed to start swarm worker task");
         }
     }
+}
+
+// Worker-task stack high-water mark, in bytes — see swarm.h. Callable from
+// any task: uxTaskGetStackHighWaterMark() is safe to call on a handle from
+// outside the target task. Returns 0 if the worker was never started (the
+// only writer of s_worker_task_handle is swarm_activate(), and it's never
+// cleared once set, matching the "tasks run for the process lifetime" note
+// above).
+uint32_t swarm_worker_stack_free(void)
+{
+    if (!s_worker_task_handle) return 0;
+    // uxTaskGetStackHighWaterMark() returns the minimum-ever-remaining
+    // headroom in stack *words* (StackType_t units), not bytes.
+    UBaseType_t words = uxTaskGetStackHighWaterMark(s_worker_task_handle);
+    return (uint32_t)words * (uint32_t)sizeof(StackType_t);
 }
 
 // =============================================================================

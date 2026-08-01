@@ -1279,9 +1279,13 @@ static esp_err_t swarm_ping_handler(httpd_req_t *req)
 }
 
 // GET /api/swarm/stats -> {"tx":n,"rx":n,"txFail":n,"lastFrom":"aa:bb:cc:dd:ee:ff",
-//                           "dropAuth":n,"dropReplay":n,"relayed":n,"applied":n}
+//                           "dropAuth":n,"dropReplay":n,"relayed":n,"applied":n,
+//                           "stackFree":n}
 // PlanV3 V2.5 Task 3 — folds swarm.c's protocol-layer counters (Task 2) in
-// alongside swarm_radio's link-layer counters (Task 1).
+// alongside swarm_radio's link-layer counters (Task 1). `stackFree` is the
+// swarm worker task's FreeRTOS stack high-water mark in bytes (0 if the
+// worker isn't running) — instrumentation for the 4 KB stack js_api_play
+// runs on inside that task.
 static esp_err_t swarm_stats_handler(httpd_req_t *req)
 {
     if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
@@ -1292,15 +1296,18 @@ static esp_err_t swarm_stats_handler(httpd_req_t *req)
     swarm_radio_last_from(mac);
     uint32_t drop_auth = 0, drop_replay = 0, relayed = 0, applied = 0;
     swarm_debug_stats(&drop_auth, &drop_replay, &relayed, &applied);
-    char resp[256];
+    uint32_t stack_free = swarm_worker_stack_free();
+    char resp[288];
     snprintf(resp, sizeof(resp),
              "{\"tx\":%lu,\"rx\":%lu,\"txFail\":%lu,"
              "\"lastFrom\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
-             "\"dropAuth\":%lu,\"dropReplay\":%lu,\"relayed\":%lu,\"applied\":%lu}",
+             "\"dropAuth\":%lu,\"dropReplay\":%lu,\"relayed\":%lu,\"applied\":%lu,"
+             "\"stackFree\":%lu}",
              (unsigned long)tx, (unsigned long)rx, (unsigned long)tx_fail,
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
              (unsigned long)drop_auth, (unsigned long)drop_replay,
-             (unsigned long)relayed, (unsigned long)applied);
+             (unsigned long)relayed, (unsigned long)applied,
+             (unsigned long)stack_free);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, resp);
     return ESP_OK;

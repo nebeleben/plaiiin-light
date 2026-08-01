@@ -73,6 +73,13 @@ void swarm_notify_state(void);
 void swarm_debug_stats(uint32_t *drop_auth, uint32_t *drop_replay,
                         uint32_t *relayed, uint32_t *applied);
 
+/** FreeRTOS stack high-water mark for the swarm worker task (js_api_play
+ *  runs on this 4 KB task), in bytes: the smallest amount of headroom the
+ *  task has ever had, since it started. Returns 0 if the worker task isn't
+ *  running (not an active member, or not yet activated). For
+ *  /api/swarm/stats instrumentation only — not a control input. */
+uint32_t swarm_worker_stack_free(void);
+
 #ifdef __cplusplus
 }
 #endif
