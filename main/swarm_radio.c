@@ -24,6 +24,17 @@ static uint8_t s_last_from[6] = { 0 };   // written by the esp_now recv callback
 
 static swarm_radio_rx_cb_t s_user_rx_cb = NULL;
 
+// PlanV3 V2.5 follow-up — the broadcast peer must live on an UP interface.
+// AP-only (AP-less onboarding) → WIFI_IF_AP; STA or APSTA → WIFI_IF_STA.
+static wifi_interface_t swarm_radio_iface(void)
+{
+    wifi_mode_t mode = WIFI_MODE_NULL;
+    if (esp_wifi_get_mode(&mode) == ESP_OK && mode == WIFI_MODE_AP) {
+        return WIFI_IF_AP;
+    }
+    return WIFI_IF_STA;
+}
+
 static void swarm_recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, int len)
 {
     if (!info || !data || len <= 0) return;
@@ -66,7 +77,7 @@ esp_err_t swarm_radio_init(void)
         esp_now_peer_info_t peer = {0};
         memcpy(peer.peer_addr, kBroadcastMac, sizeof(peer.peer_addr));
         peer.channel = 0;              // current channel (STA's association)
-        peer.ifidx = WIFI_IF_STA;
+        peer.ifidx = swarm_radio_iface();
         peer.encrypt = false;
         err = esp_now_add_peer(&peer);
         if (err != ESP_OK) {
@@ -88,6 +99,19 @@ esp_err_t swarm_radio_send(const uint8_t *data, size_t len)
 
     s_tx++;
     esp_err_t err = esp_now_send(kBroadcastMac, data, len);
+    if (err == ESP_ERR_ESPNOW_IF) {
+        // The peer's interface is down (mode changed since init). Re-home the
+        // broadcast peer on the active interface and retry once.
+        esp_now_peer_info_t peer = {0};
+        memcpy(peer.peer_addr, kBroadcastMac, sizeof(peer.peer_addr));
+        peer.channel = 0;
+        peer.ifidx = swarm_radio_iface();
+        peer.encrypt = false;
+        esp_now_del_peer(kBroadcastMac);
+        if (esp_now_add_peer(&peer) == ESP_OK) {
+            err = esp_now_send(kBroadcastMac, data, len);
+        }
+    }
     if (err != ESP_OK) {
         // Synchronous failure (e.g. internal queue full) — the send callback
         // never fires for a packet that was never queued, so count it here.

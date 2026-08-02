@@ -601,8 +601,29 @@ static void swarm_worker_task(void *arg)
 // lamp costs a harmlessly idling task, not stale behavior.
 // =============================================================================
 
+// PlanV3 V2.5 follow-up — while STA-associated, the swarm's effective radio
+// channel IS the AP's channel. Capture it into s_channel (and persist) so a
+// swarm joined with channel 0 (what the apps send) has a concrete channel to
+// pin to if this lamp later runs AP-less. No-op / skipped when not associated
+// (an AP-less lamp keeps the last-captured channel).
+static void swarm_capture_live_channel(void)
+{
+    if (!wifi_is_connected()) return;
+    uint8_t primary = 0;
+    wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
+    if (esp_wifi_get_channel(&primary, &second) != ESP_OK) return;
+    if (primary < 1 || primary > 14) return;
+    if ((int)primary != s_channel) {
+        s_channel = primary;
+        config_store_set_i32(CONFIG_KEY_SW_CHAN, s_channel);
+        ESP_LOGI(TAG, "captured live channel %d for AP-less pinning", s_channel);
+    }
+}
+
 static void swarm_activate(void)
 {
+    swarm_capture_live_channel();
+
     if (!s_own_mac_valid) {
         if (esp_wifi_get_mac(WIFI_IF_STA, s_own_mac) == ESP_OK) {
             s_own_mac_valid = true;
