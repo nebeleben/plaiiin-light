@@ -99,9 +99,12 @@ esp_err_t swarm_radio_send(const uint8_t *data, size_t len)
 
     s_tx++;
     esp_err_t err = esp_now_send(kBroadcastMac, data, len);
-    if (err == ESP_ERR_ESPNOW_IF) {
-        // The peer's interface is down (mode changed since init). Re-home the
-        // broadcast peer on the active interface and retry once.
+    if (err == ESP_ERR_ESPNOW_IF || err == ESP_ERR_ESPNOW_NOT_FOUND) {
+        // The peer's interface is down (mode changed since init) or the peer
+        // itself is missing — e.g. a prior re-home's esp_now_del_peer()
+        // succeeded but its esp_now_add_peer() failed, leaving no peer at
+        // all. Either way: re-home the broadcast peer on the active
+        // interface and retry once.
         esp_now_peer_info_t peer = {0};
         memcpy(peer.peer_addr, kBroadcastMac, sizeof(peer.peer_addr));
         peer.channel = 0;

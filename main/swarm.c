@@ -571,9 +571,40 @@ static int64_t now_ms(void)
     return esp_timer_get_time() / 1000;
 }
 
+// PlanV3 V2.5 follow-up — while STA-associated, the swarm's effective radio
+// channel IS the AP's channel. Capture it into s_channel (and persist) so a
+// swarm joined with channel 0 (what the apps send) has a concrete channel to
+// pin to if this lamp later runs AP-less. No-op / skipped when not associated
+// (an AP-less lamp keeps the last-captured channel). Called both at
+// swarm_activate() and periodically from the worker task (see below) — the
+// worker call is required because swarm_init() runs at boot before the STA
+// has an IP, so wifi_is_connected() is reliably false at activate-time on a
+// fresh boot; the periodic recapture self-heals that boot-timing gap, picks
+// up pre-fix channel:0 migrations, and tracks live AP channel drift.
+static void swarm_capture_live_channel(void)
+{
+    if (!wifi_is_connected()) return;
+    uint8_t primary = 0;
+    wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
+    if (esp_wifi_get_channel(&primary, &second) != ESP_OK) return;
+    if (primary < 1 || primary > 14) return;
+    if ((int)primary != s_channel) {
+        s_channel = primary;
+        config_store_set_i32(CONFIG_KEY_SW_CHAN, s_channel);
+        ESP_LOGI(TAG, "captured live channel %d for AP-less pinning", s_channel);
+    }
+}
+
 static void swarm_worker_task(void *arg)
 {
     (void)arg;
+    // Loop iterations are bounded above by the ~100ms xQueueReceive timeout
+    // below, so ~300 iterations is roughly 30s. The exact period isn't
+    // critical — this just needs to run occasionally, not every iteration
+    // (see swarm_capture_live_channel()'s comment for why it's needed here
+    // at all: boot runs before got-IP, so the activate()-time call alone
+    // misses virtually every boot).
+    int recapture_countdown = 0;
     for (;;) {
         swarm_rx_item_t item;
         BaseType_t got = xQueueReceive(s_rx_queue, &item, pdMS_TO_TICKS(100));
@@ -586,6 +617,11 @@ static void swarm_worker_task(void *arg)
                 s_tx_pending = false;
                 swarm_broadcast_snapshot();
             }
+        }
+
+        if (--recapture_countdown <= 0) {
+            recapture_countdown = 300;
+            swarm_capture_live_channel();
         }
     }
 }
@@ -600,25 +636,6 @@ static void swarm_worker_task(void *arg)
 // work on s_member/s_enabled internally, so a disabled-but-once-activated
 // lamp costs a harmlessly idling task, not stale behavior.
 // =============================================================================
-
-// PlanV3 V2.5 follow-up — while STA-associated, the swarm's effective radio
-// channel IS the AP's channel. Capture it into s_channel (and persist) so a
-// swarm joined with channel 0 (what the apps send) has a concrete channel to
-// pin to if this lamp later runs AP-less. No-op / skipped when not associated
-// (an AP-less lamp keeps the last-captured channel).
-static void swarm_capture_live_channel(void)
-{
-    if (!wifi_is_connected()) return;
-    uint8_t primary = 0;
-    wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
-    if (esp_wifi_get_channel(&primary, &second) != ESP_OK) return;
-    if (primary < 1 || primary > 14) return;
-    if ((int)primary != s_channel) {
-        s_channel = primary;
-        config_store_set_i32(CONFIG_KEY_SW_CHAN, s_channel);
-        ESP_LOGI(TAG, "captured live channel %d for AP-less pinning", s_channel);
-    }
-}
 
 static void swarm_activate(void)
 {
