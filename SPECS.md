@@ -405,19 +405,20 @@ device configuration, not network-transient state.
 **Channel caveat (honesty note).** When a lamp is associated to its home
 AP, ESP-NOW rides the AP's WiFi channel automatically — nothing to
 configure. A lamp running AP-less (BLE-only onboarding, no WiFi
-association) instead pins its radio to the swarm's stored `sw_chan`, set
-at join time. Hardware-verified 2026-08-02: an AP-less member correctly
-**receives and applies** swarm state (power/color/brightness/mode+effect)
-in real time. Two gaps found and open as follow-ups: (1) `sw_chan` must
-be a concrete channel — a swarm joined with `channel:0` (the value the
-apps send) does **not** resolve 0 to the current STA channel at join, so
-an AP-less member of a `channel:0` swarm won't pin correctly; the fix is
-to capture the associated channel at join when 0 is requested. (2) An
-AP-less member cannot **relay** (hop 0 → 1): the ESP-NOW broadcast peer is
-bound to `WIFI_IF_STA`, which is down while AP-only, so re-broadcast fails
-with `ESP_ERR_ESPNOW_IF` — AP-less lamps receive/apply but can't extend
-the mesh past their own radio range until the peer is bound to the active
-interface dynamically.
+association) instead pins its radio to the swarm's stored `sw_chan`.
+Because the effective channel while associated *is* the AP's channel, a
+member captures it live (at join, at enable, and periodically in the
+worker task) and persists it into `sw_chan` — so a swarm joined with
+`channel:0` (the value the apps send) resolves to the real channel that an
+eventual AP-less transition needs. Hardware-verified end-to-end
+2026-08-02: with a `channel:0`-provisioned swarm, an AP-less member pins
+to the resolved channel with no manual configuration, and correctly
+**receives, applies, and relays** swarm state — the broadcast peer binds
+to `WIFI_IF_AP` while AP-only (was hardwired to `WIFI_IF_STA`, which is
+down AP-less), with a send-time re-home on `ESP_ERR_ESPNOW_IF`/`NOT_FOUND`
+covering runtime mode changes. Note: an AP-less member sitting on the same
+channel as its associated peers is *not* isolated — it participates fully
+in the swarm (receives and originates), by design.
 
 **Other caveats.** Multi-hop relay (hop 0 → 1) is implemented and
 hardware-verified 2026-08-02 on a 3-lamp bench: state changes converge on
