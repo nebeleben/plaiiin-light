@@ -406,18 +406,26 @@ device configuration, not network-transient state.
 AP, ESP-NOW rides the AP's WiFi channel automatically — nothing to
 configure. A lamp running AP-less (BLE-only onboarding, no WiFi
 association) instead pins its radio to the swarm's stored `sw_chan`, set
-at join time — this path is implemented and shipped, but has **not yet
-been hardware-verified**; both bench lamps used for verification were
-associated to the same home AP. Verifying the AP-less path is tracked as
-a follow-up (PlanV3 Phase V2.5).
+at join time. Hardware-verified 2026-08-02: an AP-less member correctly
+**receives and applies** swarm state (power/color/brightness/mode+effect)
+in real time. Two gaps found and open as follow-ups: (1) `sw_chan` must
+be a concrete channel — a swarm joined with `channel:0` (the value the
+apps send) does **not** resolve 0 to the current STA channel at join, so
+an AP-less member of a `channel:0` swarm won't pin correctly; the fix is
+to capture the associated channel at join when 0 is requested. (2) An
+AP-less member cannot **relay** (hop 0 → 1): the ESP-NOW broadcast peer is
+bound to `WIFI_IF_STA`, which is down while AP-only, so re-broadcast fails
+with `ESP_ERR_ESPNOW_IF` — AP-less lamps receive/apply but can't extend
+the mesh past their own radio range until the peer is bound to the active
+interface dynamically.
 
 **Other caveats.** Multi-hop relay (hop 0 → 1) is implemented and
-shipped, but hardware verification so far covers only a 2-lamp bench —
-single-hop, no actual relay traversal exercised; a 3+-lamp multi-hop test
-is a follow-up. Broadcast delivery is best-effort — ESP-NOW has no
-application-layer ack/retry — but because every packet is a full state
-snapshot rather than a delta, a dropped packet self-heals on the origin's
-next change.
+hardware-verified 2026-08-02 on a 3-lamp bench: state changes converge on
+all members, the de-dupe table rejects redundant relayed copies, and
+total traffic stays bounded (no loops). Broadcast delivery is best-effort
+— ESP-NOW has no application-layer ack/retry — but because every packet
+is a full state snapshot rather than a delta, a dropped packet self-heals
+on the origin's next change.
 
 See [`docs/protocol.md`](docs/protocol.md#swarm-mode-esp-now-plsw-v1) for
 the byte-precise packet format and the `/api/swarm*` wire contract.
