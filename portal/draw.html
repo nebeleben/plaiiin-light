@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PlaiiinLight - Draw</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+/* Pixel-grid editor — reuses .led-grid / .px from style.css. */
+#drawGrid{touch-action:none;user-select:none;-webkit-user-select:none;cursor:crosshair}
+#drawGrid .px{cursor:crosshair}
+.tools{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.tool-btn{padding:7px 14px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text-dim);font-size:.82rem;font-weight:500;cursor:pointer;transition:background .2s,color .2s,border-color .2s}
+.tool-btn:hover{border-color:var(--accent)}
+.tool-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.brush-row{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.brush-row label{margin-bottom:0;min-width:52px}
+</style>
+</head>
+<body>
+<div class="nav">
+<a href="/control">Control</a>
+<a href="/stream">Stream</a>
+<a href="/compose">Compose</a>
+<a href="/draw" class="active">Draw</a>
+<a href="/js">Scripts</a>
+<a href="/config">Config</a>
+<a href="/network">Network</a>
+<a href="/mqtt">MQTT</a>
+<a href="/ota">OTA</a>
+<a href="/api">API</a>
+</div>
+<div class="card" style="max-width:520px">
+<div class="hdr">
+<h1>Draw</h1>
+<button type="button" class="icon-btn" id="themeBtn" title="Toggle light/dark"></button>
+</div>
+
+<div style="text-align:center;margin-bottom:14px">
+<div id="drawGrid" style="display:inline-block"></div>
+<div style="font-size:.7rem;color:var(--text-dim);margin-top:4px" id="gridLabel"></div>
+</div>
+
+<div class="tools">
+<button type="button" class="tool-btn active" data-tool="paint" id="toolPaint">Paint</button>
+<button type="button" class="tool-btn" data-tool="erase" id="toolErase">Erase</button>
+<button type="button" class="tool-btn" data-tool="fill" id="toolFill">Fill</button>
+<button type="button" class="tool-btn" id="btnClear">Clear</button>
+</div>
+
+<div class="brush-row">
+<label for="brushColor">Color</label>
+<input type="color" id="brushColor" class="color-input" value="#ff0000">
+</div>
+
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+<span style="font-size:.78rem;color:var(--text-dim);min-width:62px">Brightness</span>
+<input type="range" id="brightnessSlider" min="0" max="255" value="255" style="flex:1;accent-color:var(--accent)">
+<span id="brightnessVal" style="font-size:.85rem;min-width:36px;text-align:right">100%</span>
+</div>
+
+<div style="display:flex;gap:10px;margin-bottom:8px">
+<button type="button" class="power-btn off-btn" id="btnPower" style="flex:0 0 auto;min-width:110px">Turn On</button>
+<button type="button" class="apply-btn" id="btnPush" style="flex:1">Push to Lamp</button>
+</div>
+<div class="msg" id="statusMsg"></div>
+
+<div class="info-bar"><span id="ledInfo"></span></div>
+</div>
+<p class="copyright">&copy; <a href="https://plaiiin.com">plaiiin.com</a></p>
+
+<!-- NB: this page PUSHES a single frame (POST /api/frame + mode:frame). Live
+     WebSocket streaming (as /stream and /compose do) is intentionally out of
+     scope here; it would be a natural follow-up if per-stroke live paint is
+     ever wanted. -->
+<script>
+var gridW=8,gridH=8,ledCount=64;
+// Per-cell RGB model, row-major (index = y*gridW + x). DOM .px elements track it.
+var cells=[],pxEls=[];
+var tool='paint';           // paint | erase | fill
+var painting=false;
+
+// --- Theme (verbatim from compose.html) ------------------------------------
+var dark=localStorage.getItem('theme')!=='light';
+function applyTheme(){document.body.classList.toggle('light',!dark);document.getElementById('themeBtn').textContent=dark?'☀':'☾';}
+applyTheme();
+document.getElementById('themeBtn').onclick=function(){dark=!dark;localStorage.setItem('theme',dark?'dark':'light');applyTheme();};
+
+// --- Helpers ---------------------------------------------------------------
+function hexToRgb(h){h=h.replace('#','');return [parseInt(h.substr(0,2),16)||0,parseInt(h.substr(2,2),16)||0,parseInt(h.substr(4,2),16)||0];}
+function rgbCss(c){return 'rgb('+c[0]+','+c[1]+','+c[2]+')';}
+function status(msg,ok){var el=document.getElementById('statusMsg');el.textContent=msg;el.className='msg '+(ok?'ok':(ok===false?'err':''));}
+
+// --- Grid ------------------------------------------------------------------
+function buildGrid(){
+  var el=document.getElementById('drawGrid');el.innerHTML='';
+  var sz=Math.max(6,Math.min(Math.floor(300/Math.max(gridW,gridH)),30));
+  var g=document.createElement('div');g.className='led-grid';g.id='ledGridInner';
+  g.style.gridTemplateColumns='repeat('+gridW+','+sz+'px)';
+  var total=gridW*gridH;
+  cells=[];pxEls=[];
+  for(var i=0;i<total;i++){
+    if(!cells[i])cells[i]=[0,0,0];
+    var p=document.createElement('div');p.className='px';
+    p.style.width=sz+'px';p.style.height=sz+'px';
+    p.style.background=rgbCss(cells[i]);
+    p.setAttribute('data-idx',i);
+    g.appendChild(p);pxEls.push(p);
+  }
+  el.appendChild(g);
+  document.getElementById('gridLabel').textContent=gridW+'x'+gridH+' pixels';
+}
+function paintCell(idx,rgb){
+  if(idx<0||idx>=cells.length)return;
+  cells[idx]=rgb.slice(0,3);
+  pxEls[idx].style.background=rgbCss(cells[idx]);
+}
+// Flood-fill the clicked cell's connected same-color region (4-neighbour BFS).
+function floodFill(startIdx,rgb){
+  var target=cells[startIdx];
+  if(target[0]===rgb[0]&&target[1]===rgb[1]&&target[2]===rgb[2])return;
+  var tx=target[0],ty=target[1],tz=target[2];
+  var stack=[startIdx],seen={};
+  while(stack.length){
+    var i=stack.pop();
+    if(seen[i])continue;seen[i]=1;
+    var c=cells[i];
+    if(c[0]!==tx||c[1]!==ty||c[2]!==tz)continue;
+    paintCell(i,rgb);
+    var x=i%gridW,y=Math.floor(i/gridW);
+    if(x>0)stack.push(i-1);
+    if(x<gridW-1)stack.push(i+1);
+    if(y>0)stack.push(i-gridW);
+    if(y<gridH-1)stack.push(i+gridW);
+  }
+}
+// Apply the active tool at one cell.
+function applyTool(idx){
+  if(idx==null||idx<0)return;
+  if(tool==='fill'){floodFill(idx,hexToRgb(document.getElementById('brushColor').value));return;}
+  var rgb=tool==='erase'?[0,0,0]:hexToRgb(document.getElementById('brushColor').value);
+  paintCell(idx,rgb);
+}
+// Resolve the .px cell under a pointer event (works for mouse + touch drag).
+function idxUnder(e){
+  var t=document.elementFromPoint(e.clientX,e.clientY);
+  if(t&&t.classList&&t.classList.contains('px')){var a=t.getAttribute('data-idx');if(a!=null)return parseInt(a,10);}
+  return null;
+}
+
+var gridEl=document.getElementById('drawGrid');
+gridEl.addEventListener('pointerdown',function(e){
+  e.preventDefault();
+  var idx=idxUnder(e);
+  if(idx==null)return;
+  if(tool==='fill'){applyTool(idx);return;}   // fill is a single click, no drag
+  painting=true;applyTool(idx);
+});
+document.addEventListener('pointermove',function(e){
+  if(!painting)return;
+  e.preventDefault();
+  var idx=idxUnder(e);
+  if(idx!=null)applyTool(idx);
+});
+document.addEventListener('pointerup',function(){painting=false;});
+document.addEventListener('pointercancel',function(){painting=false;});
+
+buildGrid();  // draw with 8x8 defaults immediately
+
+// --- Tool selection --------------------------------------------------------
+function setTool(t){
+  tool=t;
+  ['toolPaint','toolErase','toolFill'].forEach(function(id){document.getElementById(id).classList.remove('active');});
+  if(t==='paint')document.getElementById('toolPaint').classList.add('active');
+  else if(t==='erase')document.getElementById('toolErase').classList.add('active');
+  else if(t==='fill')document.getElementById('toolFill').classList.add('active');
+}
+document.getElementById('toolPaint').onclick=function(){setTool('paint');};
+document.getElementById('toolErase').onclick=function(){setTool('erase');};
+document.getElementById('toolFill').onclick=function(){setTool('fill');};
+document.getElementById('btnClear').onclick=function(){for(var i=0;i<cells.length;i++)paintCell(i,[0,0,0]);status('Cleared',null);};
+
+// --- Geometry (mirrors compose.html: prefer logical dimensions) ------------
+fetch('/api?_='+Date.now()).then(function(r){return r.json()}).then(function(d){
+  ledCount=d.ledCount||64;
+  var lw=d.logicalW||0, lh=d.logicalH||0;
+  var pgW=d.pixelGroupW||1, pgH=d.pixelGroupH||1;
+  var pgLabel=(pgW>1||pgH>1)?' | pxGroup '+pgW+'×'+pgH:'';
+  document.getElementById('ledInfo').textContent=
+    d.ledCount+' LEDs | '+(d.lampType||'?')+' | GPIO '+d.ledPin+pgLabel;
+  if(lw>0&&lh>0){gridW=lw;gridH=lh;}
+  else{
+    var lt=(d.lampType||'').toLowerCase();
+    var m=lt.match(/(\d+)\s*x\s*(\d+)/);
+    if(m){gridW=parseInt(m[1]);gridH=parseInt(m[2]);}
+    else if(lt.indexOf('matrix')!==-1){gridW=Math.round(Math.sqrt(ledCount));gridH=Math.ceil(ledCount/gridW);}
+    else{gridW=ledCount;gridH=1;}
+  }
+  buildGrid();
+  loadFrame();   // seed from device once geometry is known
+}).catch(function(e){
+  document.getElementById('ledInfo').textContent='API unavailable: '+e.message;
+  loadFrame();
+});
+
+// --- Load current frame on open --------------------------------------------
+// GET /api/frame → 200 with raw RGB (gridW*gridH*3) + X-Frame-W/H, or 404 none.
+function loadFrame(){
+  fetch('/api/frame?_='+Date.now()).then(function(r){
+    if(r.status===404)return null;
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    var fw=parseInt(r.headers.get('X-Frame-W'),10);
+    var fh=parseInt(r.headers.get('X-Frame-H'),10);
+    return r.arrayBuffer().then(function(buf){return {buf:buf,fw:fw,fh:fh};});
+  }).then(function(res){
+    if(!res)return;   // no frame stored — leave grid black
+    // If the stored frame's geometry differs from what /api reported, trust
+    // the frame headers so the raster lines up 1:1.
+    if(res.fw>0&&res.fh>0&&(res.fw!==gridW||res.fh!==gridH)){gridW=res.fw;gridH=res.fh;buildGrid();}
+    var data=new Uint8Array(res.buf);
+    var total=gridW*gridH;
+    for(var i=0;i<total&&i*3+2<data.length;i++){
+      paintCell(i,[data[i*3],data[i*3+1],data[i*3+2]]);
+    }
+    status('Loaded current frame',null);
+  }).catch(function(){/* no frame / not authed — silent, grid stays black */});
+}
+
+// --- Brightness (from compose.html, but POST on `change` only) --------------
+// Per the apps fix: POST only on release (change), NOT per-tick (input), or a
+// dragged slider floods the ESP32 httpd and can wedge it.
+var bSlider=document.getElementById('brightnessSlider');
+var bVal=document.getElementById('brightnessVal');
+fetch('/api/brightness').then(function(r){return r.json()}).then(function(d){
+  bSlider.value=d.brightness;
+  bVal.textContent=Math.round(d.brightness/2.55)+'%';
+}).catch(function(){});
+bSlider.oninput=function(){bVal.textContent=Math.round(this.value/2.55)+'%';};  // label only
+bSlider.onchange=function(){
+  var v=this.value;
+  fetch('/api/brightness',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"brightness":'+v+'}'});
+};
+
+// --- On/Off ----------------------------------------------------------------
+var powerOn=false;
+function renderPower(){
+  var b=document.getElementById('btnPower');
+  if(powerOn){b.textContent='Turn Off';b.className='power-btn on-btn';}
+  else{b.textContent='Turn On';b.className='power-btn off-btn';}
+}
+fetch('/api/state').then(function(r){return r.json()}).then(function(s){powerOn=!!s.on;renderPower();}).catch(function(){renderPower();});
+document.getElementById('btnPower').onclick=function(){
+  powerOn=!powerOn;renderPower();
+  fetch('/api/power',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({on:powerOn})})
+    .catch(function(e){status('Power failed: '+e.message,false);});
+};
+
+// --- Push ------------------------------------------------------------------
+// Serialize the grid to raw RGB (row-major, gridW*gridH*3), POST to /api/frame
+// as application/octet-stream, then switch the lamp to `frame` mode.
+document.getElementById('btnPush').onclick=function(){
+  var total=gridW*gridH;
+  var buf=new Uint8Array(total*3);
+  for(var i=0;i<total;i++){var c=cells[i]||[0,0,0];buf[i*3]=c[0];buf[i*3+1]=c[1];buf[i*3+2]=c[2];}
+  status('Pushing…',null);
+  fetch('/api/frame',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:buf})
+    .then(function(r){if(!r.ok)return r.text().then(function(t){throw new Error('HTTP '+r.status+' '+t.slice(0,120));});return r.json();})
+    .then(function(){
+      return fetch('/api/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"mode":"frame"}'});
+    })
+    .then(function(r){if(!r.ok)throw new Error('mode HTTP '+r.status);status('Pushed to lamp',true);})
+    .catch(function(e){status('Push failed: '+e.message,false);});
+};
+</script>
+</body>
+</html>

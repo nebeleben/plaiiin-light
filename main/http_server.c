@@ -261,6 +261,8 @@ extern const uint8_t test_html_start[] asm("_binary_test_html_start");
 extern const uint8_t test_html_end[]   asm("_binary_test_html_end");
 extern const uint8_t compose_html_start[] asm("_binary_compose_html_start");
 extern const uint8_t compose_html_end[]   asm("_binary_compose_html_end");
+extern const uint8_t draw_html_start[] asm("_binary_draw_html_start");
+extern const uint8_t draw_html_end[]   asm("_binary_draw_html_end");
 extern const uint8_t mqtt_html_start[] asm("_binary_mqtt_html_start");
 extern const uint8_t mqtt_html_end[]   asm("_binary_mqtt_html_end");
 extern const uint8_t js_html_start[] asm("_binary_js_html_start");
@@ -460,6 +462,9 @@ static esp_err_t root_redirect_handler(httpd_req_t *req)
 }
 static esp_err_t test_page_handler(httpd_req_t *req) { send_html(req, test_html_start, test_html_end); return ESP_OK; }
 static esp_err_t compose_page_handler(httpd_req_t *req) { send_html_for(req, compose_html_start, compose_html_end, "compose"); return ESP_OK; }
+// page_id "draw" gets plk-token (for authenticated POST /api/frame) but NOT the
+// compose-only AI-key branch in build_meta_block.
+static esp_err_t draw_page_handler(httpd_req_t *req) { send_html_for(req, draw_html_start, draw_html_end, "draw"); return ESP_OK; }
 static esp_err_t mqtt_page_handler(httpd_req_t *req) { send_html(req, mqtt_html_start, mqtt_html_end); return ESP_OK; }
 static esp_err_t js_page_handler(httpd_req_t *req) { send_html(req, js_html_start, js_html_end); return ESP_OK; }
 
@@ -621,6 +626,13 @@ httpd_handle_t http_server_start(void)
         .handler = compose_page_handler
     };
     httpd_register_uri_handler(server, &compose_page);
+
+    httpd_uri_t draw_page = {
+        .uri = "/draw",
+        .method = HTTP_GET,
+        .handler = draw_page_handler
+    };
+    httpd_register_uri_handler(server, &draw_page);
 
     httpd_uri_t mqtt_page = { .uri = "/mqtt", .method = HTTP_GET, .handler = mqtt_page_handler };
     httpd_register_uri_handler(server, &mqtt_page);

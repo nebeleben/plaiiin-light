@@ -118,6 +118,7 @@ idf_component_register(
         "../portal/network.html"
         "../portal/test.html"
         "../portal/compose.html"
+        "../portal/draw.html"
         "../portal/ota.html"
         "../portal/mqtt.html"
         "../portal/js.html"
