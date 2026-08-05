@@ -454,7 +454,7 @@ static esp_err_t control_page_handler(httpd_req_t *req) { send_html(req, control
 // split the captive-portal probe handlers use.
 static esp_err_t root_redirect_handler(httpd_req_t *req)
 {
-    const char *target = (wifi_get_mode() == PLAIIIN_WIFI_AP) ? "/network" : "/control";
+    const char *target = (wifi_get_mode() == PLAIIIN_WIFI_AP) ? CAPTIVE_PORTAL_URL : "/control";
     httpd_resp_set_status(req, "302 Found");
     httpd_resp_set_hdr(req, "Location", target);
     httpd_resp_send(req, NULL, 0);

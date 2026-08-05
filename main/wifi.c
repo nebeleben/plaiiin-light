@@ -105,9 +105,13 @@ static esp_err_t start_ap(void)
 
     // Offer the AP's own IP as the DHCP DNS server (option 6) so clients that
     // honor it resolve captive-probe hostnames straight to us, no wildcard
-    // DNS responder needed for those. Must land before esp_wifi_start(): the
-    // DHCP server (re)starts with esp_wifi_start() and clients can begin
-    // requesting leases immediately after.
+    // DNS responder needed for those. ap_netif is freshly created here, so
+    // DHCPS is still ESP_NETIF_DHCP_INIT — it isn't running yet (per IDF
+    // v5.3.2, that only happens when esp_wifi_start() fires
+    // WIFI_EVENT_AP_START). This stop/set/option/start sequence primes the
+    // OFFER_DNS option into the not-yet-running server's state (tolerated
+    // from INIT) so it's already in place once esp_wifi_start() actually
+    // starts the DHCP server and clients can begin requesting leases.
     esp_netif_dns_info_t dns = {0};
     dns.ip.type = ESP_IPADDR_TYPE_V4;
     dns.ip.u_addr.ip4.addr = ESP_IP4TOADDR(192, 168, 4, 1);

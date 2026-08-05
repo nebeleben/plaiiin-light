@@ -165,7 +165,7 @@ static esp_err_t captive_redirect_handler(httpd_req_t *req)
         return ESP_OK;
     }
     httpd_resp_set_status(req, "302 Found");
-    httpd_resp_set_hdr(req, "Location", "/network");
+    httpd_resp_set_hdr(req, "Location", CAPTIVE_PORTAL_URL);
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
 }
@@ -181,13 +181,14 @@ static esp_err_t captive_redirect_handler(httpd_req_t *req)
 
 static esp_err_t captive_404_handler(httpd_req_t *req, httpd_err_code_t err)
 {
+    (void)err;
     if (wifi_get_mode() == PLAIIIN_WIFI_AP) {
         httpd_resp_set_status(req, "302 Found");
-        httpd_resp_set_hdr(req, "Location", "/network");
+        httpd_resp_set_hdr(req, "Location", CAPTIVE_PORTAL_URL);
         httpd_resp_send(req, NULL, 0);
         return ESP_OK;
     }
-    return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, NULL);
+    return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
 }
 
 // --- Registration ---
