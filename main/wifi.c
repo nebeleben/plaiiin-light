@@ -1,6 +1,7 @@
 #include "wifi.h"
 #include "config_store.h"
 #include "pairing.h"
+#include "captive_dns.h"
 #include "esp_wifi.h"
 #include "esp_check.h"
 #include "esp_event.h"
@@ -71,7 +72,7 @@ static esp_err_t start_sta(void)
 
 static esp_err_t start_ap(void)
 {
-    esp_netif_create_default_wifi_ap();
+    esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
 
     // Build SSID = <node_name>-<MAC suffix>. node_name comes from NVS so a
     // profile-burned lamp ("tower8v2") shows up as "tower8v2-3FA8" instead of
@@ -101,9 +102,26 @@ static esp_err_t start_ap(void)
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
+
+    // Offer the AP's own IP as the DHCP DNS server (option 6) so clients that
+    // honor it resolve captive-probe hostnames straight to us, no wildcard
+    // DNS responder needed for those. Must land before esp_wifi_start(): the
+    // DHCP server (re)starts with esp_wifi_start() and clients can begin
+    // requesting leases immediately after.
+    esp_netif_dns_info_t dns = {0};
+    dns.ip.type = ESP_IPADDR_TYPE_V4;
+    dns.ip.u_addr.ip4.addr = ESP_IP4TOADDR(192, 168, 4, 1);
+    uint8_t offer_dns = 1;  /* enable DHCP option 6 (DNS server) */
+    ESP_ERROR_CHECK(esp_netif_dhcps_stop(ap_netif));
+    ESP_ERROR_CHECK(esp_netif_set_dns_info(ap_netif, ESP_NETIF_DNS_MAIN, &dns));
+    ESP_ERROR_CHECK(esp_netif_dhcps_option(ap_netif, ESP_NETIF_OP_SET,
+                      ESP_NETIF_DOMAIN_NAME_SERVER, &offer_dns, sizeof(offer_dns)));
+    ESP_ERROR_CHECK(esp_netif_dhcps_start(ap_netif));
+
     ESP_ERROR_CHECK(esp_wifi_start());
 
     s_mode = PLAIIIN_WIFI_AP;
+    captive_dns_start();
     ESP_LOGI(TAG, "AP mode started: '%s'", ssid);
     return ESP_OK;
 }
@@ -116,6 +134,7 @@ esp_err_t wifi_provisioning_ap_stop(void)
 {
     if (s_mode != PLAIIIN_WIFI_AP) return ESP_OK;
     ESP_LOGI(TAG, "stopping provisioning AP (lamp claimed over BLE)");
+    captive_dns_stop();
     esp_err_t err = esp_wifi_stop();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "esp_wifi_stop err=%s", esp_err_to_name(err));
