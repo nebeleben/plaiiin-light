@@ -170,6 +170,26 @@ static esp_err_t captive_redirect_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// --- Catch-all 404 -> /network (AP mode only) ---
+//
+// Windows' captive-portal probe (and any other unmatched path) doesn't hit
+// a fixed set of URIs the way Apple/Android's do, so it can't be covered by
+// registering more httpd_uri_t routes without burning slots we don't have
+// headroom for (see the max_uri_handlers note in http_server.c). Instead
+// this hooks the server's HTTPD_404_NOT_FOUND error handler, which costs
+// zero URI slots and fires for anything no registered handler matched.
+
+static esp_err_t captive_404_handler(httpd_req_t *req, httpd_err_code_t err)
+{
+    if (wifi_get_mode() == PLAIIIN_WIFI_AP) {
+        httpd_resp_set_status(req, "302 Found");
+        httpd_resp_set_hdr(req, "Location", "/network");
+        httpd_resp_send(req, NULL, 0);
+        return ESP_OK;
+    }
+    return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, NULL);
+}
+
 // --- Registration ---
 
 esp_err_t captive_portal_register(httpd_handle_t server)
@@ -190,4 +210,9 @@ esp_err_t captive_portal_register(httpd_handle_t server)
     httpd_register_uri_handler(server, &r2);
 
     return ESP_OK;
+}
+
+esp_err_t captive_portal_register_err_handler(httpd_handle_t server)
+{
+    return httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, captive_404_handler);
 }

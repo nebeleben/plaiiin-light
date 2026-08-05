@@ -651,6 +651,9 @@ httpd_handle_t http_server_start(void)
     httpd_register_uri_handler(server, &form_prompt_del);
 
     captive_portal_register(server);
+    // Err-handler registration, not a URI handler -> costs zero
+    // max_uri_handlers slots regardless of ordering vs the calls above.
+    captive_portal_register_err_handler(server);
     light_api_register(server);
     ws_server_register(server);
     ota_update_register(server);
