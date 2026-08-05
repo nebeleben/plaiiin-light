@@ -62,6 +62,7 @@ idf_component_register(
         "config_store.c"
         "wifi.c"
         "captive_portal.c"
+        "captive_dns.c"
         "http_server.c"
         "ws_server.c"
         "led_control.c"
