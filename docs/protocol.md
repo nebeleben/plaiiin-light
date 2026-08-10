@@ -226,23 +226,50 @@ codes the server uses on mode changes.
 
 Used primarily for onboarding (no WiFi yet) and low-power control.
 
-| Characteristic | UUID suffix | Access | Purpose |
-|---|---|---|---|
-| `device_info`     | `…01` | read           | JSON shape matching `GET /api`. |
-| `wifi_ssid`       | `…02` | read / write   | SoftAP onboarding. |
-| `wifi_pass`       | `…03` | write          | — |
-| `power`           | `…04` | read / write   | Single byte. |
-| `color`           | `…05` | write          | `r g b` (3 bytes). |
-| `mode`            | `…06` | read / write   | One of `stream` · `api` · `js` · `frame`. |
-| `current_script`  | `…07` | read           | UTF-8 script name. |
-| `play_<n>`        | `…08…` | write         | Script-specific play knobs. |
-| `script_upload_*` | `…09…` | write         | Chunked script upload. |
-| `pair_token`      | `…0a` | read (encrypted) | Hand the HTTP token to a bonded peer. |
+All characteristics live under the vendor service
+`4d9b71c0-1f8e-4a1f-9b8c-3d2e1a0e5c00`; each characteristic's 128-bit UUID is
+that base with the last byte replaced by the **suffix** below (e.g.
+`device_info` = `…5c01`). Access: **R** read · **W** write · **N** notify.
+(Source of truth: `main/bt_service.c` `DEF_UUID(...)` and the characteristic
+table — keep this in sync with it.)
 
-Paired lamps require an encrypted/bonded link for any write
-(`BLE_GATT_CHR_F_WRITE_ENC`); sensitive reads (`current_script`,
-`pair_token`) require `READ_ENC`. Just-Works pairing is supported today;
-a passkey upgrade is on the roadmap.
+| Characteristic | Suffix | Access | Purpose |
+|---|---|---|---|
+| `device_info`    | `01` | R     | JSON shape matching `GET /api`. |
+| `wifi_scan`      | `02` | R W N | Write to start a WiFi scan; read/notify the result list. |
+| `wifi_config`    | `03` | W     | SoftAP onboarding — set home SSID + password. |
+| `wifi_status`    | `04` | R N   | WiFi connection status. |
+| `power`          | `05` | R W   | Single byte on/off. |
+| `color`          | `06` | R W   | `r g b` (3 bytes). |
+| `mode`           | `07` | R W   | One of `api` · `js` · `stream` · `frame`. |
+| `current_script` | `08` | R W N | Current script name (read encrypted when paired). |
+| `play_next`      | `09` | W     | Advance to the next script. |
+| `play_prev`      | `0a` | W     | Back to the previous script. |
+| `upload_meta`    | `0b` | W     | Chunked script upload — metadata. |
+| `upload_data`    | `0c` | W     | Chunked script upload — data chunks. |
+| `upload_status`  | `0d` | R N   | Script-upload progress / status. |
+| `pair_token`     | `0e` | R     | Hand the HTTP bearer token to a bonded peer (read encrypted). |
+| `pair_claim`     | `0f` | W     | Claim the lamp / mint a token (write encrypted). |
+| `pair_unpair`    | `10` | W     | Unpair (write encrypted). |
+| `brightness`     | `11` | R W   | Brightness (byte). |
+| `script_params`  | `12` | R W   | Script knobs / switches. |
+| `fps`            | `13` | R     | Current render FPS. |
+| `fetch_meta`     | `14` | R W   | Download a stored script — metadata. |
+| `fetch_data`     | `15` | R     | Download a stored script — data. |
+| `script_delete`  | `16` | W     | Delete a stored script. |
+| `script_stop`    | `17` | W     | Stop the current script. |
+| `device_name`    | `18` | W     | Set the node name. |
+| `form_set`       | `19` | W     | Set the lamp form. |
+| `ota_meta`       | `1a` | W     | OTA firmware upload — metadata. |
+| `ota_data`       | `1b` | W     | OTA firmware upload — data chunks. |
+| `ota_status`     | `1c` | R N   | OTA progress / status. |
+| `factory_reset`  | `1d` | W     | Factory reset. |
+
+Paired lamps require an encrypted/bonded link for every write
+(`BLE_GATT_CHR_F_WRITE_ENC`) and for the sensitive reads `current_script` and
+`pair_token` (`READ_ENC`); `pair_claim` / `pair_unpair` always require an
+encrypted write. Just-Works pairing is supported today; a passkey upgrade is
+on the roadmap.
 
 [`ble-share.md`](ble-share.md) documents a separate **client-to-client** BLE flow
 for handing share keys between phones — that one does not touch the
