@@ -21,6 +21,14 @@
 # Examples:
 #     ./scripts/profile-burn.sh /dev/cu.usbserial-0001 tower/tower8v2
 #     ./scripts/profile-burn.sh --full /dev/cu.usbserial-0001 tower/tower8v2
+#
+# hwtest bench harness only: if HWTEST_WIFI_SSID and HWTEST_WIFI_PASS are
+# both set in the environment, their values are folded into this same NVS
+# write as wifi_ssid/wifi_pass (see the CSV-generation block below) — so
+# hwtest/conftest.py's board fixture can provision WiFi creds in the SAME
+# write as the profile identity, instead of a second write that would
+# clobber this one. Ordinary manufacturing burns never set these env vars,
+# so this is a no-op for everyone else. Never pass creds as a CLI arg here.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -256,10 +264,24 @@ print(m.group(1) if m else '')
         echo "fire_hue_mask,data,string,$(csv_field "$fire_hue")"
         echo "fire_value_mask,data,string,$(csv_field "$fire_value")"
     fi
+
+    # --- hwtest bench harness only: WiFi creds, env-gated ---------------------
+    # See the header comment. Folded into this same CSV (same namespace
+    # declared at the top of this block) so the single nvs_partition_gen +
+    # write_flash below carries identity AND wifi creds — no second NVS
+    # write, no clobber. `csv_field` handles any comma/quote in the password
+    # the same way it does for every other value in this file.
+    if [ -n "${HWTEST_WIFI_SSID:-}" ] && [ -n "${HWTEST_WIFI_PASS:-}" ]; then
+        echo "wifi_ssid,data,string,$(csv_field "$HWTEST_WIFI_SSID")"
+        echo "wifi_pass,data,string,$(csv_field "$HWTEST_WIFI_PASS")"
+    fi
 } > "$CSV"
 
 echo "--- profile $PROFILE → NVS ---"
-sed 's/^/  /' "$CSV"
+# Redact wifi_pass's value in this preview print — everything else in the
+# CSV is non-secret. (HWTEST_WIFI_SSID's value is left visible; it's not a
+# secret and seeing it helps confirm the right bench network was used.)
+sed -e 's/^/  /' -e 's/^  wifi_pass,data,string,.*/  wifi_pass,data,string,<redacted>/' "$CSV"
 
 # --- Generate NVS partition image --------------------------------------------
 echo "=== Generating NVS image ($NVS_SIZE bytes) ==="
