@@ -63,17 +63,25 @@ know you did:
 - **Script library & tunes** — list, edit, save, and play scripts on the
   lamp; every script exposes parameter knobs and switches you can tweak
   live.
-- **Full web portal** — control, compose, stream, scripts, config,
+- **Full web portal** — control, compose, stream, draw, scripts, config,
   network, MQTT, and OTA pages served straight from the lamp. Day/night
   theme included.
 - **GIF & image streaming** — drag a GIF onto `/stream` and it plays on
   the matrix, serpentine mapping and rotation handled for you.
 - **WebSocket pixel streaming** — a compact binary protocol for real-time
   frames from any client you write.
+- **Draw / frame mode** — paint pixel art on a grid (or drop an image) in
+  the app or the on-device `/draw` editor, push it once, and the lamp holds
+  the still frame reboot-safe until you change it — no client needs to stay
+  connected to keep it lit.
 - **HTTP API** — power, color, brightness, modes, scripts, limits, OTA:
   everything the portal does, a `curl` away.
 - **MQTT** — power, color, brightness, mode, and effect next/prev topics
   for Home Assistant, Node-RED, and friends.
+- **Swarm mode** — group nearby lamps into a masterless ESP-NOW mesh:
+  change one lamp's color, brightness, or effect and the whole group
+  follows. HMAC-authenticated, de-duplicated multi-hop flood, and it works
+  with no router at all — AP-less lamps included.
 - **BLE onboarding & control** — claim a fresh lamp and hand it WiFi
   credentials over an encrypted Bluetooth link, no captive-portal hopping.
 - **Ownership & sharing** — lamps are open until claimed; claiming mints
@@ -141,14 +149,30 @@ explicitly welcome.
 
 ## Latest release
 
-**Current firmware: v1.9.14** — grab it from the
+**Current firmware: v2.0.1** — grab it from the
 [releases page](https://github.com/nebeleben/plaiiin-light/releases/latest).
 Every release ships, per form and per chip (classic ESP32 and ESP32-C3,
 the latter with an `-esp32c3` infix): a `flash.bin` (USB first-flash),
 an `app.bin` (OTA payload), an `effects.bin` (per-form effects image),
 an ESP Web Tools manifest for browser flashing, and `SHA256SUMS`.
 
-What's new in the 1.9 line:
+What's new in the 2.0 line:
+
+- **v2.0.1** — point release to exercise in-app firmware updates end to
+  end; no on-device changes.
+- **v2.0.0** — the big one:
+  - **Swarm mode** — masterless ESP-NOW mesh; change one lamp and the
+    group follows, HMAC-secured, works even with no router.
+  - **Draw / frame mode** — push a still pixel-art frame (`POST /api/frame`)
+    that survives reboot, plus an on-device `/draw` pixel editor.
+  - **Plug factory reset** — five fast power cycles recover a buttonless /
+    off-network lamp (a blue flash confirms), keeping its hardware identity
+    and recovery key.
+  - **In-app Direct OTA** — a form-aware `/api/ota/info` lets the macOS /
+    iOS / Android apps update a lamp wirelessly, form- and chip-checked so
+    the wrong image can't be applied.
+
+Earlier — the 1.9 line:
 
 - **v1.9.14** — smoother onboarding: the WiFi network scan works before
   the lamp has a connection, slow WiFi at boot no longer costs you
