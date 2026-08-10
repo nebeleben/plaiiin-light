@@ -11,7 +11,10 @@
 #include "form_prompt.h"
 #include "wormhole.h"
 #include "wifi.h"
+#include "js_api.h"
 #include "esp_log.h"
+#include "esp_system.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <stdio.h>
@@ -117,6 +120,41 @@ static esp_err_t storage_info_handler(httpd_req_t *req)
     snprintf(json, sizeof(json),
         "{\"total\":%u,\"used\":%u,\"free\":%u,\"files\":%u}",
         (unsigned)total, (unsigned)used, (unsigned)free_b, (unsigned)files);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    return ESP_OK;
+}
+
+// GET /api/health -> {"freeHeap":N,"minHeap":N,"uptime":N,"resetReason":"...","fps":N}
+//
+// Hardware-test-suite metrics endpoint (read-only). "fps" reuses the same
+// rolling-render-fps accessor as /api/state (js_api_get_fps()) rather than
+// inventing a second source of truth.
+static esp_err_t health_get_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
+
+    uint32_t free_heap = esp_get_free_heap_size();
+    uint32_t min_heap = esp_get_minimum_free_heap_size();
+    int64_t uptime_s = esp_timer_get_time() / 1000000;
+    int fps = (int)(js_api_get_fps() + 0.5f);
+
+    const char *reset_reason;
+    switch (esp_reset_reason()) {
+        case ESP_RST_POWERON:  reset_reason = "poweron";  break;
+        case ESP_RST_SW:       reset_reason = "sw";       break;
+        case ESP_RST_PANIC:    reset_reason = "panic";    break;
+        case ESP_RST_INT_WDT:  reset_reason = "int_wdt";  break;
+        case ESP_RST_TASK_WDT: reset_reason = "task_wdt"; break;
+        case ESP_RST_BROWNOUT: reset_reason = "brownout"; break;
+        case ESP_RST_DEEPSLEEP: reset_reason = "deepsleep"; break;
+        default:                reset_reason = "unknown";  break;
+    }
+
+    char json[160];
+    snprintf(json, sizeof(json),
+        "{\"freeHeap\":%u,\"minHeap\":%u,\"uptime\":%lld,\"resetReason\":\"%s\",\"fps\":%d}",
+        (unsigned)free_heap, (unsigned)min_heap, (long long)uptime_s, reset_reason, fps);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, json);
     return ESP_OK;
@@ -598,6 +636,13 @@ httpd_handle_t http_server_start(void)
         .handler = storage_info_handler
     };
     httpd_register_uri_handler(server, &storage_info);
+
+    httpd_uri_t health_info = {
+        .uri = "/api/health",
+        .method = HTTP_GET,
+        .handler = health_get_handler
+    };
+    httpd_register_uri_handler(server, &health_info);
 
     httpd_uri_t root_redirect = {
         .uri = "/",
