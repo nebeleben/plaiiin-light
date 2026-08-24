@@ -74,6 +74,10 @@ know you did:
   the app or the on-device `/draw` editor, push it once, and the lamp holds
   the still frame reboot-safe until you change it — no client needs to stay
   connected to keep it lit.
+- **Saved images & carousel** — keep up to 30 drawings in the lamp's own
+  image library (`/api/images`), browse them as thumbnails in the apps or
+  `/draw`, and play them as a slideshow with the built-in `carousel`
+  effect — dwell, crossfade, and shuffle are live-tunable knobs.
 - **HTTP API** — power, color, brightness, modes, scripts, limits, OTA:
   everything the portal does, a `curl` away.
 - **MQTT** — power, color, brightness, mode, and effect next/prev topics
@@ -149,15 +153,21 @@ explicitly welcome.
 
 ## Latest release
 
-**Current firmware: v2.0.1** — grab it from the
+**Current firmware: v2.1.0** — grab it from the
 [releases page](https://github.com/nebeleben/plaiiin-light/releases/latest).
 Every release ships, per form and per chip (classic ESP32 and ESP32-C3,
 the latter with an `-esp32c3` infix): a `flash.bin` (USB first-flash),
 an `app.bin` (OTA payload), an `effects.bin` (per-form effects image),
 an ESP Web Tools manifest for browser flashing, and `SHA256SUMS`.
 
-What's new in the 2.0 line:
+What's new in the 2.x line:
 
+- **v2.1.0** — saved draw images:
+  - **Image library on the lamp** — save up to 30 drawn frames on the
+    lamp itself (`/api/images`: list, save, show, delete); thumbnails
+    and one-tap show in the apps and the on-device `/draw` page.
+  - **Carousel effect** — a built-in effect that cycles the saved images
+    as a slideshow, with tunable dwell, crossfade, and shuffle.
 - **v2.0.1** — point release to exercise in-app firmware updates end to
   end; no on-device changes.
 - **v2.0.0** — the big one:
