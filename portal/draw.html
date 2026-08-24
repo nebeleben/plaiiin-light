@@ -15,6 +15,11 @@
 .tool-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
 .brush-row{display:flex;align-items:center;gap:10px;margin-bottom:12px}
 .brush-row label{margin-bottom:0;min-width:52px}
+.thumb-wrap{position:relative;display:inline-block}
+.thumb{display:block;border:1px solid var(--border);border-radius:4px;cursor:pointer;image-rendering:pixelated;background:#000}
+.thumb:hover{border-color:var(--accent)}
+.thumb-del{position:absolute;top:-6px;right:-6px;width:16px;height:16px;line-height:14px;text-align:center;border-radius:50%;background:var(--card);border:1px solid var(--border);color:var(--text-dim);font-size:.7rem;cursor:pointer;padding:0}
+.thumb-del:hover{color:#e33;border-color:#e33}
 </style>
 </head>
 <body>
@@ -62,10 +67,15 @@
 <div style="display:flex;gap:10px;margin-bottom:8px">
 <button type="button" class="power-btn off-btn" id="btnPower" style="flex:0 0 auto;min-width:110px">Turn On</button>
 <button type="button" class="apply-btn" id="btnPush" style="flex:1">Push to Lamp</button>
+<button type="button" class="tool-btn" id="btnSave" title="Save the current drawing on the lamp">Save</button>
 </div>
 <div class="msg" id="statusMsg"></div>
 
 <div class="info-bar"><span id="ledInfo"></span></div>
+<div id="savedSection" style="display:none;margin-top:14px">
+<div style="font-size:.78rem;color:var(--text-dim);margin-bottom:6px">Saved on lamp <span id="savedCount"></span></div>
+<div id="savedStrip" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+</div>
 </div>
 <p class="copyright">&copy; <a href="https://plaiiin.com">plaiiin.com</a></p>
 
@@ -271,6 +281,82 @@ document.getElementById('btnPush').onclick=function(){
     .then(function(r){if(!r.ok)throw new Error('mode HTTP '+r.status);status('Pushed to lamp',true);})
     .catch(function(e){status('Push failed: '+e.message,false);});
 };
+
+// --- Saved images ----------------------------------------------------------
+// GET /api/images lists {name,w,h}; each thumbnail's pixels come from
+// GET /api/images/<name> (raw RGB, same wire format as /api/frame). Click
+// shows the image on the lamp AND loads it into the editor; ✕ deletes.
+function refreshSaved(){
+  fetch('/api/images?_='+Date.now()).then(function(r){
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    return r.json();
+  }).then(function(d){
+    var imgs=d.images||[];
+    document.getElementById('savedSection').style.display=imgs.length?'block':'none';
+    document.getElementById('savedCount').textContent='('+imgs.length+'/'+(d.max||30)+')';
+    var box=document.getElementById('savedStrip');box.innerHTML='';
+    imgs.forEach(function(im){addThumb(box,im);});
+  }).catch(function(){/* unauthenticated or old firmware — hide silently */});
+}
+function addThumb(box,im){
+  var wrap=document.createElement('div');wrap.className='thumb-wrap';
+  var cv=document.createElement('canvas');cv.className='thumb';
+  cv.width=im.w;cv.height=im.h;
+  var scale=Math.max(2,Math.min(Math.floor(64/Math.max(im.w,im.h)),8));
+  cv.style.width=(im.w*scale)+'px';cv.style.height=(im.h*scale)+'px';
+  cv.title=im.name+' ('+im.w+'x'+im.h+')';
+  fetch('/api/images/'+im.name).then(function(r){
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    return r.arrayBuffer();
+  }).then(function(buf){
+    var data=new Uint8Array(buf);
+    var ctx=cv.getContext('2d');
+    var id=ctx.createImageData(im.w,im.h);
+    for(var i=0;i<im.w*im.h;i++){
+      id.data[i*4]=data[i*3];id.data[i*4+1]=data[i*3+1];
+      id.data[i*4+2]=data[i*3+2];id.data[i*4+3]=255;
+    }
+    ctx.putImageData(id,0,0);
+    cv.onclick=function(){showSaved(im,data);};
+  }).catch(function(){});
+  var del=document.createElement('button');
+  del.className='thumb-del';del.textContent='×';del.title='Delete '+im.name;
+  del.onclick=function(e){
+    e.stopPropagation();
+    fetch('/api/images/'+im.name,{method:'DELETE'})
+      .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);status('Deleted '+im.name,true);refreshSaved();})
+      .catch(function(e2){status('Delete failed: '+e2.message,false);});
+  };
+  wrap.appendChild(cv);wrap.appendChild(del);box.appendChild(wrap);
+}
+// Show on the lamp + load into the editor canvas for re-editing.
+function showSaved(im,data){
+  fetch('/api/images/'+im.name+'/show',{method:'POST'})
+    .then(function(r){if(!r.ok)return r.text().then(function(t){throw new Error('HTTP '+r.status+' '+t.slice(0,80));});
+      if(im.w!==gridW||im.h!==gridH){gridW=im.w;gridH=im.h;buildGrid();}
+      for(var i=0;i<im.w*im.h&&i*3+2<data.length;i++){
+        paintCell(i,[data[i*3],data[i*3+1],data[i*3+2]]);
+      }
+      status('Showing '+im.name,true);
+    })
+    .catch(function(e){status('Show failed: '+e.message,false);});
+}
+// Save = push the canvas (so the lamp's stored frame IS the canvas), then
+// snapshot it into the image store. No mode switch — saving shouldn't yank
+// the lamp out of a running effect.
+document.getElementById('btnSave').onclick=function(){
+  var total=gridW*gridH;
+  var buf=new Uint8Array(total*3);
+  for(var i=0;i<total;i++){var c=cells[i]||[0,0,0];buf[i*3]=c[0];buf[i*3+1]=c[1];buf[i*3+2]=c[2];}
+  status('Saving…',null);
+  fetch('/api/frame',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:buf})
+    .then(function(r){if(!r.ok)return r.text().then(function(t){throw new Error('HTTP '+r.status+' '+t.slice(0,120));});return r.json();})
+    .then(function(){return fetch('/api/images',{method:'POST'});})
+    .then(function(r){if(!r.ok)return r.text().then(function(t){throw new Error('HTTP '+r.status+' '+t.slice(0,120));});return r.json();})
+    .then(function(d){status('Saved as '+d.name,true);refreshSaved();})
+    .catch(function(e){status('Save failed: '+e.message,false);});
+};
+refreshSaved();
 </script>
 </body>
 </html>
