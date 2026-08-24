@@ -2,7 +2,7 @@
 """
 Phase 35 — generator for the hardcoded-effects framework.
 
-Scans lampos/hardcoded/<FORM>/*.c for two kinds of declarative comments:
+Scans lampos/hardcoded/all/*.c and lampos/hardcoded/<FORM>/*.c for two kinds of declarative comments:
 
     // @effect <name> <default_fps>
     // @param <name> <min>..<max> = <default> <description...>
@@ -310,15 +310,26 @@ def main():
     ap.add_argument("--out-dir", required=True, help="path to write generated files")
     args = ap.parse_args()
 
-    src_dir = Path(args.src_dir) / args.form
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # "all" holds form-independent effects compiled into every firmware;
+    # the form dir holds form-specific ones. A name may exist in only one
+    # of them — a duplicate would produce two registry entries and two
+    # conflicting <name>_params.* generations, so it's a hard error.
+    scan_dirs = [Path(args.src_dir) / "all", Path(args.src_dir) / args.form]
     effects = []
-    if src_dir.is_dir():
+    seen = {}
+    for src_dir in scan_dirs:
+        if not src_dir.is_dir():
+            continue
         for c_path in sorted(src_dir.glob("*.c")):
             eff = parse_effect(c_path)
             if eff:
+                if eff["name"] in seen:
+                    sys.exit(f"duplicate hardcoded effect '{eff['name']}' "
+                             f"in {seen[eff['name']]} and {c_path}")
+                seen[eff["name"]] = c_path
                 effects.append(eff)
                 emit_params_h(out_dir, eff)
                 emit_params_c(out_dir, eff)

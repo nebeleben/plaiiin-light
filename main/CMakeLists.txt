@@ -14,6 +14,7 @@ message(STATUS "Building lampos firmware for form: ${LAMPOS_FORM}")
 # helpers exist in build/generated/ when the compiler reaches them.
 set(LAMPOS_HC_ROOT    "${CMAKE_CURRENT_SOURCE_DIR}/../hardcoded")
 set(LAMPOS_HC_FORM    "${LAMPOS_HC_ROOT}/${LAMPOS_FORM}")
+set(LAMPOS_HC_ALL     "${LAMPOS_HC_ROOT}/all")
 set(LAMPOS_GEN_DIR    "${CMAKE_BINARY_DIR}/generated")
 set(LAMPOS_GEN_PY     "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_hardcoded.py")
 
@@ -26,6 +27,11 @@ file(MAKE_DIRECTORY "${LAMPOS_GEN_DIR}")
 set(LAMPOS_HC_FORM_SRCS "")
 if(IS_DIRECTORY "${LAMPOS_HC_FORM}")
     file(GLOB LAMPOS_HC_FORM_SRCS "${LAMPOS_HC_FORM}/*.c")
+endif()
+
+set(LAMPOS_HC_ALL_SRCS "")
+if(IS_DIRECTORY "${LAMPOS_HC_ALL}")
+    file(GLOB LAMPOS_HC_ALL_SRCS "${LAMPOS_HC_ALL}/*.c")
 endif()
 
 execute_process(
@@ -49,7 +55,7 @@ endif()
 
 # Re-run the generator if any handwritten effect source changes — without
 # this, editing fire.c wouldn't refresh the params header / registry.
-foreach(src IN LISTS LAMPOS_HC_FORM_SRCS)
+foreach(src IN LISTS LAMPOS_HC_FORM_SRCS LAMPOS_HC_ALL_SRCS)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${src}")
 endforeach()
 
@@ -90,6 +96,7 @@ idf_component_register(
         "hardcoded_runtime.c"
         "swarm_radio.c"
         "swarm.c"
+        ${LAMPOS_HC_ALL_SRCS}
         ${LAMPOS_HC_FORM_SRCS}
         ${LAMPOS_GEN_SRCS}
     INCLUDE_DIRS
