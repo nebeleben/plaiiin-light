@@ -168,6 +168,22 @@ differ.
 above) is the reference producer, but `/api/frame` is a normal part of
 the wire contract — any client may implement its own editor against it.
 
+### Saved images (`/api/images`)
+
+The lamp keeps a small library of saved drawings (max 30, ~1.5 KB each) on
+the same SPIFFS partition, in the same binary layout as the frame store.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/images` | `{"status":"ok","images":[{"name":"img-001","w":16,"h":8}],"count":1,"max":30}` — user role. |
+| POST | `/api/images` | Snapshot the currently stored frame into the lowest free slot; returns `{"status":"ok","name":"img-001"}`. 404 `no frame stored`, 409 `image store full`. Creator role. |
+| GET | `/api/images/{name}` | Raw RGB octet-stream + `X-Frame-W`/`X-Frame-H` headers — same shape as `GET /api/frame`. User role. |
+| POST | `/api/images/{name}/show` | Copy the image into the frame store, display it, persist mode `frame`. 400 `geometry mismatch` if it was drawn on a different grid. Creator role. |
+| DELETE | `/api/images/{name}` | Remove the image. Creator role. |
+
+Saved images survive reboots and OTA but are wiped by a full factory reset.
+The built-in `carousel` effect (see `/api/js`) cycles through them.
+
 ### Updates & reset
 
 | Method | Path | Body |

@@ -12,6 +12,7 @@
 #include "wormhole.h"
 #include "wifi.h"
 #include "js_api.h"
+#include "image_api.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -700,6 +701,7 @@ httpd_handle_t http_server_start(void)
     // max_uri_handlers slots regardless of ordering vs the calls above.
     captive_portal_register_err_handler(server);
     light_api_register(server);
+    image_api_register(server);
     ws_server_register(server);
     ota_update_register(server);
 

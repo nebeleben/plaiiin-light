@@ -69,6 +69,7 @@ idf_component_register(
         "light_api.c"
         "frame_store.c"
         "image_store.c"
+        "image_api.c"
         "error_light.c"
         "ota_update.c"
         "plaiiin_mqtt.c"

@@ -74,6 +74,18 @@ h2{margin-top:22px}
 <tr><td class="method">POST</td><td class="path">/api/wormhole/creative</td><td class="body">{"creative":[...]} or {"ring":N,...}</td><td class="desc">Set mirror-mode creative per-ring config (NVS).</td></tr>
 </table>
 
+<h2>Draw &amp; saved images</h2>
+<table class="endpoint-table">
+<tr><th>Method</th><th>Path</th><th>Body / Response</th><th>Description</th></tr>
+<tr><td class="method">GET</td><td class="path">/api/frame</td><td class="body">raw RGB bytes + X-Frame-W/H headers</td><td class="desc">The stored drawn frame (row-major RGB over the logical grid). 404 if none stored or its geometry no longer matches.</td></tr>
+<tr><td class="method">POST</td><td class="path">/api/frame</td><td class="body">raw octet-stream, exactly logicalW*logicalH*3 bytes</td><td class="desc">Store a drawn frame. Repaints immediately when the lamp is already in <code>frame</code> mode. Creator role.</td></tr>
+<tr><td class="method">GET</td><td class="path">/api/images</td><td class="body">{images:[{name,w,h}], count, max}</td><td class="desc">List saved images (max 30, auto-named img-001…).</td></tr>
+<tr><td class="method">POST</td><td class="path">/api/images</td><td class="body">— &rarr; {status, name}</td><td class="desc">Snapshot the current stored frame into a new saved image. 404 if no frame stored, 409 when full. Creator role.</td></tr>
+<tr><td class="method">GET</td><td class="path">/api/images/{name}</td><td class="body">raw RGB bytes + X-Frame-W/H headers</td><td class="desc">One saved image's pixels (for thumbnails / re-editing).</td></tr>
+<tr><td class="method">POST</td><td class="path">/api/images/{name}/show</td><td class="body">—</td><td class="desc">Display a saved image on the lamp: copies it into the frame store and switches to <code>frame</code> mode (persists across reboot). 400 if its geometry doesn't match the current grid. Creator role.</td></tr>
+<tr><td class="method">DELETE</td><td class="path">/api/images/{name}</td><td class="body">—</td><td class="desc">Delete a saved image. Creator role.</td></tr>
+</table>
+
 <h2>Scripts</h2>
 <table class="endpoint-table">
 <tr><th>Method</th><th>Path</th><th>Body / Response</th><th>Description</th></tr>
