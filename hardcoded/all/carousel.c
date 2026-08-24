@@ -96,7 +96,13 @@ esp_err_t carousel_init(int w, int h)
     size_t bytes = (size_t)w * h * 3;
     s_cur = (uint8_t *)calloc(bytes, 1);
     s_prev = (uint8_t *)calloc(bytes, 1);
-    if (!s_cur || !s_prev) return ESP_ERR_NO_MEM;
+    if (!s_cur || !s_prev) {
+        free(s_cur);
+        free(s_prev);
+        s_cur = NULL;
+        s_prev = NULL;
+        return ESP_ERR_NO_MEM;
+    }
     s_slot = -1;
     s_have_prev = false;
     s_last_scan_ms = 0;

@@ -143,7 +143,8 @@ static esp_err_t images_show_handler(httpd_req_t *req)
     /* apply_mode("frame") stops any runtime, persists the mode, displays the
      * frame when the lamp is on, and notifies MQTT + swarm — one call gives
      * the exact push semantics. */
-    light_api_apply_mode("frame");
+    int mode_err = light_api_apply_mode("frame");
+    if (mode_err != 0) return send_err_json(req, 500, "mode apply failed");
     ESP_LOGI(TAG, "Showing %s", name);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
