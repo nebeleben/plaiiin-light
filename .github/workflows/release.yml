@@ -326,3 +326,13 @@ jobs:
             --title "PlaiiinLightOS $TAG" \
             --notes "$NOTES"
           echo "✓ release $TAG published"
+
+  # Browser-flash files → GitHub Pages (see pages.yml). Runs after the release
+  # exists so it can download the just-published assets.
+  pages:
+    needs: release
+    uses: ./.github/workflows/pages.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

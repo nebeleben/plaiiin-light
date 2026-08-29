@@ -1,0 +1,84 @@
+name: Firmware Pages (browser flash)
+
+# Publishes the browser-flash file set (flash.bin, effects.bin, ESP Web Tools
+# manifest — per form × chip) to this repo's GitHub Pages site under
+# firmware/<tag>/, for the "Flash from browser" button on plaiiin-light.com.
+#
+# Why Pages and not the release assets themselves: ESP Web Tools fetches the
+# manifest and binaries with fetch() from the website's origin, and GitHub's
+# release CDN sends no Access-Control-Allow-Origin header, so the browser
+# blocks it. github.io serves everything with CORS "*".
+#
+# The Pages deploy replaces the whole site each run, so the newest KEEP
+# releases are republished together — a website pinned to the previous
+# version keeps working across a bump. Artifact-based (actions/deploy-pages):
+# no gh-pages branch, no repo growth.
+#
+# Triggers: called by release.yml after a release is published (the
+# `release: published` event would NOT fire — releases created with
+# GITHUB_TOKEN don't trigger workflows), or run manually to backfill.
+
+on:
+  workflow_call:
+    inputs:
+      keep:
+        description: number of newest releases to publish
+        type: number
+        default: 3
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: number of newest releases to publish
+        type: number
+        default: 3
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: firmware-pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Collect the newest releases' browser-flash files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: ${{ inputs.keep || 3 }}
+        run: |
+          set -euo pipefail
+          mkdir -p site/firmware
+          TAGS=$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases \
+                   --limit "$KEEP" --json tagName --jq '.[].tagName')
+          [ -n "$TAGS" ] || { echo "no releases found" >&2; exit 1; }
+          for TAG in $TAGS; do
+            echo "→ $TAG"
+            mkdir -p "site/firmware/$TAG"
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "site/firmware/$TAG" \
+              --pattern '*-flash.bin' --pattern '*-effects.bin' --pattern '*.manifest.json'
+            ( cd "site/firmware/$TAG" && ls -1 | sed 's/^/    /' )
+          done
+          LATEST=$(echo "$TAGS" | head -1)
+          printf '{"latest":"%s","tags":[%s]}\n' "$LATEST" \
+            "$(echo "$TAGS" | sed 's/.*/"&"/' | paste -sd, -)" > site/firmware/index.json
+          # Tiny landing page so the site root isn't a 404.
+          cat > site/index.html <<HTML
+          <!doctype html><meta charset="utf-8"><title>PlaiiinLightOS firmware</title>
+          <p>Browser-flash files for <a href="https://plaiiin-light.com/lampos.html">PlaiiinLightOS</a>.
+          Latest: <a href="firmware/$LATEST/">$LATEST</a> · <a href="firmware/index.json">index.json</a></p>
+          HTML
+          du -sh site
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
