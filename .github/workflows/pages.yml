@@ -17,6 +17,14 @@ name: Firmware Pages (browser flash)
 # Triggers: called by release.yml after a release is published (the
 # `release: published` event would NOT fire — releases created with
 # GITHUB_TOKEN don't trigger workflows), or run manually to backfill.
+#
+# One-time repo setup (already done for nebeleben/plaiiin-light): Pages
+# with build_type "workflow", and the `github-pages` environment must allow
+# TAG deployments — its default branch policy only admits `main`, which
+# rejects the tag-triggered release run ("not allowed to deploy"):
+#   gh api -X POST repos/<owner>/<repo>/pages -f build_type=workflow
+#   gh api -X POST repos/<owner>/<repo>/environments/github-pages/deployment-branch-policies \
+#          -f name='v*' -f type=tag
 
 on:
   workflow_call:
