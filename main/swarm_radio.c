@@ -1,6 +1,7 @@
 #include "swarm_radio.h"
 #include "esp_now.h"
 #include "esp_wifi.h"
+#include "esp_idf_version.h"
 #include "esp_log.h"
 #include <string.h>
 
@@ -43,9 +44,19 @@ static void swarm_recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, 
     if (s_user_rx_cb) s_user_rx_cb(info->src_addr, data, (size_t)len);
 }
 
+// ESP-IDF 5.5 changed the ESP-NOW send callback's first argument from the
+// peer MAC (const uint8_t *) to a wifi_tx_info_t *. We only look at the
+// status, so the two variants differ in signature alone. The fleet builds on
+// 5.3.2 (esp32 / esp32c3); the ESP32-C5 needs 5.5 — both must compile.
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 0)
+static void swarm_send_cb(const wifi_tx_info_t *tx_info, esp_now_send_status_t status)
+{
+    (void)tx_info;
+#else
 static void swarm_send_cb(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
     (void)mac_addr;
+#endif
     if (status != ESP_NOW_SEND_SUCCESS) s_tx_fail++;
 }
 

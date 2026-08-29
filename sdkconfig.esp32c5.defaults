@@ -1,0 +1,24 @@
+# ESP32-C5 overlay — appended after the chip-derived sdkconfig.defaults and the
+# version defaults by scripts/build.sh (last file wins), esp32c5 builds only.
+#
+# Size: the C5 only exists as a target from IDF v5.5, whose Wi-Fi 6 dual-band
+# + BLE 5 stack is ~110 KB larger than the 5.3.2 esp32/c3 image. At the
+# fleet's -Og that overflows the shared 0x1D0000 OTA slots (partitions.csv is
+# one table for every chip; a 4 MB C5 devkit has no room for bigger slots), so
+# the C5 builds -Os. The render hot path (components/plbc) is pinned to -O2 in
+# its own CMakeLists regardless of this global level.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# Dead weight the lamp never uses, dropped on the C5 to buy OTA-slot headroom
+# (the fleet keeps IDF's defaults for these so its images stay byte-identical):
+# - the lamp is a BLE peripheral only (it advertises; apps connect to it) —
+#   no ble_gap_disc()/ble_gap_connect() anywhere, so central/observer roles
+#   are unused host code.
+# - onboarding takes SSID + password only; there is no UI or API path for
+#   WPA2-Enterprise identities, so the EAP supplicant is unreachable.
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT=n
+# (Tried and rejected: CONFIG_LWIP_IPV6=n — nothing in the firmware speaks
+# IPv6, but the generated sdkconfig keeps it =y on this target for reasons
+# no `select` in the 5.5 Kconfig tree explains; ~30 KB left on the table.)

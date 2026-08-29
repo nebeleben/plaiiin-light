@@ -18,7 +18,7 @@ set -euo pipefail
 
 # --- Argument parsing ---------------------------------------------------------
 FORM=""
-CHIP="esp32"   # target SoC; esp32 (Xtensa) is the fleet default. esp32c3 = RISC-V single-core.
+CHIP="esp32"   # target SoC; esp32 (Xtensa) is the fleet default. esp32c3/esp32c5 = RISC-V single-core.
 while [ $# -gt 0 ]; do
     case "$1" in
         --form)  FORM="${2:-}"; shift 2 ;;
@@ -27,7 +27,7 @@ while [ $# -gt 0 ]; do
             sed -n '2,16p' "$0"; exit 0 ;;
         *)
             echo "unknown arg: $1" >&2
-            echo "usage: $0 --form <name> [--chip esp32|esp32c3]" >&2
+            echo "usage: $0 --form <name> [--chip esp32|esp32c3|esp32c5]" >&2
             exit 2 ;;
     esac
 done
@@ -37,13 +37,24 @@ if [ -z "$FORM" ]; then
     exit 2
 fi
 case "$CHIP" in
-    esp32|esp32c3|esp32s3) ;;
-    *) echo "unsupported --chip '$CHIP' (esp32, esp32c3, esp32s3)" >&2; exit 2 ;;
+    esp32|esp32c3|esp32s3|esp32c5) ;;
+    *) echo "unsupported --chip '$CHIP' (esp32, esp32c3, esp32s3, esp32c5)" >&2; exit 2 ;;
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-IDF_DIR="${HOME}/esp/esp-idf"
+# ESP-IDF per chip. The fleet (esp32 / esp32c3 / esp32s3) is pinned to the
+# v5.3.2 checkout at ~/esp/esp-idf. The ESP32-C5 only exists as a target from
+# IDF v5.5 on, so it builds against the v5.5 checkout instead — nothing else
+# moves off 5.3.2. Both can be overridden with IDF_DIR / IDF_PYTHON_ENV_PATH
+# (CI's espressif/idf containers set them for whichever IDF the image ships).
+if [ "$CHIP" = "esp32c5" ]; then
+    IDF_DIR="${IDF_DIR:-${HOME}/esp/esp-idf-v5.5}"
+    IDF_PY_ENV_DEFAULT="$HOME/.espressif/python_env/idf5.5_py3.14_env"
+else
+    IDF_DIR="${IDF_DIR:-${HOME}/esp/esp-idf}"
+    IDF_PY_ENV_DEFAULT="$HOME/.espressif/python_env/idf5.3_py3.12_env"
+fi
 
 # Sanity-check the form has a directory (an empty/missing dir is OK — the
 # generator emits an empty registry — but we warn so a typo doesn't silently
@@ -80,7 +91,7 @@ CONFIG_PLAIIIN_API_VERSION="$API_VERSION"
 EOF
 
 # Python env pin — ESP-IDF tools break on stock Python 3.14.
-export IDF_PYTHON_ENV_PATH="${IDF_PYTHON_ENV_PATH:-$HOME/.espressif/python_env/idf5.3_py3.12_env}"
+export IDF_PYTHON_ENV_PATH="${IDF_PYTHON_ENV_PATH:-$IDF_PY_ENV_DEFAULT}"
 # shellcheck disable=SC1091
 source "$IDF_DIR/export.sh" > /dev/null 2>&1
 
@@ -89,20 +100,39 @@ cd "$PROJECT_DIR"
 # Base sdkconfig defaults. For the fleet default (esp32) we use the tracked file
 # verbatim — byte-for-byte the historical behaviour. For a different SoC we
 # derive a chip-specific copy: swap CONFIG_IDF_TARGET and, for the C3 (which
-# tops out at 160 MHz), drop the 240 MHz CPU clock the esp32 uses. The target is
-# taken from these defaults on a fresh (fullclean) build, exactly as esp32 does
-# today — no `set-target` needed.
+# tops out at 160 MHz), drop the 240 MHz CPU clock the esp32 uses (the C5 runs
+# 240 MHz like the esp32, so it keeps it). The real target switch happens via
+# `idf.py set-target` below; the defaults just have to agree with it.
+#
+# BOOT_OFFSET is where the ROM expects the 2nd-stage bootloader — fixed per
+# SoC (bootloader/Kconfig.projbuild BOOTLOADER_OFFSET_IN_FLASH): 0x1000 on the
+# esp32 classic, 0x0 on c3/s3, 0x2000 on the C5 (first two sectors are
+# reserved for the flash-encryption key manager).
 if [ "$CHIP" = "esp32" ]; then
     BASE_DEFAULTS="$PROJECT_DIR/sdkconfig.defaults"
-    BOOT_OFFSET=0x1000            # esp32 classic second-stage bootloader offset
+    BOOT_OFFSET=0x1000
 else
     BASE_DEFAULTS="$PROJECT_DIR/.sdkconfig.base.$CHIP.defaults"
+    CPU_SED=''
+    [ "$CHIP" = "esp32c3" ] && CPU_SED='s/^CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y/CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y/'
     sed -e 's/^CONFIG_IDF_TARGET=.*/CONFIG_IDF_TARGET="'"$CHIP"'"/' \
-        -e 's/^CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y/CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y/' \
+        -e "${CPU_SED:-;}" \
         "$PROJECT_DIR/sdkconfig.defaults" > "$BASE_DEFAULTS"
-    BOOT_OFFSET=0x0               # esp32c3/s3 place the bootloader at 0x0
+    case "$CHIP" in
+        esp32c5) BOOT_OFFSET=0x2000 ;;
+        *)       BOOT_OFFSET=0x0 ;;
+    esac
 fi
 export SDKCONFIG_DEFAULTS="$BASE_DEFAULTS;$VERSION_DEFAULTS"
+# Optional per-chip overlay, applied last so it wins: sdkconfig.<chip>.defaults
+# (tracked, hand-written). Lets one SoC diverge on a few knobs — e.g. the C5
+# builds -Os because its IDF 5.5 radio stack doesn't fit the shared OTA slots
+# at the fleet's -Og — without touching sdkconfig.defaults for the others.
+CHIP_OVERLAY="$PROJECT_DIR/sdkconfig.$CHIP.defaults"
+if [ -f "$CHIP_OVERLAY" ]; then
+    export SDKCONFIG_DEFAULTS="$SDKCONFIG_DEFAULTS;$CHIP_OVERLAY"
+    echo "chip overlay: $(basename "$CHIP_OVERLAY")"
+fi
 
 # Per-form build dir so cmake's per-form configure caches don't collide if
 # someone alternates `--form tower` and `--form wormhole` in the same checkout.

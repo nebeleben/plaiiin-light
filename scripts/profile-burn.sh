@@ -37,13 +37,14 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 # --- Defaults -----------------------------------------------------------------
 BAUD=460800
 FULL=0
-CHIP=esp32   # target SoC. esp32 = Xtensa fleet default; esp32c3 = RISC-V single-core.
+CHIP=esp32   # target SoC. esp32 = Xtensa fleet default; esp32c3/esp32c5 = RISC-V single-core.
 
 # Locate ESP-IDF tools — we don't require the user to source export.sh first.
-PYTHON="${IDF_PYTHON:-/Users/$USER/.espressif/python_env/idf5.3_py3.12_env/bin/python}"
-ESPTOOL="${IDF_PYTHON_DIR:-$(dirname "$PYTHON")}/esptool.py"
-NVS_GEN="${IDF_PATH:-$HOME/esp/esp-idf}/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"
-SPIFFS_GEN="${IDF_PATH:-$HOME/esp/esp-idf}/components/spiffs/spiffsgen.py"
+# Tool paths are resolved after argument parsing (below) because the ESP32-C5
+# builds against IDF v5.5 (see scripts/build.sh) and its tools live in the
+# v5.5 python env; every other chip stays on the v5.3 env. IDF_PYTHON /
+# IDF_PATH still override either.
+PYTHON=""; ESPTOOL=""; NVS_GEN=""; SPIFFS_GEN=""
 
 # Partition layout from lampos/partitions.csv. If you ever resize NVS, update.
 NVS_OFFSET=0x9000
@@ -66,13 +67,25 @@ done
 PORT="${1:-}"
 PROFILE="${2:-}"
 if [ -z "$PORT" ] || [ -z "$PROFILE" ]; then
-    echo "usage: $0 [--full] [--baud N] [--chip esp32|esp32c3] <port> <family>/<device>" >&2
+    echo "usage: $0 [--full] [--baud N] [--chip esp32|esp32c3|esp32c5] <port> <family>/<device>" >&2
     exit 2
 fi
 case "$CHIP" in
-    esp32|esp32c3|esp32s3) ;;
-    *) echo "unsupported --chip '$CHIP' (esp32, esp32c3, esp32s3)" >&2; exit 2 ;;
+    esp32|esp32c3|esp32s3|esp32c5) ;;
+    *) echo "unsupported --chip '$CHIP' (esp32, esp32c3, esp32s3, esp32c5)" >&2; exit 2 ;;
 esac
+
+if [ "$CHIP" = "esp32c5" ]; then
+    IDF_DEFAULT="$HOME/esp/esp-idf-v5.5"
+    PY_DEFAULT="$HOME/.espressif/python_env/idf5.5_py3.14_env/bin/python"
+else
+    IDF_DEFAULT="$HOME/esp/esp-idf"
+    PY_DEFAULT="$HOME/.espressif/python_env/idf5.3_py3.12_env/bin/python"
+fi
+PYTHON="${IDF_PYTHON:-$PY_DEFAULT}"
+ESPTOOL="${IDF_PYTHON_DIR:-$(dirname "$PYTHON")}/esptool.py"
+NVS_GEN="${IDF_PATH:-$IDF_DEFAULT}/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py"
+SPIFFS_GEN="${IDF_PATH:-$IDF_DEFAULT}/components/spiffs/spiffsgen.py"
 
 if [[ "$PROFILE" != */* ]]; then
     echo "profile must be <family>/<device>, e.g. tower/tower8v2" >&2; exit 2

@@ -25,6 +25,7 @@ defaults:
     shell: bash
 
 env:
+  # Informational — the build job picks its image per chip (see matrix.include).
   IDF_IMAGE: espressif/idf:v5.3.2
 
 jobs:
@@ -33,16 +34,34 @@ jobs:
     name: Build ${{ matrix.form }} (${{ matrix.chip }})
     runs-on: ubuntu-latest
     container:
-      image: espressif/idf:v5.3.2
+      # Per-chip IDF: the fleet (esp32, esp32c3) is pinned to v5.3.2; the
+      # ESP32-C5 only exists as a target from IDF v5.5 on, so its matrix
+      # entries run in the v5.5 image (matrix.include below picks it).
+      image: ${{ matrix.image }}
+    # The C5 image sits at ~97% of the shared OTA slot (IDF 5.5's radio blobs
+    # are ~250 KB fatter than 5.3.2's, and a 4 MB part has no room for bigger
+    # slots), so a future feature can tip it over. Experimental entries may
+    # fail without blocking the fleet release; their assets are then simply
+    # absent from that release.
+    continue-on-error: ${{ matrix.experimental || false }}
     strategy:
       fail-fast: false
       matrix:
-        # Full form × chip cross-product: every form builds for both esp32
-        # (Xtensa) and esp32c3 (RISC-V). The espressif/idf image ships both
-        # toolchains, so no install step. esp32 assets keep the bare <form>
-        # stem; esp32c3 assets carry a -esp32c3 suffix (see naming below).
+        # Full form × chip cross-product: every form builds for esp32
+        # (Xtensa), esp32c3 and esp32c5 (both RISC-V single-core). The
+        # espressif/idf images ship every toolchain, so no install step.
+        # esp32 assets keep the bare <form> stem; the others carry a -<chip>
+        # suffix (see naming below).
         form: [tower, wormhole, display, cube, rocket, strip]
-        chip: [esp32, esp32c3]
+        chip: [esp32, esp32c3, esp32c5]
+        include:
+          - chip: esp32
+            image: espressif/idf:v5.3.2
+          - chip: esp32c3
+            image: espressif/idf:v5.3.2
+          - chip: esp32c5
+            image: espressif/idf:v5.5.5
+            experimental: true
 
     steps:
       - name: Checkout firmware at tag
@@ -88,6 +107,7 @@ jobs:
           case "$CHIP" in
             esp32)   CHIP_FAMILY="ESP32" ;;
             esp32c3) CHIP_FAMILY="ESP32-C3" ;;
+            esp32c5) CHIP_FAMILY="ESP32-C5" ;;
             esp32s3) CHIP_FAMILY="ESP32-S3" ;;
             *) echo "unknown chip '$CHIP' — add its ESP Web Tools family" >&2; exit 1 ;;
           esac
@@ -101,8 +121,12 @@ jobs:
         # in-container path (/opt/esp/python_env/idf5.3_py3.xx_env). build.sh
         # then uses ${IDF_PYTHON_ENV_PATH:-...} which is a no-op if already
         # set, so the host-style fallback it would otherwise pick never runs.
+        # IDF_DIR pins build.sh to the container's IDF: locally the C5 defaults
+        # to ~/esp/esp-idf-v5.5 (a second checkout next to the fleet's 5.3.2),
+        # but in CI each chip's image already IS the right version.
         run: |
           source "$IDF_PATH/export.sh"
+          export IDF_DIR="$IDF_PATH"
           ./scripts/build.sh --form ${{ matrix.form }} --chip ${{ matrix.chip }}
 
       - name: Build byForm SPIFFS effects image
@@ -242,9 +266,11 @@ jobs:
 
           \`tower\` · \`wormhole\` · \`display\` · \`cube\` · \`rocket\` · \`strip\`
 
-          Every form ships for **two SoCs**: esp32 (Xtensa, no suffix) and esp32c3
-          (RISC-V, \`-esp32c3\` suffix), e.g. \`tower-flash.bin\` vs
-          \`tower-esp32c3-flash.bin\`. **Match the asset to your board's chip** — a
+          Every form ships for **three SoCs**: esp32 (Xtensa, no suffix), esp32c3
+          (RISC-V, \`-esp32c3\` suffix) and esp32c5 (RISC-V, \`-esp32c5\` suffix,
+          *experimental* — built with IDF v5.5, may be absent from a release),
+          e.g. \`tower-flash.bin\` vs \`tower-esp32c3-flash.bin\` vs
+          \`tower-esp32c5-flash.bin\`. **Match the asset to your board's chip** — a
           lamp reports its own via \`GET /api/ota/info\` (\`target\`).
 
           ## What's in each form
@@ -260,7 +286,9 @@ jobs:
 
           ## DIY flash recipes
 
-          **CLI (esptool)** — pass the matching \`--chip\`; the C3 bootloader is baked at 0x0:
+          **CLI (esptool)** — pass the matching \`--chip\`. Every \`flash.bin\` is a merged
+          image starting at 0x0, so the write offset is 0x0 regardless of where the SoC's
+          ROM expects its bootloader (0x1000 esp32, 0x0 esp32c3, 0x2000 esp32c5):
           \`\`\`bash
           # esp32 form (e.g. tower)
           esptool.py --chip esp32 -p /dev/cu.usbserial-* write_flash 0x0      tower-flash.bin
@@ -269,6 +297,10 @@ jobs:
           # esp32c3 variant (e.g. strip / shrumLight)
           esptool.py --chip esp32c3 -p /dev/cu.usbmodem* write_flash 0x0      strip-esp32c3-flash.bin
           esptool.py --chip esp32c3 -p /dev/cu.usbmodem* write_flash 0x3C0000 strip-esp32c3-effects.bin
+
+          # esp32c5 variant
+          esptool.py --chip esp32c5 -p /dev/cu.usbmodem* write_flash 0x0      strip-esp32c5-flash.bin
+          esptool.py --chip esp32c5 -p /dev/cu.usbmodem* write_flash 0x3C0000 strip-esp32c5-effects.bin
           \`\`\`
 
           **Browser (ESP Web Tools):** point the install button at \`<form>.manifest.json\`

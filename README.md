@@ -16,7 +16,7 @@ The fastest way to a running lamp — no toolchain needed — is a prebuilt
 binary: grab your form's `flash.bin` from the
 [latest release](https://github.com/nebeleben/plaiiin-light/releases/latest)
 (`<form>-flash.bin` for classic ESP32 boards, `<form>-esp32c3-flash.bin`
-for the ESP32-C3),
+for the ESP32-C3, `<form>-esp32c5-flash.bin` for the ESP32-C5),
 or flash straight from the browser (Chrome/Edge) using the release's
 ESP Web Tools manifest.
 
@@ -27,7 +27,8 @@ git clone https://github.com/nebeleben/plaiiin-light.git
 cd plaiiin-light
 ./scripts/setup.sh                    # installs ESP-IDF v5.3.2 + tools
 ./scripts/build.sh --form display     # tower | display | cube | rocket | wormhole | strip
-                                      # add --chip esp32c3 (or esp32s3) for those boards
+                                      # add --chip esp32c3 (or esp32s3) for those boards;
+                                      # --chip esp32c5 needs ESP-IDF v5.5 at ~/esp/esp-idf-v5.5
 ```
 
 That drops two artifacts into `build/dist/`: a merged `…-flash.bin` for
@@ -114,17 +115,28 @@ know you did:
 
 ### Microcontrollers
 
-Any ESP32 development board with at least 4 MB flash works. Three SoC
+Any ESP32 development board with at least 4 MB flash works. Four SoC
 targets are supported by the build system (`./scripts/build.sh --chip …`):
 
 | Chip | Boards (examples) | Notes |
 | --- | --- | --- |
 | **ESP32** (classic) | ESP32 Mini / D1 Mini ESP32, ESP32 DevKit | Dual-core Xtensa @ 240 MHz — the fleet default; prebuilt `<form>-*.bin` release binaries |
 | **ESP32-C3** | C3 SuperMini, C3 DevKit | Single-core RISC-V @ 160 MHz — prebuilt `<form>-esp32c3-*.bin` release binaries, or build with `--chip esp32c3` |
+| **ESP32-C5** | C5 DevKitC-1 | Single-core RISC-V @ 240 MHz, Wi-Fi 6 dual-band, BLE 5 — *experimental*: prebuilt `<form>-esp32c5-*.bin` release binaries (may be absent from a release), or build with `--chip esp32c5` |
 | **ESP32-S3** | S3 Mini, S3 DevKit | Dual-core Xtensa @ 240 MHz — build with `--chip esp32s3` |
 
-Every lamp form builds for every chip; the C3 and S3 differ only in
-bootloader offset and (C3) CPU clock, which the build script handles.
+Every lamp form builds for every chip; the C3, C5 and S3 differ only in
+bootloader offset and (C3) CPU clock, which the build script handles. The
+C5 is the one exception on toolchain: it only exists as a target from
+ESP-IDF v5.5, so `--chip esp32c5` builds against a second IDF checkout
+(`~/esp/esp-idf-v5.5`, or `IDF_DIR=…`) while everything else stays on the
+pinned v5.3.2 — and it builds `-Os` (see `sdkconfig.esp32c5.defaults`)
+because the 5.5 radio stack doesn't fit the shared OTA slots at `-Og`.
+Even so a 4 MB C5 sits at ~97% of an OTA slot (Espressif's Wi-Fi 6 + BLE 5
+blobs are ~250 KB larger than the 5.3.2 ones and can't be trimmed), so
+treat it as a bring-up target: a C5-based lamp wants the 8 MB module and
+its own partition table. The lamp still uses 2.4 GHz only; 5 GHz isn't
+wired up.
 
 ### LEDs
 
@@ -155,8 +167,9 @@ explicitly welcome.
 
 **Current firmware: v2.1.0** — grab it from the
 [releases page](https://github.com/nebeleben/plaiiin-light/releases/latest).
-Every release ships, per form and per chip (classic ESP32 and ESP32-C3,
-the latter with an `-esp32c3` infix): a `flash.bin` (USB first-flash),
+Every release ships, per form and per chip (classic ESP32, ESP32-C3 and
+ESP32-C5, the latter two with an `-esp32c3` / `-esp32c5` infix): a
+`flash.bin` (USB first-flash),
 an `app.bin` (OTA payload), an `effects.bin` (per-form effects image),
 an ESP Web Tools manifest for browser flashing, and `SHA256SUMS`.
 
