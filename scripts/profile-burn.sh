@@ -36,6 +36,11 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 # --- Defaults -----------------------------------------------------------------
 BAUD=460800
+# ESPTOOL_OPTS — extra esptool flags spliced into every call, e.g.
+# ESPTOOL_OPTS="--connect-attempts 10" or "--before usb_reset" for boards on
+# the SoC's native USB-Serial/JTAG port (S3 Super Mini, C5 DevKit) when the
+# handshake is flaky. Note --no-stub only works WITHOUT --full: erase_flash
+# needs the RAM stub (the ROM can't erase).
 FULL=0
 CHIP=esp32   # target SoC. esp32 = Xtensa fleet default; esp32c3/esp32c5 = RISC-V single-core.
 
@@ -324,9 +329,9 @@ if [ "$FULL" -eq 1 ]; then
         exit 1
     fi
     echo "=== --full: erase_flash ==="
-    "$PYTHON" "$ESPTOOL" --chip "$CHIP" --port "$PORT" --baud "$BAUD" erase_flash
+    "$PYTHON" "$ESPTOOL" --chip "$CHIP" --port "$PORT" --baud "$BAUD" ${ESPTOOL_OPTS:-} erase_flash
     echo "=== --full: write_flash 0x0 $(basename "$FLASH_BIN") ==="
-    "$PYTHON" "$ESPTOOL" --chip "$CHIP" --port "$PORT" --baud "$BAUD" \
+    "$PYTHON" "$ESPTOOL" --chip "$CHIP" --port "$PORT" --baud "$BAUD" ${ESPTOOL_OPTS:-} \
         write_flash 0x0 "$FLASH_BIN"
 
     # --- byForm effects + form template: SPIFFS image -----------------------
@@ -384,7 +389,7 @@ if [ "$FULL" -eq 1 ]; then
         # spiffsgen.py's defaults (page 256 / block 4096 / magic) match the
         # firmware's esp_spiffs defaults — no extra flags needed.
         "$PYTHON" "$SPIFFS_GEN" "$((ST_SIZE))" "$SPIFFS_SRC" "$SPIFFS_IMG"
-        "$PYTHON" "$ESPTOOL" --chip "$CHIP" --port "$PORT" --baud "$BAUD" \
+        "$PYTHON" "$ESPTOOL" --chip "$CHIP" --port "$PORT" --baud "$BAUD" ${ESPTOOL_OPTS:-} \
             write_flash "$ST_OFF" "$SPIFFS_IMG"
     else
         echo "=== --full: no byForm effects or template for form '${FORM_VAL:-?}' ==="
@@ -393,7 +398,7 @@ fi
 
 # --- Write NVS partition (no app touch) --------------------------------------
 echo "=== Writing NVS @ $NVS_OFFSET ==="
-"$PYTHON" "$ESPTOOL" --chip "$CHIP" --port "$PORT" --baud "$BAUD" \
+"$PYTHON" "$ESPTOOL" --chip "$CHIP" --port "$PORT" --baud "$BAUD" ${ESPTOOL_OPTS:-} \
     --after hard_reset write_flash "$NVS_OFFSET" "$BIN"
 
 echo "=== Done — $DEVICE booted with profile applied. ==="

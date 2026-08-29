@@ -123,7 +123,7 @@ targets are supported by the build system (`./scripts/build.sh --chip …`):
 | **ESP32** (classic) | ESP32 Mini / D1 Mini ESP32, ESP32 DevKit | Dual-core Xtensa @ 240 MHz — the fleet default; prebuilt `<form>-*.bin` release binaries |
 | **ESP32-C3** | C3 SuperMini, C3 DevKit | Single-core RISC-V @ 160 MHz — prebuilt `<form>-esp32c3-*.bin` release binaries, or build with `--chip esp32c3` |
 | **ESP32-C5** | C5 DevKitC-1 | Single-core RISC-V @ 240 MHz, Wi-Fi 6 dual-band, BLE 5 — *experimental*: prebuilt `<form>-esp32c5-*.bin` release binaries (may be absent from a release), or build with `--chip esp32c5` |
-| **ESP32-S3** | S3 Mini, S3 DevKit | Dual-core Xtensa @ 240 MHz — build with `--chip esp32s3` |
+| **ESP32-S3** | S3 Super Mini (S3FH4R2), S3 DevKit | Dual-core Xtensa @ 240 MHz — build with `--chip esp32s3` (verified on a Super Mini; `profiles/strip/s3mini` drives its onboard WS2812 on GPIO 48) |
 
 Every lamp form builds for every chip; the C3, C5 and S3 differ only in
 bootloader offset and (C3) CPU clock, which the build script handles. The
@@ -137,6 +137,12 @@ blobs are ~250 KB larger than the 5.3.2 ones and can't be trimmed), so
 treat it as a bring-up target: a C5-based lamp wants the 8 MB module and
 its own partition table. The lamp still uses 2.4 GHz only; 5 GHz isn't
 wired up.
+
+Boards that expose only the SoC's native USB-Serial/JTAG port (S3 Super
+Mini, C5 DevKit) can wedge esptool on macOS after a few monitor/flash
+sessions ("download mode detected, but no sync reply") — unplug/replug
+the board; `ESPTOOL_OPTS` on `profile-burn.sh` passes extra esptool flags
+if a board needs them.
 
 ### LEDs
 
