@@ -125,7 +125,7 @@ targets are supported by the build system (`./scripts/build.sh --chip …`):
 | **ESP32-C3** | C3 SuperMini, C3 DevKit | Single-core RISC-V @ 160 MHz — prebuilt `<form>-esp32c3-*.bin` release binaries, or build with `--chip esp32c3` |
 | **ESP32-C6** | C6 Super Mini (C6FH4), C6 DevKit | Single-core RISC-V @ 160 MHz, Wi-Fi 6 (2.4 GHz), BLE 5 — prebuilt `<form>-esp32c6-*.bin` release binaries, or build with `--chip esp32c6`; builds `-Os` (see `sdkconfig.esp32c6.defaults`, ~88% of the OTA slot) |
 | **ESP32-C5** | C5 DevKitC-1 | Single-core RISC-V @ 240 MHz, Wi-Fi 6 dual-band, BLE 5 — *experimental*: prebuilt `<form>-esp32c5-*.bin` release binaries (may be absent from a release), or build with `--chip esp32c5` |
-| **ESP32-S3** | S3 Super Mini (S3FH4R2), S3 DevKit | Dual-core Xtensa @ 240 MHz — build with `--chip esp32s3` (verified on a Super Mini; `profiles/strip/s3mini` drives its onboard WS2812 on GPIO 48) |
+| **ESP32-S3** | S3 Super Mini (S3FH4R2), S3 DevKit | Dual-core Xtensa @ 240 MHz — prebuilt `<form>-esp32s3-*.bin` release binaries, or build with `--chip esp32s3` (verified on a Super Mini; `profiles/strip/s3mini` drives its onboard WS2812 on GPIO 48) |
 
 Every lamp form builds for every chip; the C3, C5, C6 and S3 differ only in
 bootloader offset and (C3/C6) CPU clock, which the build script handles. The
