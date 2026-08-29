@@ -204,7 +204,7 @@ HMAC-SHA256 key); `channel` is a WiFi channel number (1–14) or `0` for
 | Method | Path | Body / Returns |
 |---|---|---|
 | GET  | `/api/swarm`        | `{"member":bool,"id":"<16hex or empty>","enabled":bool,"channel":N}` — the key is **never** returned. |
-| POST | `/api/swarm`        | `{"id":"<16hex>","key":"<64hex>","channel":N}` → join (implies enable). `200 {"status":"ok"}`; `400 {"status":"error","message":"invalid id/key/channel"}` on malformed input. |
+| POST | `/api/swarm`        | `{"id":"<16hex>","key":"<64hex>","channel":N}` → join (implies enable). `200 {"status":"ok"}`; `400 {"status":"error","message":"invalid id/key/channel"}` on malformed input. `409` when the lamp has no WiFi (STA) connection and `channel` is 0/absent — an AP-less lamp can't pin the swarm channel; send an explicit `channel` to join anyway. |
 | DELETE | `/api/swarm`      | Leave: erases the swarm identity (`sw_id`, `sw_key`) and disables (`sw_on`). Always `200 {"status":"ok"}`, even when already not a member. |
 | POST | `/api/swarm/enable` | `{"enabled":bool}` — toggle participation without losing membership. `200 {"status":"ok"}`; `400 {"status":"error","message":"not a swarm member"}` when enabling a non-member (disabling a non-member is a harmless no-op, `200`). |
 | GET  | `/api/swarm/stats`  | `{"tx":n,"rx":n,"txFail":n,"lastFrom":"aa:bb:cc:dd:ee:ff","dropAuth":n,"dropReplay":n,"relayed":n,"applied":n,"stackFree":n}` — link-layer counters (`tx`/`rx`/`txFail`/`lastFrom`) plus protocol-layer counters (`dropAuth`/`dropReplay`/`relayed`/`applied`), plus `stackFree`: the swarm worker task's FreeRTOS stack high-water mark in bytes (0 if the worker isn't running). |
