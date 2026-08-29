@@ -1,0 +1,16 @@
+# ESP32-C6 overlay — appended after the chip-derived sdkconfig.defaults and the
+# version defaults by scripts/build.sh (last file wins), esp32c6 builds only.
+#
+# Size: like the C5, the C6 carries Espressif's Wi-Fi 6 MAC and a BLE 5
+# controller in flash (the classic esp32 keeps its BT controller in ROM), so
+# the image is ~230 KB larger than the esp32's and sits ~96% of the shared
+# 0x1D0000 OTA slot at the fleet's -Og. Build -Os; the render hot path
+# (components/plbc) is pinned to -O2 in its own CMakeLists regardless.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# Dead weight the lamp never uses (fleet keeps IDF defaults for parity):
+# BLE peripheral only (no ble_gap_disc/connect anywhere); onboarding takes
+# SSID + password only, so the WPA2-Enterprise supplicant is unreachable.
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+CONFIG_ESP_WIFI_ENTERPRISE_SUPPORT=n

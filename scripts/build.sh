@@ -18,7 +18,7 @@ set -euo pipefail
 
 # --- Argument parsing ---------------------------------------------------------
 FORM=""
-CHIP="esp32"   # target SoC; esp32 (Xtensa) is the fleet default. esp32c3/esp32c5 = RISC-V single-core.
+CHIP="esp32"   # target SoC; esp32 (Xtensa) is the fleet default. esp32c3/c5/c6 = RISC-V single-core.
 while [ $# -gt 0 ]; do
     case "$1" in
         --form)  FORM="${2:-}"; shift 2 ;;
@@ -27,7 +27,7 @@ while [ $# -gt 0 ]; do
             sed -n '2,16p' "$0"; exit 0 ;;
         *)
             echo "unknown arg: $1" >&2
-            echo "usage: $0 --form <name> [--chip esp32|esp32c3|esp32c5]" >&2
+            echo "usage: $0 --form <name> [--chip esp32|esp32c3|esp32c5|esp32c6|esp32s3]" >&2
             exit 2 ;;
     esac
 done
@@ -37,8 +37,8 @@ if [ -z "$FORM" ]; then
     exit 2
 fi
 case "$CHIP" in
-    esp32|esp32c3|esp32s3|esp32c5) ;;
-    *) echo "unsupported --chip '$CHIP' (esp32, esp32c3, esp32s3, esp32c5)" >&2; exit 2 ;;
+    esp32|esp32c3|esp32s3|esp32c5|esp32c6) ;;
+    *) echo "unsupported --chip '$CHIP' (esp32, esp32c3, esp32s3, esp32c5, esp32c6)" >&2; exit 2 ;;
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -99,14 +99,14 @@ cd "$PROJECT_DIR"
 
 # Base sdkconfig defaults. For the fleet default (esp32) we use the tracked file
 # verbatim — byte-for-byte the historical behaviour. For a different SoC we
-# derive a chip-specific copy: swap CONFIG_IDF_TARGET and, for the C3 (which
-# tops out at 160 MHz), drop the 240 MHz CPU clock the esp32 uses (the C5 runs
-# 240 MHz like the esp32, so it keeps it). The real target switch happens via
+# derive a chip-specific copy: swap CONFIG_IDF_TARGET and, for the C3 and C6
+# (which top out at 160 MHz), drop the 240 MHz CPU clock the esp32 uses (the
+# C5 runs 240 MHz like the esp32, so it keeps it). The real target switch happens via
 # `idf.py set-target` below; the defaults just have to agree with it.
 #
 # BOOT_OFFSET is where the ROM expects the 2nd-stage bootloader — fixed per
 # SoC (bootloader/Kconfig.projbuild BOOTLOADER_OFFSET_IN_FLASH): 0x1000 on the
-# esp32 classic, 0x0 on c3/s3, 0x2000 on the C5 (first two sectors are
+# esp32 classic, 0x0 on c3/c6/s3, 0x2000 on the C5 (first two sectors are
 # reserved for the flash-encryption key manager).
 if [ "$CHIP" = "esp32" ]; then
     BASE_DEFAULTS="$PROJECT_DIR/sdkconfig.defaults"
@@ -114,7 +114,7 @@ if [ "$CHIP" = "esp32" ]; then
 else
     BASE_DEFAULTS="$PROJECT_DIR/.sdkconfig.base.$CHIP.defaults"
     CPU_SED=''
-    [ "$CHIP" = "esp32c3" ] && CPU_SED='s/^CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y/CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y/'
+    case "$CHIP" in esp32c3|esp32c6) CPU_SED='s/^CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y/CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y/' ;; esac
     sed -e 's/^CONFIG_IDF_TARGET=.*/CONFIG_IDF_TARGET="'"$CHIP"'"/' \
         -e "${CPU_SED:-;}" \
         "$PROJECT_DIR/sdkconfig.defaults" > "$BASE_DEFAULTS"

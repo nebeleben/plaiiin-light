@@ -42,7 +42,7 @@ BAUD=460800
 # handshake is flaky. Note --no-stub only works WITHOUT --full: erase_flash
 # needs the RAM stub (the ROM can't erase).
 FULL=0
-CHIP=esp32   # target SoC. esp32 = Xtensa fleet default; esp32c3/esp32c5 = RISC-V single-core.
+CHIP=esp32   # target SoC. esp32 = Xtensa fleet default; esp32c3/c5/c6 = RISC-V single-core.
 
 # Locate ESP-IDF tools — we don't require the user to source export.sh first.
 # Tool paths are resolved after argument parsing (below) because the ESP32-C5
@@ -72,12 +72,12 @@ done
 PORT="${1:-}"
 PROFILE="${2:-}"
 if [ -z "$PORT" ] || [ -z "$PROFILE" ]; then
-    echo "usage: $0 [--full] [--baud N] [--chip esp32|esp32c3|esp32c5] <port> <family>/<device>" >&2
+    echo "usage: $0 [--full] [--baud N] [--chip esp32|esp32c3|esp32c5|esp32c6|esp32s3] <port> <family>/<device>" >&2
     exit 2
 fi
 case "$CHIP" in
-    esp32|esp32c3|esp32s3|esp32c5) ;;
-    *) echo "unsupported --chip '$CHIP' (esp32, esp32c3, esp32s3, esp32c5)" >&2; exit 2 ;;
+    esp32|esp32c3|esp32s3|esp32c5|esp32c6) ;;
+    *) echo "unsupported --chip '$CHIP' (esp32, esp32c3, esp32s3, esp32c5, esp32c6)" >&2; exit 2 ;;
 esac
 
 if [ "$CHIP" = "esp32c5" ]; then

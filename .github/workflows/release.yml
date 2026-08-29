@@ -48,16 +48,18 @@ jobs:
       fail-fast: false
       matrix:
         # Full form × chip cross-product: every form builds for esp32
-        # (Xtensa), esp32c3 and esp32c5 (both RISC-V single-core). The
+        # (Xtensa), esp32c3, esp32c6 and esp32c5 (RISC-V single-core). The
         # espressif/idf images ship every toolchain, so no install step.
         # esp32 assets keep the bare <form> stem; the others carry a -<chip>
         # suffix (see naming below).
         form: [tower, wormhole, display, cube, rocket, strip]
-        chip: [esp32, esp32c3, esp32c5]
+        chip: [esp32, esp32c3, esp32c6, esp32c5]
         include:
           - chip: esp32
             image: espressif/idf:v5.3.2
           - chip: esp32c3
+            image: espressif/idf:v5.3.2
+          - chip: esp32c6
             image: espressif/idf:v5.3.2
           - chip: esp32c5
             image: espressif/idf:v5.5.5
@@ -107,6 +109,7 @@ jobs:
           case "$CHIP" in
             esp32)   CHIP_FAMILY="ESP32" ;;
             esp32c3) CHIP_FAMILY="ESP32-C3" ;;
+            esp32c6) CHIP_FAMILY="ESP32-C6" ;;
             esp32c5) CHIP_FAMILY="ESP32-C5" ;;
             esp32s3) CHIP_FAMILY="ESP32-S3" ;;
             *) echo "unknown chip '$CHIP' — add its ESP Web Tools family" >&2; exit 1 ;;
@@ -266,11 +269,11 @@ jobs:
 
           \`tower\` · \`wormhole\` · \`display\` · \`cube\` · \`rocket\` · \`strip\`
 
-          Every form ships for **three SoCs**: esp32 (Xtensa, no suffix), esp32c3
-          (RISC-V, \`-esp32c3\` suffix) and esp32c5 (RISC-V, \`-esp32c5\` suffix,
-          *experimental* — built with IDF v5.5, may be absent from a release),
-          e.g. \`tower-flash.bin\` vs \`tower-esp32c3-flash.bin\` vs
-          \`tower-esp32c5-flash.bin\`. **Match the asset to your board's chip** — a
+          Every form ships for **four SoCs**: esp32 (Xtensa, no suffix), esp32c3
+          and esp32c6 (RISC-V, \`-esp32c3\` / \`-esp32c6\` suffix) and esp32c5
+          (RISC-V, \`-esp32c5\` suffix, *experimental* — built with IDF v5.5, may
+          be absent from a release), e.g. \`tower-flash.bin\` vs
+          \`tower-esp32c3-flash.bin\` vs \`tower-esp32c6-flash.bin\`. **Match the asset to your board's chip** — a
           lamp reports its own via \`GET /api/ota/info\` (\`target\`).
 
           ## What's in each form
