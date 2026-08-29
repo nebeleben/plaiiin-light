@@ -7,6 +7,7 @@
 #include "js_api.h"
 #include "wormhole.h"
 #include "frame_store.h"
+#include "wifi.h"
 #include "pairing.h"
 #include "plaiiin_mqtt.h"   // mirror app/BLE changes to MQTT subscribers
 #include "swarm_radio.h"    // PlanV3 V2.5 Task 1 — ESP-NOW coexistence spike
@@ -1392,6 +1393,20 @@ static esp_err_t swarm_post_handler(httpd_req_t *req)
     // buffer handed to swarm_join below — never logged, never in `resp`.
     free(buf);
 
+    // Membership gate (mirrors the apps' transport == "wifi" eligibility rule):
+    // an ESP-NOW member needs a concrete radio channel, which a lamp normally
+    // captures from the AP it is associated with. Joining an AP-less lamp —
+    // e.g. through its own onboarding softAP, the only HTTP path a BLE-only
+    // lamp has — with channel 0 would create a member that can never find
+    // the swarm. Refuse unless the caller pins the channel explicitly (the
+    // hook a future BLE-aware client would use).
+    if (have_id && have_key && channel == 0 && !wifi_is_connected()) {
+        free(buf);
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"lamp is not on WiFi — joining a swarm needs a WiFi connection (or an explicit channel)\"}");
+        return ESP_OK;
+    }
     if (!have_id || !have_key || swarm_join(id, key, channel) != ESP_OK) {
         httpd_resp_set_status(req, "400 Bad Request");
         httpd_resp_set_type(req, "application/json");
