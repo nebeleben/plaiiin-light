@@ -1,6 +1,7 @@
 #include "mdns_service.h"
 #include "config_store.h"
 #include "pairing.h"
+#include "device_id.h"
 #include "mdns.h"
 #include "esp_log.h"
 #include "sdkconfig.h"
@@ -60,6 +61,7 @@ esp_err_t mdns_service_start(void)
         {"lamp",     lamp_type},
         {"path",     "/api"},
         {"paired",   (char *)paired_val},
+        {"id",       (char *)device_id_get()},
     };
     const size_t txt_count = sizeof(txt) / sizeof(txt[0]);
 

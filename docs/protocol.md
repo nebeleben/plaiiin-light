@@ -37,8 +37,9 @@ A lamp speaks three transports. Every client uses some subset.
 mDNS: the lamp advertises on both `_plaiiinlight._tcp` and `_http._tcp`
 (Bonjour / DNS-SD). The TXT record carries `vendor`, `node` (node name),
 `fw` (firmware version), `api` (API version), `lamp` (lamp type), `path`
-(`/api`), and `paired` (`0`/`1`). Richer identity (form, geometry, LED
-count) is read from `GET /api` after discovery.
+(`/api`), and `paired` (`0`/`1`), and `id` (stable per-lamp id — the
+factory MAC as 12 lowercase hex; survives renames). Richer identity
+(form, geometry, LED count) is read from `GET /api` after discovery.
 
 A lamp that's a **swarm** member also speaks a fourth, lamp-to-lamp-only
 wire format over raw ESP-NOW broadcast — not a client transport, so it
@@ -68,7 +69,7 @@ Stable endpoints. Newer endpoints are added in the companion specs.
 
 | Method | Path | Returns / Body |
 |---|---|---|
-| GET  | `/api`              | Device info — `vendor`, `apiVersion`, `firmwareVersion`, `nodeName`, `ledPin`, `ledClkPin`, `ledCount`, `ledType`, `lampType`, `lampForm`, `physicalW/H`, `logicalW/H`, `pixelGroupW/H`, `rotation`, `origin`, `serpentine`, `serpentineAxis`, button pins. |
+| GET  | `/api`              | Device info — `vendor`, `apiVersion`, `firmwareVersion`, `nodeName`, `deviceId`, `ledPin`, `ledClkPin`, `ledCount`, `ledType`, `lampType`, `lampForm`, `physicalW/H`, `logicalW/H`, `pixelGroupW/H`, `rotation`, `origin`, `serpentine`, `serpentineAxis`, button pins. |
 | GET  | `/api/state`        | `{on, color:[r,g,b], mode, brightness, currentScript?}` |
 | GET  | `/api/whoami`       | `{role, paired}` — see sharing-api. |
 | GET  | `/api/pair`         | `{paired:bool, hasToken:bool}` (no auth). |

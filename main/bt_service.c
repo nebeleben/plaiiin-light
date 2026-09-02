@@ -1,5 +1,6 @@
 #include "bt_service.h"
 #include "config_store.h"
+#include "device_id.h"
 #include "wifi.h"
 #include "light_api.h"
 #include "js_api.h"
@@ -285,14 +286,14 @@ static int access_device_info(uint16_t conn, uint16_t attr,
     // `paired` (currently owned) + `provisioned` (claimed at least once → in
     // BLE-only mode, no provisioning AP) let clients tell that this lamp can't
     // be WiFi-onboarded through the BLE sheet without a factory reset first.
-    char body[560];
+    char body[600];
     snprintf(body, sizeof(body),
-             "{\"node\":\"%s\",\"vendor\":\"%s\",\"api\":\"%s\",\"fw\":\"%s\","
+             "{\"node\":\"%s\",\"id\":\"%s\",\"vendor\":\"%s\",\"api\":\"%s\",\"fw\":\"%s\","
              "\"lampForm\":\"%s\",\"lampType\":\"%s\","
              "\"ledCount\":%d,\"physicalW\":%d,\"physicalH\":%d,"
              "\"logicalW\":%d,\"logicalH\":%d,\"pixelGroupW\":%d,\"pixelGroupH\":%d,"
              "\"paired\":%s,\"provisioned\":%s}",
-             node, vendor, api_ver, fw, lamp_form, lamp_type,
+             node, device_id_get(), vendor, api_ver, fw, lamp_form, lamp_type,
              led_control_get_count(),
              led_control_get_physical_w(), led_control_get_physical_h(),
              led_control_get_logical_w(), led_control_get_logical_h(),

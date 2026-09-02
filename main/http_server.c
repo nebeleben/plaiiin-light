@@ -1,5 +1,6 @@
 #include "http_server.h"
 #include "captive_portal.h"
+#include "device_id.h"
 #include "light_api.h"
 #include "ws_server.h"
 #include "ota_update.h"
@@ -82,9 +83,9 @@ static esp_err_t api_info_handler(httpd_req_t *req)
     int32_t btn_prev = config_get_i32_or(CONFIG_KEY_BTN_PREV_PIN, CONFIG_PLAIIIN_BTN_PREV_PIN);
 
     char json[900];
-    snprintf(json, sizeof(json),
+    int n = snprintf(json, sizeof(json),
         "{\"vendor\":\"%s\",\"apiVersion\":\"%s\",\"firmwareVersion\":\"%s\","
-        "\"nodeName\":\"%s\","
+        "\"nodeName\":\"%s\",\"deviceId\":\"%s\","
         "\"ledPin\":%ld,\"ledClkPin\":%ld,\"ledCount\":%d,\"ledType\":\"%s\","
         "\"lampType\":\"%s\",\"lampForm\":\"%s\","
         "\"physicalW\":%d,\"physicalH\":%d,"
@@ -93,11 +94,14 @@ static esp_err_t api_info_handler(httpd_req_t *req)
         "\"rotation\":%d,\"origin\":%d,\"serpentine\":%s,\"serpentineAxis\":%d,"
         "\"buttonPwrPin\":%ld,\"buttonNextPin\":%ld,\"buttonPrevPin\":%ld}",
         vendor, api_ver, CONFIG_PLAIIIN_FIRMWARE_VERSION,
-        node_name, (long)led_pin, (long)led_clk_pin, led_count,
+        node_name, device_id_get(), (long)led_pin, (long)led_clk_pin, led_count,
         led_type_str, lamp_type, lamp_form,
         phys_w, phys_h, logical_w, logical_h, px_group_w, px_group_h,
         rotation, origin, serpentine ? "true" : "false", serp_axis,
         (long)btn_pwr, (long)btn_next, (long)btn_prev);
+    if (n < 0 || n >= (int)sizeof(json)) {
+        ESP_LOGW(TAG, "info json truncated (%d/%u)", n, (unsigned)sizeof(json));
+    }
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, json);

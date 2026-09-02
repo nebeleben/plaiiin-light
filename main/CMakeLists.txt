@@ -84,6 +84,7 @@ idf_component_register(
         "js_api.c"
         "mdns_service.c"
         "bt_service.c"
+        "device_id.c"
         "buttons.c"
         "factory_reset.c"
         "ai_key_api.c"
