@@ -37,7 +37,7 @@ A lamp speaks three transports. Every client uses some subset.
 mDNS: the lamp advertises on both `_plaiiinlight._tcp` and `_http._tcp`
 (Bonjour / DNS-SD). The TXT record carries `vendor`, `node` (node name),
 `fw` (firmware version), `api` (API version), `lamp` (lamp type), `path`
-(`/api`), and `paired` (`0`/`1`), and `id` (stable per-lamp id — the
+(`/api`), `paired` (`0`/`1`), and `id` (stable per-lamp id — the
 factory MAC as 12 lowercase hex; survives renames). Richer identity
 (form, geometry, LED count) is read from `GET /api` after discovery.
 
@@ -60,6 +60,13 @@ A lamp is in one of two pairing modes:
 `creator`, `admin`) layered on top, plus the multi-key store and
 `/api/whoami`. New clients should target the role model; legacy "admin
 only" behavior is what a single `pair_token` gets you.
+
+The stable id (`id` over BLE/mDNS, `deviceId` over HTTP) is the factory
+MAC, not a secret, and must never be used as an authentication or
+authorization token. Likewise, clients trust mDNS identity (name, host,
+`id`) only as far as the LAN itself is trusted — a spoofed record can
+redirect a client to the wrong host, which is the same trust already
+placed in the plain name→host mapping.
 
 ## HTTP API
 
@@ -252,7 +259,7 @@ table — keep this in sync with it.)
 
 | Characteristic | Suffix | Access | Purpose |
 |---|---|---|---|
-| `device_info`    | `01` | R     | JSON shape matching `GET /api`. |
+| `device_info`    | `01` | R     | JSON shape matching `GET /api`, except the stable id key is `id` here (and over mDNS) rather than the HTTP response's `deviceId`. |
 | `wifi_scan`      | `02` | R W N | Write to start a WiFi scan; read/notify the result list. |
 | `wifi_config`    | `03` | W     | SoftAP onboarding — set home SSID + password. |
 | `wifi_status`    | `04` | R N   | WiFi connection status. |
