@@ -173,7 +173,7 @@ explicitly welcome.
 
 ## Latest release
 
-**Current firmware: v2.1.2** — grab it from the
+**Current firmware: v2.2.0** — grab it from the
 [releases page](https://github.com/nebeleben/plaiiin-light/releases/latest).
 Every release ships, per form and per chip (classic ESP32, ESP32-C3,
 ESP32-C6 and ESP32-C5, the RISC-V ones with an `-esp32c3` / `-esp32c6` /
@@ -183,6 +183,12 @@ an ESP Web Tools manifest for browser flashing, and `SHA256SUMS`.
 
 What's new in the 2.x line:
 
+- **v2.2.0** — stable device ID. Every lamp now advertises its factory
+  MAC as a 12-hex-char id (`id` in the mDNS TXT record and the BLE
+  device-info characteristic, `deviceId` in `GET /api`), so the apps and
+  integrations recognise a lamp after it is renamed instead of treating it
+  as a new device. API version 2.2.0 (additive; older clients ignore the
+  field).
 - **v2.1.2** — swarm join is refused (409) on a lamp with no WiFi
   connection unless the caller pins a channel, mirroring the apps' rule
   that only WiFi-reachable lamps can be added to a swarm. Browser flashing
