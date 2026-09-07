@@ -4,6 +4,7 @@
 
 # Identity
 CONFIG_PLAIIIN_NODE_NAME="rocket"
+CONFIG_PLAIIIN_MODEL_VERSION=""
 CONFIG_PLAIIIN_VENDOR_NAME="PlaiiinLight"
 
 # LED hardware

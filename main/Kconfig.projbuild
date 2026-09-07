@@ -6,6 +6,15 @@ menu "PlaiiinLightOS Configuration"
         help
             Unique name for this lamp node.
 
+    config PLAIIIN_MODEL_VERSION
+        string "Model version"
+        default ""
+        help
+            Hardware model revision of this lamp, e.g. "8v2". Together with
+            PLAIIIN_FORM it names the model ("tower" + "8v2" = tower8v2).
+            Profiles set it; an empty value lets the firmware derive it from
+            the node name at boot (node name minus the form prefix).
+
     config PLAIIIN_VENDOR_NAME
         string "Vendor name"
         default "PlaiiinLight"

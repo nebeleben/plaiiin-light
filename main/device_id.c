@@ -1,6 +1,7 @@
 #include "device_id.h"
 #include "esp_mac.h"
 #include <stdio.h>
+#include <stddef.h>
 
 static char s_id[DEVICE_ID_LEN + 1];
 
@@ -13,4 +14,11 @@ const char *device_id_get(void)
                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     }
     return s_id;
+}
+
+void device_id_suffix(char *out, size_t out_len)
+{
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
+    snprintf(out, out_len, "%02X%02X", mac[4], mac[5]);
 }

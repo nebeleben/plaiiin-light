@@ -141,6 +141,7 @@ declare -a SCHEMA=(
     "LED_TYPE       led_type       string"
     "LAMP_TYPE      lamp_type      string"
     "FORM           lamp_form      string"
+    "MODEL_VERSION  model_version  string"
     "PX_GROUP_W     px_group_w     i32"
     "PX_GROUP_H     px_group_h     i32"
     "ROTATION       rotation       i32"
@@ -219,6 +220,12 @@ BIN="$TMPDIR/nvs.bin"
         fi
         echo "$nvs_key,data,$enc,$(csv_field "$val")"
     done
+
+    # One-shot name suffix: the firmware appends "-<MAC suffix>" to node_name
+    # on the first boot after this burn (tower8v2 → tower8v2-3FA8, same as the
+    # provisioning AP SSID) and erases the flag. Only a burn sets it, so lamps
+    # that merely OTA keep their names.
+    echo "name_pending,data,i32,1"
 
     # --- Wormhole physical per-ring config → wh_phys JSON (Phase 29) ---------
     # The profile carries one readable "face,direction,offset" line per ring

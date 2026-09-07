@@ -21,12 +21,14 @@
 #include "wormhole.h"
 #include "swarm_radio.h"
 #include "swarm.h"
+#include "device_id.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 static const char *TAG = "plaiiinlight_os";
 
@@ -152,6 +154,40 @@ void app_main(void)
             config_store_set_str(CONFIG_KEY_LAMP_TYPE, CONFIG_PLAIIIN_LAMP_TYPE);
         if (config_store_get_str(CONFIG_KEY_LAMP_FORM, existing, sizeof(existing)) != ESP_OK)
             config_store_set_str(CONFIG_KEY_LAMP_FORM, CONFIG_PLAIIIN_FORM);
+        // model_version: profile-burned lamps have it in NVS; OTA'd lamps
+        // derive it from their (factory) node name minus the form prefix
+        // ("tower8v2" on form "tower" → "8v2"; a plain "tower" → ""). A
+        // user-renamed lamp ("Kitchen") gets "" — clients then show just
+        // the form; a profile reburn sets the real value.
+        if (config_store_get_str(CONFIG_KEY_MODEL_VERSION, existing, sizeof(existing)) != ESP_OK) {
+            char model[64] = CONFIG_PLAIIIN_MODEL_VERSION;
+            if (model[0] == '\0') {
+                char node[64], form[32];
+                config_get_str_or(CONFIG_KEY_NODE_NAME, node, sizeof(node), CONFIG_PLAIIIN_NODE_NAME);
+                config_get_str_or(CONFIG_KEY_LAMP_FORM, form, sizeof(form), CONFIG_PLAIIIN_FORM);
+                size_t flen = strlen(form);
+                if (flen > 0 && strncasecmp(node, form, flen) == 0)
+                    snprintf(model, sizeof(model), "%s", node + flen);
+            }
+            config_store_set_str(CONFIG_KEY_MODEL_VERSION, model);
+            ESP_LOGI(TAG, "Seeded model_version='%s'", model);
+        }
+        // One-shot rename after a fresh profile burn: "tower8v2" →
+        // "tower8v2-3FA8" (same suffix as the provisioning AP). Only
+        // profile-burn sets name_pending, so OTA'd lamps keep their names.
+        int32_t pending = 0;
+        if (config_store_get_i32(CONFIG_KEY_NAME_PENDING, &pending) == ESP_OK) {
+            if (pending) {
+                char node[64], suffix[DEVICE_SUFFIX_LEN + 1], renamed[80];
+                config_get_str_or(CONFIG_KEY_NODE_NAME, node, sizeof(node), CONFIG_PLAIIIN_NODE_NAME);
+                device_id_suffix(suffix, sizeof(suffix));
+                snprintf(renamed, sizeof(renamed), "%s-%s", node, suffix);
+                config_store_set_str(CONFIG_KEY_NODE_NAME, renamed);
+                ESP_LOGI(TAG, "Applied one-shot name suffix: '%s' -> '%s'", node, renamed);
+            }
+            const char *const keys[] = { CONFIG_KEY_NAME_PENDING };
+            config_store_erase_keys(keys, 1);
+        }
         // ints
         int32_t tmp;
         if (config_store_get_i32(CONFIG_KEY_LED_PIN, &tmp) != ESP_OK)

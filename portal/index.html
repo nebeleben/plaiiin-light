@@ -94,6 +94,8 @@
 
 <label for="lamp_form">Lamp Form</label>
 <input id="lamp_form" name="lamp_form" type="text" placeholder="e.g. bare, tower, display">
+<label for="model_version">Model Version</label>
+<input id="model_version" name="model_version" type="text" placeholder="e.g. 8v2 (form + model = tower8v2)">
 
 <h3 style="margin-top:18px;font-size:.9rem;text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim)">Buttons</h3>
 <p class="info" style="margin:0 0 8px">GPIO numbers for hardware buttons. Use <code>-1</code> for pins that aren't wired. Long-press the on/off button 10 s for a WiFi reset, 15 s for a full reset.</p>
@@ -281,6 +283,7 @@ fetch('/api').then(function(r){return r.json()}).then(function(d){
   if(d.ledType){var s=document.getElementById('led_type');for(var i=0;i<s.options.length;i++)if(s.options[i].value===d.ledType)s.selectedIndex=i;}
   if(d.lampType)document.getElementById('lamp_type').value=d.lampType;
   if(d.lampForm)document.getElementById('lamp_form').value=d.lampForm;
+  if(d.modelVersion)document.getElementById('model_version').value=d.modelVersion;
   if(d.buttonPwrPin!=null)document.getElementById('btn_pwr_pin').value=d.buttonPwrPin;
   if(d.buttonNextPin!=null)document.getElementById('btn_next_pin').value=d.buttonNextPin;
   if(d.buttonPrevPin!=null)document.getElementById('btn_prev_pin').value=d.buttonPrevPin;

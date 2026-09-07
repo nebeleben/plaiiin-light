@@ -2,6 +2,7 @@
 #include "config_store.h"
 #include "pairing.h"
 #include "captive_dns.h"
+#include "device_id.h"
 #include "esp_wifi.h"
 #include "esp_check.h"
 #include "esp_event.h"
@@ -78,13 +79,23 @@ static esp_err_t start_ap(void)
     // profile-burned lamp ("tower8v2") shows up as "tower8v2-3FA8" instead of
     // a generic "PlaiiinLight-3FA8". Falls back to the Kconfig prefix on a
     // brand-new chip with no profile yet.
-    uint8_t mac[6];
-    esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
-    char node[24];
+    // A profile-burned lamp already carries that suffix in its node name
+    // ("tower8v2-3FA8", see CONFIG_KEY_NAME_PENDING) — then the SSID is the
+    // node name as-is, so lamp name and AP name are identical.
+    char suffix[DEVICE_SUFFIX_LEN + 1];
+    device_id_suffix(suffix, sizeof(suffix));
+    char node[27];  // 26 + "-" + 4-char suffix + NUL = 32 = max SSID
     config_get_str_or(CONFIG_KEY_NODE_NAME, node, sizeof(node),
                       CONFIG_PLAIIIN_WIFI_AP_SSID_PREFIX);
     char ssid[32];
-    snprintf(ssid, sizeof(ssid), "%s-%02X%02X", node, mac[4], mac[5]);
+    size_t nlen = strlen(node);
+    if (nlen > DEVICE_SUFFIX_LEN + 1 &&
+        node[nlen - DEVICE_SUFFIX_LEN - 1] == '-' &&
+        strcmp(node + nlen - DEVICE_SUFFIX_LEN, suffix) == 0) {
+        snprintf(ssid, sizeof(ssid), "%s", node);
+    } else {
+        snprintf(ssid, sizeof(ssid), "%s-%s", node, suffix);
+    }
 
     wifi_config_t wifi_config = {0};
     strncpy((char *)wifi_config.ap.ssid, ssid, sizeof(wifi_config.ap.ssid) - 1);

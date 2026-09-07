@@ -76,7 +76,7 @@ Stable endpoints. Newer endpoints are added in the companion specs.
 
 | Method | Path | Returns / Body |
 |---|---|---|
-| GET  | `/api`              | Device info — `vendor`, `apiVersion`, `firmwareVersion`, `nodeName`, `deviceId`, `ledPin`, `ledClkPin`, `ledCount`, `ledType`, `lampType`, `lampForm`, `physicalW/H`, `logicalW/H`, `pixelGroupW/H`, `rotation`, `origin`, `serpentine`, `serpentineAxis`, button pins. |
+| GET  | `/api`              | Device info — `vendor`, `apiVersion`, `firmwareVersion`, `nodeName`, `deviceId`, `ledPin`, `ledClkPin`, `ledCount`, `ledType`, `lampType`, `lampForm`, `modelVersion`, `physicalW/H`, `logicalW/H`, `pixelGroupW/H`, `rotation`, `origin`, `serpentine`, `serpentineAxis`, button pins. |
 | GET  | `/api/state`        | `{on, color:[r,g,b], mode, brightness, currentScript?}` |
 | GET  | `/api/whoami`       | `{role, paired}` — see sharing-api. |
 | GET  | `/api/pair`         | `{paired:bool, hasToken:bool}` (no auth). |
@@ -386,7 +386,16 @@ truncated HMAC.
 ## Form factors & geometry
 
 A lamp's `lampForm` field is one of `tower`, `display`, `wormhole`,
-`strip`, `cube`, `rocket` (and a small open set of others). For matrix lamps,
+`strip`, `cube`, `rocket` (and a small open set of others). `modelVersion`
+is the hardware revision within that form (`8v2`); `lampForm + modelVersion`
+names the model (`tower8v2`), which is what clients show as the lamp's
+model. The model is *not* the lamp's name: a freshly burned lamp boots as
+`<model>-<MAC suffix>` (`tower8v2-3FA8`, the same suffix as its
+provisioning AP) so several lamps of one model stay distinguishable, and
+the owner can rename it freely afterwards. A full factory reset restores
+that factory name. Lamps that only OTA onto this firmware keep their
+existing name and derive `modelVersion` from it (name minus the form
+prefix, or empty when the name was already customised). For matrix lamps,
 `logicalW/H` and `physicalW/H` may differ when pixel grouping is set —
 clients build frames at the **logical** size, the firmware tiles each
 logical pixel onto a `pixelGroupW × pixelGroupH` block of physical LEDs.

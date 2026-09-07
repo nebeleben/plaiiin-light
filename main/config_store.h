@@ -21,6 +21,14 @@
 #define CONFIG_KEY_LED_TYPE      "led_type"
 #define CONFIG_KEY_LAMP_TYPE     "lamp_type"
 #define CONFIG_KEY_LAMP_FORM     "lamp_form"
+// Hardware model revision ("8v2"); lamp_form + model_version = "tower8v2".
+// Seeded at boot from the node name (minus the form prefix) when missing.
+#define CONFIG_KEY_MODEL_VERSION "model_version"
+// One-shot flag written by profile-burn: on the next boot the firmware
+// appends "-<MAC suffix>" to node_name (so two tower8v2 lamps get distinct
+// names, e.g. tower8v2-3FA8) and erases the flag. Never set on OTA'd lamps,
+// so existing names are left alone.
+#define CONFIG_KEY_NAME_PENDING  "name_pending"
 #define CONFIG_KEY_MQTT_ACTIVE   "mqtt_active"
 #define CONFIG_KEY_MQTT_HOST     "mqtt_host"
 #define CONFIG_KEY_MQTT_PORT     "mqtt_port"

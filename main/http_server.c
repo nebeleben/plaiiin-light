@@ -52,7 +52,7 @@ static esp_err_t api_info_handler(httpd_req_t *req)
     }
 
     char node_name[64], vendor[64], api_ver[32];
-    char lamp_type[32], lamp_form[32];
+    char lamp_type[32], lamp_form[32], model_version[32];
 
     config_get_str_or(CONFIG_KEY_NODE_NAME, node_name, sizeof(node_name), CONFIG_PLAIIIN_NODE_NAME);
     config_get_str_or(CONFIG_KEY_VENDOR_NAME, vendor, sizeof(vendor), CONFIG_PLAIIIN_VENDOR_NAME);
@@ -60,6 +60,7 @@ static esp_err_t api_info_handler(httpd_req_t *req)
 
     config_get_str_or(CONFIG_KEY_LAMP_TYPE, lamp_type, sizeof(lamp_type), CONFIG_PLAIIIN_LAMP_TYPE);
     config_get_str_or(CONFIG_KEY_LAMP_FORM, lamp_form, sizeof(lamp_form), CONFIG_PLAIIIN_FORM);
+    config_get_str_or(CONFIG_KEY_MODEL_VERSION, model_version, sizeof(model_version), CONFIG_PLAIIIN_MODEL_VERSION);
 
     int32_t led_pin = config_get_i32_or(CONFIG_KEY_LED_PIN, CONFIG_PLAIIIN_LED_PIN);
     int32_t led_clk_pin = config_get_i32_or(CONFIG_KEY_LED_CLK_PIN, CONFIG_PLAIIIN_LED_CLK_PIN);
@@ -87,7 +88,7 @@ static esp_err_t api_info_handler(httpd_req_t *req)
         "{\"vendor\":\"%s\",\"apiVersion\":\"%s\",\"firmwareVersion\":\"%s\","
         "\"nodeName\":\"%s\",\"deviceId\":\"%s\","
         "\"ledPin\":%ld,\"ledClkPin\":%ld,\"ledCount\":%d,\"ledType\":\"%s\","
-        "\"lampType\":\"%s\",\"lampForm\":\"%s\","
+        "\"lampType\":\"%s\",\"lampForm\":\"%s\",\"modelVersion\":\"%s\","
         "\"physicalW\":%d,\"physicalH\":%d,"
         "\"logicalW\":%d,\"logicalH\":%d,"
         "\"pixelGroupW\":%d,\"pixelGroupH\":%d,"
@@ -95,7 +96,7 @@ static esp_err_t api_info_handler(httpd_req_t *req)
         "\"buttonPwrPin\":%ld,\"buttonNextPin\":%ld,\"buttonPrevPin\":%ld}",
         vendor, api_ver, CONFIG_PLAIIIN_FIRMWARE_VERSION,
         node_name, device_id_get(), (long)led_pin, (long)led_clk_pin, led_count,
-        led_type_str, lamp_type, lamp_form,
+        led_type_str, lamp_type, lamp_form, model_version,
         phys_w, phys_h, logical_w, logical_h, px_group_w, px_group_h,
         rotation, origin, serpentine ? "true" : "false", serp_axis,
         (long)btn_pwr, (long)btn_next, (long)btn_prev);
