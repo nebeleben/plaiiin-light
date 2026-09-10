@@ -635,7 +635,7 @@ for 10 s ends the sequence.
 |---|---|---|---|
 | WiFi credentials | NVS | If you skip the `nvs` partition | Yes |
 | LED pin, count, type | NVS | Same as above | Yes |
-| Node name, model version, vendor | NVS | Same as above | Yes |
+| Node name, model name/version, vendor | NVS | Same as above | Yes |
 | Brightness | NVS | Same as above | Yes |
 | Max brightness / max current / pixel group | NVS | Same as above | Yes |
 | Last color | NVS | Same as above | Yes |

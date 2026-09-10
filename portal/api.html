@@ -43,7 +43,7 @@ h2{margin-top:22px}
 <h2>Device Info</h2>
 <table class="endpoint-table">
 <tr><th>Method</th><th>Path</th><th>Body / Response</th><th>Description</th></tr>
-<tr><td class="method">GET</td><td class="path">/api</td><td class="body">{vendor, apiVersion, firmwareVersion, nodeName, ledPin, ledClkPin, ledCount, ledType, lampType, lampForm, modelVersion, physicalW/H, logicalW/H, pixelGroupW/H, rotation, origin, serpentine, serpentineAxis}</td><td class="desc">All device metadata.</td></tr>
+<tr><td class="method">GET</td><td class="path">/api</td><td class="body">{vendor, apiVersion, firmwareVersion, nodeName, ledPin, ledClkPin, ledCount, ledType, lampType, lampForm, modelName, modelVersion, physicalW/H, logicalW/H, pixelGroupW/H, rotation, origin, serpentine, serpentineAxis}</td><td class="desc">All device metadata.</td></tr>
 <tr><td class="method">GET</td><td class="path">/api/state</td><td class="body">{on, color:[r,g,b], mode, brightness, current}</td><td class="desc">Current lamp state. <code>color</code> is the user-set <b>baseColor</b> (last value sent through <code>/api/color</code>) — stable across modes; clients sync color pickers from this. <code>current</code> is the active JS script when <code>mode == "js"</code>.</td></tr>
 <tr><td class="method">GET</td><td class="path">/api/base_color</td><td class="body">{color: [r, g, b]}</td><td class="desc">Just the baseColor, without the rest of the state. Same value as <code>state.color</code>; useful when the client only needs the color and wants a smaller payload.</td></tr>
 <tr><td class="method">GET</td><td class="path">/api/storage</td><td class="body">{total, used, free, files}</td><td class="desc">SPIFFS storage usage in bytes + script file count.</td></tr>

@@ -18,7 +18,7 @@ PROFILES_DIR="$PROJECT_DIR/profiles"
 PATTERNS_DIR="$PROJECT_DIR/adaptations/fire"
 
 # Required for every profile.
-REQUIRED=(NODE_NAME MODEL_VERSION LED_PIN LED_COUNT LED_TYPE LAMP_TYPE FORM AP_JS)
+REQUIRED=(NODE_NAME MODEL_NAME MODEL_VERSION LED_PIN LED_COUNT LED_TYPE LAMP_TYPE FORM AP_JS)
 
 # Forms whose hardcoded effects depend on FIRE_PATTERN masks in NVS.
 # (rocket uses 'flight' which synthesises its gradient internally; wormhole

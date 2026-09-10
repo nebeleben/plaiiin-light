@@ -104,10 +104,17 @@ DEFAULTS="$PROJECT_DIR/profiles/$FAMILY/$DEVICE.defaults"
 # NODE_NAME — the chip then advertises under the wrong name over BLE/mDNS and
 # silently collides with the real device. We've hit this three times; refuse
 # to burn rather than discover it after the fact.
+#
+# The filename IS the model: MODEL_NAME + MODEL_VERSION must equal it
+# ("tower8" + "v2" = tower8v2.defaults). MODEL_NAME falls back to NODE_NAME
+# when the profile leaves it empty (same rule as the firmware).
 file_node_name=$(awk -F= '$1=="CONFIG_PLAIIIN_NODE_NAME"{sub(/^"/,"",$2);sub(/"$/,"",$2);print $2;exit}' "$DEFAULTS")
-if [ "$file_node_name" != "$DEVICE" ]; then
-    echo "refusing to burn: $DEFAULTS sets NODE_NAME='$file_node_name' but filename is '$DEVICE'" >&2
-    echo "fix CONFIG_PLAIIIN_NODE_NAME in the .defaults to match the filename, then retry." >&2
+file_model_name=$(awk -F= '$1=="CONFIG_PLAIIIN_MODEL_NAME"{sub(/^"/,"",$2);sub(/"$/,"",$2);print $2;exit}' "$DEFAULTS")
+file_model_version=$(awk -F= '$1=="CONFIG_PLAIIIN_MODEL_VERSION"{sub(/^"/,"",$2);sub(/"$/,"",$2);print $2;exit}' "$DEFAULTS")
+[ -n "$file_model_name" ] || file_model_name="$file_node_name"
+if [ "${file_model_name}${file_model_version}" != "$DEVICE" ]; then
+    echo "refusing to burn: $DEFAULTS has MODEL_NAME='$file_model_name' + MODEL_VERSION='$file_model_version' = '${file_model_name}${file_model_version}' but filename is '$DEVICE'" >&2
+    echo "fix CONFIG_PLAIIIN_MODEL_NAME / CONFIG_PLAIIIN_MODEL_VERSION (or NODE_NAME) in the .defaults to match the filename, then retry." >&2
     exit 1
 fi
 
@@ -141,6 +148,7 @@ declare -a SCHEMA=(
     "LED_TYPE       led_type       string"
     "LAMP_TYPE      lamp_type      string"
     "FORM           lamp_form      string"
+    "MODEL_NAME     model_name     string"
     "MODEL_VERSION  model_version  string"
     "PX_GROUP_W     px_group_w     i32"
     "PX_GROUP_H     px_group_h     i32"

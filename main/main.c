@@ -28,7 +28,6 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <strings.h>
 
 static const char *TAG = "plaiiinlight_os";
 
@@ -154,24 +153,20 @@ void app_main(void)
             config_store_set_str(CONFIG_KEY_LAMP_TYPE, CONFIG_PLAIIIN_LAMP_TYPE);
         if (config_store_get_str(CONFIG_KEY_LAMP_FORM, existing, sizeof(existing)) != ESP_OK)
             config_store_set_str(CONFIG_KEY_LAMP_FORM, CONFIG_PLAIIIN_FORM);
-        // model_version: profile-burned lamps have it in NVS; OTA'd lamps
-        // derive it from their (factory) node name minus the form prefix
-        // ("tower8v2" on form "tower" → "8v2"; a plain "tower" → ""). A
-        // user-renamed lamp ("Kitchen") gets "" — clients then show just
-        // the form; a profile reburn sets the real value.
-        if (config_store_get_str(CONFIG_KEY_MODEL_VERSION, existing, sizeof(existing)) != ESP_OK) {
-            char model[64] = CONFIG_PLAIIIN_MODEL_VERSION;
-            if (model[0] == '\0') {
-                char node[64], form[32];
-                config_get_str_or(CONFIG_KEY_NODE_NAME, node, sizeof(node), CONFIG_PLAIIIN_NODE_NAME);
-                config_get_str_or(CONFIG_KEY_LAMP_FORM, form, sizeof(form), CONFIG_PLAIIIN_FORM);
-                size_t flen = strlen(form);
-                if (flen > 0 && strncasecmp(node, form, flen) == 0)
-                    snprintf(model, sizeof(model), "%s", node + flen);
-            }
-            config_store_set_str(CONFIG_KEY_MODEL_VERSION, model);
-            ESP_LOGI(TAG, "Seeded model_version='%s'", model);
+        // model_name / model_version: profile-burned lamps carry both in
+        // NVS. A lamp that only OTA'd onto this firmware seeds model_name
+        // from its current node name (the factory name, e.g. "tower8v2")
+        // and model_version as "" — clients then show "tower8v2" as the
+        // model. Seed-once: a later rename never touches the model.
+        if (config_store_get_str(CONFIG_KEY_MODEL_NAME, existing, sizeof(existing)) != ESP_OK) {
+            char model_name[64] = CONFIG_PLAIIIN_MODEL_NAME;
+            if (model_name[0] == '\0')
+                config_get_str_or(CONFIG_KEY_NODE_NAME, model_name, sizeof(model_name), CONFIG_PLAIIIN_NODE_NAME);
+            config_store_set_str(CONFIG_KEY_MODEL_NAME, model_name);
+            ESP_LOGI(TAG, "Seeded model_name='%s'", model_name);
         }
+        if (config_store_get_str(CONFIG_KEY_MODEL_VERSION, existing, sizeof(existing)) != ESP_OK)
+            config_store_set_str(CONFIG_KEY_MODEL_VERSION, CONFIG_PLAIIIN_MODEL_VERSION);
         // One-shot rename after a fresh profile burn: "tower8v2" →
         // "tower8v2-3FA8" (same suffix as the provisioning AP). Only
         // profile-burn sets name_pending, so OTA'd lamps keep their names.

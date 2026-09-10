@@ -271,12 +271,14 @@ static int access_device_info(uint16_t conn, uint16_t attr,
                               struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
     if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
-    char node[64], vendor[64], api_ver[32], lamp_form[32], lamp_type[32], fw[32], model[32];
+    char node[64], vendor[64], api_ver[32], lamp_form[32], lamp_type[32], fw[32], model_name[64], model[32];
     config_get_str_or(CONFIG_KEY_NODE_NAME, node, sizeof(node), CONFIG_PLAIIIN_NODE_NAME);
     config_get_str_or(CONFIG_KEY_VENDOR_NAME, vendor, sizeof(vendor), CONFIG_PLAIIIN_VENDOR_NAME);
     config_get_str_or(CONFIG_KEY_API_VERSION, api_ver, sizeof(api_ver), CONFIG_PLAIIIN_API_VERSION);
     config_get_str_or(CONFIG_KEY_LAMP_FORM, lamp_form, sizeof(lamp_form), CONFIG_PLAIIIN_FORM);
     config_get_str_or(CONFIG_KEY_LAMP_TYPE, lamp_type, sizeof(lamp_type), CONFIG_PLAIIIN_LAMP_TYPE);
+    config_get_str_or(CONFIG_KEY_MODEL_NAME, model_name, sizeof(model_name), CONFIG_PLAIIIN_MODEL_NAME);
+    if (model_name[0] == '\0') snprintf(model_name, sizeof(model_name), "%s", node);
     config_get_str_or(CONFIG_KEY_MODEL_VERSION, model, sizeof(model), CONFIG_PLAIIIN_MODEL_VERSION);
     snprintf(fw, sizeof(fw), "%s", CONFIG_PLAIIIN_FIRMWARE_VERSION);
 
@@ -287,14 +289,14 @@ static int access_device_info(uint16_t conn, uint16_t attr,
     // `paired` (currently owned) + `provisioned` (claimed at least once → in
     // BLE-only mode, no provisioning AP) let clients tell that this lamp can't
     // be WiFi-onboarded through the BLE sheet without a factory reset first.
-    char body[600];
+    char body[700];
     snprintf(body, sizeof(body),
              "{\"node\":\"%s\",\"id\":\"%s\",\"vendor\":\"%s\",\"api\":\"%s\",\"fw\":\"%s\","
-             "\"lampForm\":\"%s\",\"lampType\":\"%s\",\"modelVersion\":\"%s\","
+             "\"lampForm\":\"%s\",\"lampType\":\"%s\",\"modelName\":\"%s\",\"modelVersion\":\"%s\","
              "\"ledCount\":%d,\"physicalW\":%d,\"physicalH\":%d,"
              "\"logicalW\":%d,\"logicalH\":%d,\"pixelGroupW\":%d,\"pixelGroupH\":%d,"
              "\"paired\":%s,\"provisioned\":%s}",
-             node, device_id_get(), vendor, api_ver, fw, lamp_form, lamp_type, model,
+             node, device_id_get(), vendor, api_ver, fw, lamp_form, lamp_type, model_name, model,
              led_control_get_count(),
              led_control_get_physical_w(), led_control_get_physical_h(),
              led_control_get_logical_w(), led_control_get_logical_h(),

@@ -105,6 +105,7 @@ static esp_err_t config_save_handler(httpd_req_t *req)
     save_str_if_set(buf, "led_type", CONFIG_KEY_LED_TYPE);
     save_str_if_set(buf, "lamp_type", CONFIG_KEY_LAMP_TYPE);
     save_str_if_set(buf, "lamp_form", CONFIG_KEY_LAMP_FORM);
+    save_str_if_set(buf, "model_name", CONFIG_KEY_MODEL_NAME);
     save_str_if_set(buf, "model_version", CONFIG_KEY_MODEL_VERSION);
     save_i32_if_set(buf, "btn_pwr_pin",  CONFIG_KEY_BTN_PWR_PIN);
     save_i32_if_set(buf, "btn_next_pin", CONFIG_KEY_BTN_NEXT_PIN);

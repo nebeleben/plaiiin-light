@@ -8,7 +8,6 @@
 
 #include "esp_log.h"
 #include "esp_system.h"
-#include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -131,17 +130,18 @@ esp_err_t factory_reset_full(bool reboot)
     };
     config_store_erase_keys(keys, sizeof(keys) / sizeof(keys[0]));
     // The user's chosen name is personal data as well — restore the factory
-    // name (form + model_version, e.g. "tower8v2") and re-arm the one-shot
-    // MAC suffix so the lamp comes back as "tower8v2-3FA8" on the next boot,
-    // exactly like a freshly burned one (see CONFIG_KEY_NAME_PENDING).
+    // name (= model_name, which profile-burn seeds from the profile's
+    // NODE_NAME) and re-arm the one-shot MAC suffix so the lamp comes back
+    // as "tower8-3FA8" on the next boot, exactly like a freshly burned one
+    // (see CONFIG_KEY_NAME_PENDING). No model_name → keep the current name.
     {
-        char form[32], model[32], factory_name[80];
-        config_get_str_or(CONFIG_KEY_LAMP_FORM, form, sizeof(form), CONFIG_PLAIIIN_FORM);
-        config_get_str_or(CONFIG_KEY_MODEL_VERSION, model, sizeof(model), CONFIG_PLAIIIN_MODEL_VERSION);
-        snprintf(factory_name, sizeof(factory_name), "%s%s", form, model);
-        config_store_set_str(CONFIG_KEY_NODE_NAME, factory_name);
-        config_store_set_i32(CONFIG_KEY_NAME_PENDING, 1);
-        ESP_LOGW(TAG, "Name reset to factory '%s' (+MAC suffix on next boot)", factory_name);
+        char factory_name[64];
+        if (config_store_get_str(CONFIG_KEY_MODEL_NAME, factory_name, sizeof(factory_name)) == ESP_OK &&
+            factory_name[0] != '\0') {
+            config_store_set_str(CONFIG_KEY_NODE_NAME, factory_name);
+            config_store_set_i32(CONFIG_KEY_NAME_PENDING, 1);
+            ESP_LOGW(TAG, "Name reset to factory '%s' (+MAC suffix on next boot)", factory_name);
+        }
     }
     // The drawn frame is personal data too (Draw/frame mode) — without this
     // it survives on SPIFFS past the wipe and GET /api/frame would still
