@@ -216,8 +216,8 @@ What's new in the 2.x line:
   brown-out is a non-power-on reset); after three it enters **safe boot** —
   panel held off, lamp dark but reachable (`safeBoot` in `GET /api/health`) —
   so an under-powered lamp never loops forever. An explicit `POST /api/power`
-  resumes. See *Powering the LEDs* and *Brown-out-safe boot* in
-  [`SPECS.md`](SPECS.md). API version unchanged at 2.3.0.
+  resumes. See the *Powering the LEDs* and *Brown-out-safe boot* sections of
+  `SPECS.md`. API version unchanged at 2.3.0.
 - **v2.3.0** — model identity. Every lamp now reports `modelName` +
   `modelVersion` (`GET /api`, BLE device-info), which the apps show as the
   model (`tower8` + `v2` = tower8v2); a profile's filename is that model.
