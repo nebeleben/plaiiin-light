@@ -161,6 +161,31 @@ The chipset, data/clock GPIOs, and LED count are per-device hardware
 identity (burned via `profile-burn`, editable on `/config`) — no firmware
 rebuild needed to switch strips.
 
+### Powering the LEDs — don't run a panel off USB
+
+The LEDs are the load, not the MCU. A WS2812 pulls up to ~60 mA at full
+white, so a 256-pixel matrix can draw ~15 A (≈7 A at mid-brightness). Give
+the LEDs their **own 5 V supply** sized for that, tie its ground to the
+board's ground, and run only the data line to the LED GPIO. Powering a
+sizable strip or matrix from the board's USB / 5 V pin is out of spec.
+
+If you do, the inrush on a power-on, mode switch, or bright frame sags the
+3.3 V rail and the SoC's brownout detector resets the chip — so the lamp
+appears to "restart on every change". **This is a power problem, not a
+firmware fault**; the serial console shows `Brownout detector was
+triggered`. Boards with only a native USB-Serial/JTAG port and a lean 5 V
+path are the most exposed — the **ESP32-C5 DevKit** notably, which already
+runs its brownout detector at the most tolerant threshold it offers (2.51 V;
+a classic ESP32 bottoms out lower, at 2.43 V), so there is no config headroom
+left to relax. A stiffer board like an ESP32 Mini may ride through the same
+undervoltage silently rather than resetting — it is not immune, just quieter.
+
+Two ways out: a proper external 5 V supply (plus a ~1000 µF cap across
+5 V/GND at the panel to absorb inrush); or, to bench-test without one, cap
+the draw in firmware with `POST /api/limits {"maxCurrentMa":…}` (and/or
+`maxBrightness`), which scales brightness so the current never spikes. Those
+limits persist in NVS — no reflash.
+
 ## Specs
 
 Want the deep end? [`SPECS.md`](SPECS.md) is the full technical
