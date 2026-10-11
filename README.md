@@ -198,7 +198,7 @@ explicitly welcome.
 
 ## Latest release
 
-**Current firmware: v2.3.0** — grab it from the
+**Current firmware: v2.4.0** — grab it from the
 [releases page](https://github.com/nebeleben/plaiiin-light/releases/latest).
 Every release ships, per form and per chip (classic ESP32, ESP32-C3,
 ESP32-C6 and ESP32-C5, the RISC-V ones with an `-esp32c3` / `-esp32c6` /
@@ -208,6 +208,16 @@ an ESP Web Tools manifest for browser flashing, and `SHA256SUMS`.
 
 What's new in the 2.x line:
 
+- **v2.4.0** — brown-out-safe boot. Lighting the panel is a lamp's biggest
+  current surge, so boot no longer does it early: the lamp comes up dark but
+  reachable (Wi-Fi + HTTP first), then restores and **soft-starts** the panel
+  over ~0.8 s, so its inrush never coincides with the Wi-Fi bring-up. A
+  **boot-loop breaker** counts consecutive boots that fail to stay up (a
+  brown-out is a non-power-on reset); after three it enters **safe boot** —
+  panel held off, lamp dark but reachable (`safeBoot` in `GET /api/health`) —
+  so an under-powered lamp never loops forever. An explicit `POST /api/power`
+  resumes. See *Powering the LEDs* and *Brown-out-safe boot* in
+  [`SPECS.md`](SPECS.md). API version unchanged at 2.3.0.
 - **v2.3.0** — model identity. Every lamp now reports `modelName` +
   `modelVersion` (`GET /api`, BLE device-info), which the apps show as the
   model (`tower8` + `v2` = tower8v2); a profile's filename is that model.
