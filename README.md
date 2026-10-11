@@ -198,7 +198,7 @@ explicitly welcome.
 
 ## Latest release
 
-**Current firmware: v2.5.0** — grab it from the
+**Current firmware: v2.6.0** — grab it from the
 [releases page](https://github.com/nebeleben/plaiiin-light/releases/latest).
 Every release ships, per form and per chip (classic ESP32, ESP32-C3,
 ESP32-C6 and ESP32-C5, the RISC-V ones with an `-esp32c3` / `-esp32c6` /
@@ -208,6 +208,14 @@ an ESP Web Tools manifest for browser flashing, and `SHA256SUMS`.
 
 What's new in the 2.x line:
 
+- **v2.6.0** — scenes. A scene is a named, saved snapshot of the lamp's state
+  (on, mode, effect and its params or a saved image, colour, brightness),
+  stored on the lamp and recalled in one call: `POST /api/scenes/<name>/capture`
+  saves what the lamp is doing right now, `POST /api/scenes/<name>/activate`
+  brings it back in the right order with the normal fades, and `GET /api/scenes`
+  lists them. Every field is optional, so a partial "mood" scene that only sets
+  a colour works too. Up to 32 per lamp; they mirror to the swarm like manual
+  control. API version 2.5.0 (additive).
 - **v2.5.0** — agent-ready API. The whole HTTP contract is served
   machine-readably at `GET /api/openapi.json` (OpenAPI 3, unauthenticated,
   gzipped), so an AI agent or any tool-binding client can discover every
