@@ -9,6 +9,7 @@
 #include "frame_store.h"
 #include "wifi.h"
 #include "pairing.h"
+#include "boot_guard.h"
 #include "plaiiin_mqtt.h"   // mirror app/BLE changes to MQTT subscribers
 #include "swarm_radio.h"    // PlanV3 V2.5 Task 1 — ESP-NOW coexistence spike
 #include "swarm.h"          // PlanV3 V2.5 Task 2 — swarm_notify_state() hooks
@@ -308,6 +309,10 @@ static esp_err_t power_handler(httpd_req_t *req)
     }
     bool on = (strstr(buf, "true") != NULL);
     light_api_apply_power(on);
+    // The user is driving the lamp, so leave any latched safe boot and clear
+    // the brown-out boot-fail streak (they've presumably fixed power or capped
+    // current). A no-op on a normal boot.
+    boot_guard_user_ok();
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, on ? "{\"status\":\"on\"}" : "{\"status\":\"off\"}");

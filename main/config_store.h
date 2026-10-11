@@ -154,6 +154,13 @@
 // data. See plug_reset.{h,c}.
 #define CONFIG_KEY_PLUG_CNT      "plug_cnt"
 
+// Brown-out / crash boot-loop counter. The complement of plug_cnt: counts
+// consecutive boots whose reset reason is NOT a clean power-on and that fail
+// to stay up, so a lamp that browns out on every boot (e.g. an under-powered
+// panel) latches a dark "safe boot" instead of looping. Operational state,
+// not personal data. See boot_guard.{h,c}.
+#define CONFIG_KEY_BOOT_FAIL     "boot_fail"
+
 // PlanV3 Phase V2.5 — swarm mode (masterless lamp-to-lamp state propagation
 // over ESP-NOW, see swarm.{h,c}). One swarm per lamp: a client provisions a
 // shared 16-hex id + 64-hex HMAC key + WiFi channel; every member then

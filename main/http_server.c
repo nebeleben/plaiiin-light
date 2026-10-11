@@ -9,6 +9,7 @@
 #include "led_control.h"
 #include "js_storage.h"
 #include "pairing.h"
+#include "boot_guard.h"
 #include "form_prompt.h"
 #include "wormhole.h"
 #include "wifi.h"
@@ -133,7 +134,7 @@ static esp_err_t storage_info_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// GET /api/health -> {"freeHeap":N,"minHeap":N,"uptime":N,"resetReason":"...","fps":N}
+// GET /api/health -> {"freeHeap":N,"minHeap":N,"uptime":N,"resetReason":"...","fps":N,"safeBoot":bool}
 //
 // Hardware-test-suite metrics endpoint (read-only). "fps" reuses the same
 // rolling-render-fps accessor as /api/state (js_api_get_fps()) rather than
@@ -159,10 +160,11 @@ static esp_err_t health_get_handler(httpd_req_t *req)
         default:                reset_reason = "unknown";  break;
     }
 
-    char json[160];
+    char json[192];
     snprintf(json, sizeof(json),
-        "{\"freeHeap\":%u,\"minHeap\":%u,\"uptime\":%lld,\"resetReason\":\"%s\",\"fps\":%d}",
-        (unsigned)free_heap, (unsigned)min_heap, (long long)uptime_s, reset_reason, fps);
+        "{\"freeHeap\":%u,\"minHeap\":%u,\"uptime\":%lld,\"resetReason\":\"%s\",\"fps\":%d,\"safeBoot\":%s}",
+        (unsigned)free_heap, (unsigned)min_heap, (long long)uptime_s, reset_reason, fps,
+        boot_guard_is_safe() ? "true" : "false");
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, json);
     return ESP_OK;

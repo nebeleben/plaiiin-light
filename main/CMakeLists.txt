@@ -90,6 +90,7 @@ idf_component_register(
         "ai_key_api.c"
         "reset_key_api.c"
         "plug_reset.c"
+        "boot_guard.c"
         "pairing.c"
         "form_prompt.c"
         "keys.c"

@@ -17,6 +17,7 @@
 #include "reset_key_api.h"
 #include "pairing.h"
 #include "plug_reset.h"
+#include "boot_guard.h"
 #include "keys.h"
 #include "wormhole.h"
 #include "swarm_radio.h"
@@ -30,6 +31,98 @@
 #include <string.h>
 
 static const char *TAG = "plaiiinlight_os";
+
+// Boot panel soft-start / settle (see boot_restore_panel).
+#define BOOT_SETTLE_MS        1000   // let the Wi-Fi bring-up surge pass first
+#define BOOT_SOFTSTART_FLOOR  8      // panel comes up at ~3 % then ramps
+#define BOOT_SOFTSTART_STEP   8
+#define BOOT_SOFTSTART_TICK   25     // ms per step → ~(255-8)/8 * 25 ≈ 775 ms
+
+/* Restore the lamp's persisted on/off + mode and light the panel — deferred
+ * to the end of app_main (after the HTTP server and Wi-Fi are up) and
+ * soft-started, so the panel's current surge never coincides with the Wi-Fi
+ * bring-up and never hits all at once. On a safe boot (boot_guard tripped by a
+ * brown-out/crash loop) the panel is held off: the lamp stays dark but
+ * reachable until the user sends a power command. */
+static void boot_restore_panel(void)
+{
+    if (boot_guard_is_safe()) {
+        led_control_power_snap(false);
+        ESP_LOGW(TAG, "Safe boot — panel held off; POST /api/power to resume");
+        return;
+    }
+
+    // Only STA mode restores the user's panel. AP mode is onboarding on an
+    // unconfigured lamp (a configured lamp retries STA forever and never falls
+    // back to AP), where the AP-mode indicator already owns the panel at ~30 %.
+    if (wifi_get_mode() != PLAIIIN_WIFI_STA) return;
+
+    // Separate the LED load from the radio surge in time, then clamp the
+    // brightness so the panel comes up dim and we can ramp it in.
+    vTaskDelay(pdMS_TO_TICKS(BOOT_SETTLE_MS));
+    led_control_set_brightness_override(BOOT_SOFTSTART_FLOOR);
+
+    bool want_on = config_get_i32_or(CONFIG_KEY_POWER_ON, 1) != 0;
+
+    // js mode: resume the player (which lights the panel) only when on; left
+    // off, the script name stays and the next power-on resumes it.
+    {
+        char mode[16] = {0};
+        config_get_str_or(CONFIG_KEY_LAMP_MODE, mode, sizeof(mode), "api");
+        if (strcmp(mode, "js") == 0) {
+            char name[64] = {0};
+            config_get_str_or(CONFIG_KEY_CURRENT_JS, name, sizeof(name), "");
+            if (!name[0]) {
+                snprintf(name, sizeof(name), "noop");
+                config_store_set_str(CONFIG_KEY_CURRENT_JS, name);
+            }
+            if (want_on) {
+                char *src = NULL; size_t len = 0;
+                if (js_storage_read(name, &src, &len) == ESP_OK) {
+                    if (js_player_start(src, JS_DEFAULT_FPS) == ESP_OK) {
+                        js_player_set_current_name(name);
+                        ESP_LOGI(TAG, "Resumed js mode with %s", name);
+                    }
+                    free(src);
+                }
+            }
+        }
+    }
+
+    // Settle on/off: force off when left off, snap on for api mode (no player).
+    if (!want_on) {
+        led_control_power_snap(false);
+    } else if (!led_control_is_on()) {
+        led_control_power_snap(true);
+    }
+
+    // frame mode paints synchronously and needs power already on (so after the
+    // snap above), unlike js mode's async player.
+    {
+        char mode[16] = {0};
+        config_get_str_or(CONFIG_KEY_LAMP_MODE, mode, sizeof(mode), "api");
+        if (strcmp(mode, "frame") == 0 && want_on) {
+            if (frame_store_display() == ESP_OK) {
+                ESP_LOGI(TAG, "Resumed frame mode");
+            }
+        }
+    }
+
+    // Soft-start: ramp the brightness ceiling up and re-emit each step so the
+    // panel brightens over ~0.8 s rather than snapping to full. refresh()
+    // re-sends the current frame, so this ramps solid, js and frame modes
+    // alike (a running js player also just renders its next frame under the
+    // rising cap). Then release the override.
+    if (want_on) {
+        for (int b = BOOT_SOFTSTART_FLOOR; b < 255; b += BOOT_SOFTSTART_STEP) {
+            led_control_set_brightness_override((uint8_t)b);
+            led_control_refresh();
+            vTaskDelay(pdMS_TO_TICKS(BOOT_SOFTSTART_TICK));
+        }
+    }
+    led_control_set_brightness_override(0);   // 0 = disabled
+    led_control_refresh();
+}
 
 /* STA-mode connect watcher. wifi.c retries the association forever, so this
  * task waits forever too: the on-connect actions (mDNS, MQTT, BT handoff,
@@ -270,6 +363,12 @@ void app_main(void)
     //     May not return on the triggering boot.
     plug_reset_check();
 
+    // 4c. Brown-out / crash boot-loop breaker. Counts this boot (unless it is
+    //     a clean power-on) before the risky Wi-Fi + panel bring-up, so a lamp
+    //     that browns out every boot latches a dark "safe boot" after a few
+    //     tries instead of looping. Gates the panel restore + AP autoplay below.
+    boot_guard_begin();
+
     // 5. Init WiFi (STA or AP based on saved config). AP-mode LED setup is
     //    deferred to step 6a — it needs js_player_init to have run so we can
     //    try to play the configured onboarding script.
@@ -314,7 +413,9 @@ void app_main(void)
         char ap_js_name[64] = {0};
         config_get_str_or(CONFIG_KEY_AP_JS, ap_js_name, sizeof(ap_js_name), "");
         bool played = false;
-        if (ap_js_name[0]) {
+        // Safe boot keeps the panel dark — fall through to the tiny 3-LED
+        // fallback blink instead of running the onboarding effect.
+        if (ap_js_name[0] && !boot_guard_is_safe()) {
             char *src = NULL;
             size_t src_len = 0;
             if (js_storage_read(ap_js_name, &src, &src_len) == ESP_OK && src) {
@@ -422,64 +523,13 @@ void app_main(void)
         led_control_set_last_color(r, g, b);
     }
 
-    // 6c. Restore the persisted on/off state so a reboot or power-loss brings
-    // the lamp back the way the user left it. Default ON — the common case and
-    // backward-compatible with lamps burned before this key existed.
-    bool want_on = config_get_i32_or(CONFIG_KEY_POWER_ON, 1) != 0;
-
-    // 6d. If the persisted mode is "js" and a script is selected, resume it —
-    // but only actually start the player (which lights the panel) when the
-    // lamp should be on. When it was left off we leave the player idle and
-    // the script name in place; the next power-on resumes it via
-    // light_api_apply_power() -> start_current_js().
-    {
-        char mode[16] = {0};
-        config_get_str_or(CONFIG_KEY_LAMP_MODE, mode, sizeof(mode), "api");
-        if (strcmp(mode, "js") == 0) {
-            char name[64] = {0};
-            config_get_str_or(CONFIG_KEY_CURRENT_JS, name, sizeof(name), "");
-            if (!name[0]) {
-                // Fall back to noop so the lamp does *something* in js mode.
-                snprintf(name, sizeof(name), "noop");
-                config_store_set_str(CONFIG_KEY_CURRENT_JS, name);
-            }
-            if (want_on) {
-                char *src = NULL; size_t len = 0;
-                if (js_storage_read(name, &src, &len) == ESP_OK) {
-                    if (js_player_start(src, JS_DEFAULT_FPS) == ESP_OK) {
-                        js_player_set_current_name(name);
-                        ESP_LOGI(TAG, "Resumed js mode with %s", name);
-                    }
-                    free(src);
-                }
-            }
-        }
-    }
-
-    // 6e. Settle the panel to the restored on/off state. js-mode-on already lit
-    // up via the player above; snap the rest into place: force off when left
-    // off, or snap on for api mode (which has no player) when left on.
-    if (!want_on) {
-        led_control_power_snap(false);
-    } else if (!led_control_is_on()) {
-        led_control_power_snap(true);
-    }
-
-    // 6f. Resume "frame" mode. Unlike js mode's player (started in 6d, which
-    // only launches an async task — its first real paint lands on its own
-    // task well after this point), frame_store_display() paints synchronously
-    // and requires led_control_is_on() to already be true (led_control's
-    // set_all_impl rejects writes while powered off). So this must run AFTER
-    // 6e's power snap, not alongside the 6d js branch.
-    {
-        char mode[16] = {0};
-        config_get_str_or(CONFIG_KEY_LAMP_MODE, mode, sizeof(mode), "api");
-        if (strcmp(mode, "frame") == 0 && want_on) {
-            if (frame_store_display() == ESP_OK) {
-                ESP_LOGI(TAG, "Resumed frame mode");
-            }
-        }
-    }
+    // 6c. Restore the persisted on/off state. DEFERRED: lighting the panel is
+    // the boot's biggest current surge, so it no longer happens here — it runs
+    // in boot_restore_panel() at the very end of app_main, after the HTTP
+    // server and Wi-Fi are up. The lamp thus comes up dark but reachable first,
+    // then soft-starts the panel; an under-powered lamp (e.g. a large panel on
+    // USB) stays reachable instead of browning out before it ever serves a
+    // request. boot_guard may skip the restore entirely (safe boot).
 
     // 7. Start HTTP server (registers JS API inside)
     httpd_handle_t server = http_server_start();
@@ -521,6 +571,15 @@ void app_main(void)
             ESP_LOGE(TAG, "Failed to start WiFi watcher task");
         }
     }
+
+    // 8. Now that the lamp is up and reachable, restore and soft-start the
+    //    panel (deferred from step 6c). On a safe boot this holds it dark.
+    boot_restore_panel();
+
+    // 8a. Arm the stable-uptime timer that clears the boot-fail streak. On a
+    //     safe boot it leaves the streak latched (stays dark until a power
+    //     command), so the next boot does not relapse into a brown-out loop.
+    boot_guard_arm_clear();
 
     ESP_LOGI(TAG, "PlaiiinLightOS ready.");
 }

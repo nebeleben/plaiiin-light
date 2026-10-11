@@ -211,6 +211,28 @@ To protect the hardware, `led_control` clamps RGB to `[0, 255]`, rejects frames 
 
 Both caps apply to every frame path: `POST /api/color`, WebSocket streams, and local JS playback.
 
+### Brown-out-safe boot
+
+Lighting the panel is the biggest current surge a lamp makes, and on a marginal
+supply (a large LED panel on USB, say) it can collapse the 3.3 V rail and trip
+the SoC's brown-out detector — repeatedly, if the surge happens at every boot.
+The firmware spreads and guards that surge:
+
+- **Deferred, soft-started panel.** The persisted on/off + mode is no longer
+  restored early in boot. The lamp comes up **dark but reachable** — Wi-Fi and
+  the HTTP server start first — then the panel is restored and **ramped up over
+  ~0.8 s** instead of snapping to full, so its inrush never coincides with the
+  Wi-Fi bring-up and never lands all at once.
+- **Boot-loop breaker (`boot_guard`).** Consecutive boots that fail to stay up
+  (a brown-out is a software/`unknown` reset, never a clean power-on) are
+  counted in NVS; a boot that survives 10 s clears the streak. After 3 in a row
+  the lamp enters **safe boot** — the panel is held off and the lamp stays dark
+  but reachable, so it never loops forever on bad power. Safe boot is latched
+  and reported as `safeBoot` in `GET /api/health`; an explicit `POST /api/power`
+  (the user taking control, e.g. after fixing power or setting `maxCurrentMa`)
+  clears it. This is distinct from `plug_reset`, which factory-resets after 5
+  deliberate fast *power-on* cycles.
+
 ### Local JS scripts
 
 User scripts are per-pixel **shaders**, not whole-frame renderers. Each script
