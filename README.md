@@ -198,7 +198,7 @@ explicitly welcome.
 
 ## Latest release
 
-**Current firmware: v2.4.0** — grab it from the
+**Current firmware: v2.5.0** — grab it from the
 [releases page](https://github.com/nebeleben/plaiiin-light/releases/latest).
 Every release ships, per form and per chip (classic ESP32, ESP32-C3,
 ESP32-C6 and ESP32-C5, the RISC-V ones with an `-esp32c3` / `-esp32c6` /
@@ -208,6 +208,16 @@ an ESP Web Tools manifest for browser flashing, and `SHA256SUMS`.
 
 What's new in the 2.x line:
 
+- **v2.5.0** — agent-ready API. The whole HTTP contract is served
+  machine-readably at `GET /api/openapi.json` (OpenAPI 3, unauthenticated,
+  gzipped), so an AI agent or any tool-binding client can discover every
+  operation from the lamp itself. `GET /api/js` gains an additive `effects`
+  array with a `description`, `tags` and `source` per effect, so a client can
+  pick an effect by intent ("something cozy") instead of by name; every
+  shipped effect is annotated, and your own scripts self-describe from a
+  `// @description` / `// @tags` header or their leading comment. `POST
+  /api/color` accepts `{"color":[r,g,b]}` to paint every LED without knowing
+  the LED count. API version 2.4.0 (additive; existing clients unaffected).
 - **v2.4.0** — brown-out-safe boot. Lighting the panel is a lamp's biggest
   current surge, so boot no longer does it early: the lamp comes up dark but
   reachable (Wi-Fi + HTTP first), then restores and **soft-starts** the panel
