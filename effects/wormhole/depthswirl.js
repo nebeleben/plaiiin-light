@@ -1,3 +1,5 @@
+// @description A single marble spirals ring to ring through the wormhole, whipping fastest at the centre, with a soft halo in the base colour
+// @tags energetic,geometric,monochrome,fast
 // @mode strip
 //
 // Depth Swirl — a single bright marble spirals through the wormhole. It eases

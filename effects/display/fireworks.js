@@ -1,3 +1,5 @@
+// @description Rockets rise from the bottom on thin trails and burst into expanding rings of sparks in random colours that fade out
+// @tags party,sparkle,colorful,holiday,energetic
 // Fireworks — N rockets launch from the bottom, rise on a 1-pixel trail,
 // peak somewhere in the upper half, and explode into an expanding ring of
 // sparks that fades to nothing. Each rocket cycles independently with

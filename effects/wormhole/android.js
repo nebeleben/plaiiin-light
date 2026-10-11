@@ -1,3 +1,5 @@
+// @description Android spinner - a soft-edged crescent sweeps steadily around the ring, growing and shrinking as it rotates
+// @tags calm,geometric,monochrome,pulse
 // @mode mirror
 // @modeSwitch
 //

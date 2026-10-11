@@ -143,6 +143,19 @@ esp_err_t js_storage_list(char *out, size_t max_len)
     return ESP_OK;
 }
 
+esp_err_t js_storage_read_head(const char *name, char *buf, size_t cap)
+{
+    if (!name_is_valid(name) || !buf || cap == 0) return ESP_ERR_INVALID_ARG;
+    char path[96];
+    full_path(name, path, sizeof(path));
+    FILE *f = fopen(path, "rb");
+    if (!f) return ESP_ERR_NOT_FOUND;
+    size_t n = fread(buf, 1, cap - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    return ESP_OK;
+}
+
 esp_err_t js_storage_read(const char *name, char **out, size_t *len_out)
 {
     if (!name_is_valid(name) || !out) return ESP_ERR_INVALID_ARG;

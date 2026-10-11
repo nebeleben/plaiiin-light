@@ -1,3 +1,5 @@
+// @description K.I.T.T. scanner - a bright horizontal bar with a fading comet tail sweeps up and down the tower height in the base colour
+// @tags retro,fast,monochrome,energetic,wave
 // KnightRider — the K.I.T.T. scanner: a bright head with a cosine-shaped
 // core and a pow() tail, sweeping along the tower's height. In bounce mode
 // the head runs to one end, reverses, and runs back; in cycle mode it loops

@@ -321,7 +321,8 @@ static esp_err_t power_handler(httpd_req_t *req)
 
 /**
  * POST /api/color
- * Body: {"colors":[[255,0,0],[0,255,0],[0,0,255],...]}
+ * Body: {"colors":[[255,0,0],[0,255,0],[0,0,255],...]}  (one per logical LED)
+ *   or  {"color":[255,0,0]}                          (fill every LED)
  * Simple JSON parser — expects [[r,g,b],...] within "colors"
  */
 static esp_err_t color_handler(httpd_req_t *req)
@@ -351,17 +352,6 @@ static esp_err_t color_handler(httpd_req_t *req)
     }
     buf[content_len] = '\0';
 
-    // Find the array start after "colors"
-    char *p = strstr(buf, "colors");
-    if (!p) { p = buf; }
-    p = strchr(p, '[');
-    if (!p) {
-        free(buf);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing colors array");
-        return ESP_FAIL;
-    }
-    p++; // skip outer [
-
     int led_count = led_control_get_count();
     led_color_t *colors = calloc(led_count, sizeof(led_color_t));
     if (!colors) {
@@ -369,8 +359,44 @@ static esp_err_t color_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OOM");
         return ESP_FAIL;
     }
-
     int idx = 0;
+
+    // Fill form, for agents and simple integrations: {"color":[r,g,b]} paints
+    // every LED one colour without the caller having to know ledCount. The
+    // quoted singular key can't match the per-LED "colors" array below. If a
+    // body carries both, the fill wins.
+    char *single = strstr(buf, "\"color\"");
+    if (single) {
+        char *q = strchr(single, '[');
+        if (!q) {
+            free(colors); free(buf);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "color must be [r,g,b]");
+            return ESP_FAIL;
+        }
+        q++;
+        int r = (int)strtol(q, &q, 10); if (*q == ',') q++;
+        int g = (int)strtol(q, &q, 10); if (*q == ',') q++;
+        int b = (int)strtol(q, &q, 10);
+        if (r < 0) r = 0; else if (r > 255) r = 255;
+        if (g < 0) g = 0; else if (g > 255) g = 255;
+        if (b < 0) b = 0; else if (b > 255) b = 255;
+        for (int i = 0; i < led_count; i++) {
+            colors[i].r = (uint8_t)r; colors[i].g = (uint8_t)g; colors[i].b = (uint8_t)b;
+        }
+        idx = led_count;
+    } else {
+    // Find the array start after "colors"
+    char *p = strstr(buf, "colors");
+    if (!p) { p = buf; }
+    p = strchr(p, '[');
+    if (!p) {
+        free(colors);
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing colors array");
+        return ESP_FAIL;
+    }
+    p++; // skip outer [
+
     while (*p && idx < led_count) {
         // Find next [r,g,b]
         char *bracket = strchr(p, '[');
@@ -396,6 +422,7 @@ static esp_err_t color_handler(httpd_req_t *req)
         // Skip past ]
         char *end = strchr(p, ']');
         if (end) p = end + 1;
+    }
     }
 
     if (idx != led_count) {

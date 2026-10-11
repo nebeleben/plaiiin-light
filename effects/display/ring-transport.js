@@ -1,3 +1,5 @@
+// @description Stargate-style transporter - bright rings descend from the top, lock in place, flash white, then retract upward
+// @tags retro,pulse,geometric,monochrome
 // Ring-transport — the "rings come down, lock in, flash, retract" cycle
 // (Stargate-style transporter). All LEDs sit at a steady `backlight` glow
 // in the lamp's base colour; the rings show up as brighter bands that

@@ -7,6 +7,7 @@
 #include "pairing.h"
 #include "wormhole.h"
 #include "swarm.h"          // PlanV3 V2.5 Task 2 — swarm_notify_state() on play success
+#include "cJSON.h"
 #include <stdbool.h>
 
 #include "esp_log.h"
@@ -142,14 +143,111 @@ int js_api_list_json(char *out, size_t cap)
     return written;
 }
 
+// Agent-facing metadata for a stored script, read from its header comment.
+// Explicit directives win:   // @description <sentence>   // @tags a,b,c
+// Otherwise the leading `//` comment block (every effect we ship opens with
+// one) becomes the description, cut at ~160 chars on a word boundary — so a
+// user-uploaded script is self-describing with zero ceremony.
+static void script_meta(const char *name, char *desc, size_t dcap,
+                        char *tags, size_t tcap)
+{
+    desc[0] = 0; tags[0] = 0;
+    char head[768];
+    if (js_storage_read_head(name, head, sizeof(head)) != ESP_OK) return;
+
+    bool explicit_desc = false, in_lead = true;
+    size_t dl = 0;
+    char *save;
+    for (char *line = strtok_r(head, "\n", &save); line;
+         line = strtok_r(NULL, "\n", &save)) {
+        while (*line == ' ' || *line == '\t') line++;
+        size_t L = strlen(line);
+        while (L && (line[L - 1] == '\r' || line[L - 1] == ' ')) line[--L] = 0;
+        if (strncmp(line, "//", 2) != 0) {
+            if (L) in_lead = false;         // first code/blank-ish line ends the block
+            else in_lead = false;           // a blank line ends it too
+            continue;
+        }
+        const char *t = line + 2;
+        while (*t == ' ' || *t == '\t') t++;
+        if (strncmp(t, "@description", 12) == 0 && (t[12] == ' ' || t[12] == '\t')) {
+            t += 12; while (*t == ' ' || *t == '\t') t++;
+            snprintf(desc, dcap, "%s", t); explicit_desc = true; continue;
+        }
+        if (strncmp(t, "@tags", 5) == 0 && (t[5] == ' ' || t[5] == '\t')) {
+            t += 5; while (*t == ' ' || *t == '\t') t++;
+            snprintf(tags, tcap, "%s", t); continue;
+        }
+        if (*t == '@') continue;             // any other directive
+        if (explicit_desc || !in_lead) continue;
+        // Accumulate the leading comment block as the fallback description.
+        size_t tl = strlen(t);
+        if (!tl) continue;
+        if (dl && dl < dcap - 1) desc[dl++] = ' ';
+        size_t room = dcap - 1 - dl;
+        if (tl > room) tl = room;
+        memcpy(desc + dl, t, tl); dl += tl; desc[dl] = 0;
+    }
+    // Fallback hit the cap: back up to the last word boundary.
+    if (!explicit_desc && dl >= dcap - 1) {
+        char *sp = strrchr(desc, ' ');
+        if (sp && sp > desc + 40) *sp = 0;
+    }
+}
+
+// GET /api/js -> {"scripts":[...],"playing":...,"effects":[{...}]}
+//
+// `scripts` + `playing` are the legacy shape (shared with the BLE path via
+// js_api_list_json and parsed as a plain name array by every shipped client),
+// so they are untouched. `effects` is ADDITIVE: one object per `scripts`
+// entry, same order, carrying what an agent needs to pick an effect by intent:
+//   {name, description, tags:[...], source:"hardcoded"|"script"}
+// Hardcoded effects take theirs from the generated registry (// @description
+// / // @tags in the .c); stored scripts from their header comment.
 static esp_err_t list_handler(httpd_req_t *req)
 {
     if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
-    char resp[1200];
-    int n = js_api_list_json(resp, sizeof(resp));
-    if (n < 0) return send_err_json(req, 500, "list failed");
+    char legacy[1200];
+    if (js_api_list_json(legacy, sizeof(legacy)) < 0)
+        return send_err_json(req, 500, "list failed");
+    cJSON *root = cJSON_Parse(legacy);
+    if (!root) return send_err_json(req, 500, "list failed");
+
+    cJSON *scripts = cJSON_GetObjectItem(root, "scripts");
+    cJSON *effects = cJSON_AddArrayToObject(root, "effects");
+    cJSON *it;
+    cJSON_ArrayForEach(it, scripts) {
+        if (!cJSON_IsString(it) || !it->valuestring) continue;
+        const char *name = it->valuestring;
+        const hardcoded_effect_t *hc = hardcoded_effect_find(name);
+        char desc[161], tags[128];
+        if (hc) {
+            snprintf(desc, sizeof(desc), "%s", hc->description ? hc->description : "");
+            snprintf(tags, sizeof(tags), "%s", hc->tags ? hc->tags : "");
+        } else {
+            script_meta(name, desc, sizeof(desc), tags, sizeof(tags));
+        }
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "name", name);
+        cJSON_AddStringToObject(o, "description", desc);
+        cJSON *ta = cJSON_AddArrayToObject(o, "tags");
+        char *save;
+        for (char *tk = strtok_r(tags, ",", &save); tk; tk = strtok_r(NULL, ",", &save)) {
+            while (*tk == ' ') tk++;
+            size_t L = strlen(tk);
+            while (L && tk[L - 1] == ' ') tk[--L] = 0;
+            if (L) cJSON_AddItemToArray(ta, cJSON_CreateString(tk));
+        }
+        cJSON_AddStringToObject(o, "source", hc ? "hardcoded" : "script");
+        cJSON_AddItemToArray(effects, o);
+    }
+
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) return send_err_json(req, 500, "OOM");
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, resp);
+    httpd_resp_sendstr(req, out);
+    free(out);
     return ESP_OK;
 }
 

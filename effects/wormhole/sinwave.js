@@ -1,3 +1,5 @@
+// @description A sine wave of brightness travels along the LED index in the base colour, scrolling steadily in one direction
+// @tags wave,calm,monochrome,ambient
 // @mode mirror
 // @modeSwitch
 

@@ -12,6 +12,10 @@ esp_err_t js_storage_list(char *out, size_t max_len);
 
 /** Reads a script by name. `out` must be freed by the caller on success. */
 esp_err_t js_storage_read(const char *name, char **out, size_t *len_out);
+// Read at most cap-1 leading bytes of a stored script's source into buf (NUL-
+// terminated). For header metadata (// @description, // @tags) without
+// pulling the whole file off SPIFFS. ESP_ERR_NOT_FOUND if absent.
+esp_err_t js_storage_read_head(const char *name, char *buf, size_t cap);
 
 /** Writes a script by name. Overwrites if it exists. */
 esp_err_t js_storage_write(const char *name, const char *source, size_t len);

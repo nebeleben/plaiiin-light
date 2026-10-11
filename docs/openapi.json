@@ -1,0 +1,2437 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "PlaiiinLightOS Lamp API",
+    "version": "2.4.0",
+    "description": "HTTP API of a PlaiiinLight lamp (ESP32 firmware). Discover lamps on the LAN via mDNS service `_plaiiinlight._tcp` (TXT: id, node, fw, api, lamp, paired); the base URL is `http://<lamp>.local`. Auth: when the lamp is *paired* every request needs `Authorization: Bearer <key>`; roles are user < creator < admin and `GET /api/whoami` tells you yours. An *unpaired* lamp needs no auth at all. Errors are JSON `{status:\"error\",message}` with 400 (bad body), 401 (missing/invalid key), 403 (role too low), 404 (not found / not applicable to this lamp form), 409 (conflicts with current state). The contract is additive within a major version."
+  },
+  "servers": [
+    {
+      "url": "http://{host}.local",
+      "variables": {
+        "host": {
+          "default": "lamp",
+          "description": "The lamp's mDNS host name (its node name)."
+        }
+      }
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    },
+    {}
+  ],
+  "tags": [
+    {
+      "name": "discovery"
+    },
+    {
+      "name": "control"
+    },
+    {
+      "name": "effects"
+    },
+    {
+      "name": "frames"
+    },
+    {
+      "name": "auth"
+    },
+    {
+      "name": "system"
+    }
+  ],
+  "paths": {
+    "/api": {
+      "get": {
+        "operationId": "getDeviceInfo",
+        "summary": "Device info",
+        "description": "Static facts about this lamp: identity, form/model, LED geometry and versions. Call first to learn ledCount and lampForm.",
+        "tags": [
+          "discovery"
+        ],
+        "responses": {
+          "200": {
+            "description": "Device info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceInfo"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/state": {
+      "get": {
+        "operationId": "getState",
+        "summary": "Current state",
+        "description": "On/off, base colour, effective mode, brightness, loaded effect name and rendered FPS.",
+        "tags": [
+          "discovery"
+        ],
+        "responses": {
+          "200": {
+            "description": "State",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/State"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Health",
+        "description": "Heap, uptime, last reset reason, FPS and whether the lamp is in brown-out safe boot (panel held off until POST /api/power).",
+        "tags": [
+          "system"
+        ],
+        "responses": {
+          "200": {
+            "description": "Health",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "freeHeap": {
+                      "type": "integer"
+                    },
+                    "minHeap": {
+                      "type": "integer"
+                    },
+                    "uptime": {
+                      "type": "integer",
+                      "description": "Seconds since boot."
+                    },
+                    "resetReason": {
+                      "type": "string",
+                      "enum": [
+                        "poweron",
+                        "sw",
+                        "panic",
+                        "int_wdt",
+                        "task_wdt",
+                        "brownout",
+                        "deepsleep",
+                        "unknown"
+                      ]
+                    },
+                    "fps": {
+                      "type": "integer"
+                    },
+                    "safeBoot": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/ota/info": {
+      "get": {
+        "operationId": "getFirmwareInfo",
+        "summary": "Firmware info",
+        "description": "Running firmware version, build date/time, partition, IDF version, form and chip target.",
+        "tags": [
+          "system"
+        ],
+        "responses": {
+          "200": {
+            "description": "Firmware info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "string"
+                    },
+                    "date": {
+                      "type": "string"
+                    },
+                    "time": {
+                      "type": "string"
+                    },
+                    "partition": {
+                      "type": "string"
+                    },
+                    "idf": {
+                      "type": "string"
+                    },
+                    "form": {
+                      "type": "string"
+                    },
+                    "target": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/storage": {
+      "get": {
+        "operationId": "getStorage",
+        "summary": "Script storage",
+        "description": "SPIFFS usage for uploaded scripts (bytes) and file count.",
+        "tags": [
+          "system"
+        ],
+        "responses": {
+          "200": {
+            "description": "Storage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "integer"
+                    },
+                    "used": {
+                      "type": "integer"
+                    },
+                    "free": {
+                      "type": "integer"
+                    },
+                    "files": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/openapi.json": {
+      "get": {
+        "operationId": "getOpenApi",
+        "summary": "This document",
+        "description": "The OpenAPI description of this lamp's API; may be served with Content-Encoding: gzip.",
+        "tags": [
+          "discovery"
+        ],
+        "responses": {
+          "200": {
+            "description": "OpenAPI document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/form-prompt": {
+      "get": {
+        "operationId": "getFormPrompt",
+        "summary": "Form descriptor for AI",
+        "description": "Natural-language description of this lamp's physical form and pixel layout, meant to be pasted into an LLM prompt that writes a `shade()` script for it. `effective` is the text to use; `hasOverride`/`override` show a user customisation. Wormhole lamps add `mode` and `byMode`.",
+        "tags": [
+          "effects"
+        ],
+        "responses": {
+          "200": {
+            "description": "Form prompt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "form": {
+                      "type": "string"
+                    },
+                    "default": {
+                      "type": "string"
+                    },
+                    "effective": {
+                      "type": "string"
+                    },
+                    "hasOverride": {
+                      "type": "boolean"
+                    },
+                    "override": {
+                      "type": "string"
+                    },
+                    "mode": {
+                      "type": "string"
+                    },
+                    "byMode": {
+                      "type": "object",
+                      "properties": {
+                        "strip": {
+                          "type": "string"
+                        },
+                        "mirror": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "form",
+                    "default",
+                    "effective"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/whoami": {
+      "get": {
+        "operationId": "whoAmI",
+        "summary": "My role",
+        "description": "Role the request's bearer key grants (none/user/creator/admin) and whether the lamp is paired.",
+        "tags": [
+          "auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "Identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "none",
+                        "user",
+                        "creator",
+                        "admin"
+                      ]
+                    },
+                    "paired": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/pair": {
+      "get": {
+        "operationId": "getPairing",
+        "summary": "Pairing status",
+        "description": "Whether the lamp requires auth. No auth needed.",
+        "tags": [
+          "auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "Pairing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "paired": {
+                      "type": "boolean"
+                    },
+                    "hasToken": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": []
+      },
+      "post": {
+        "operationId": "pair",
+        "summary": "Mint/rotate admin token",
+        "description": "Unpaired: empty body mints the first admin token (bootstrap). Paired: send the current admin bearer to rotate it. Store the returned token.",
+        "tags": [
+          "auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "Token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": []
+      },
+      "delete": {
+        "operationId": "unpair",
+        "summary": "Unpair",
+        "description": "Removes auth entirely so any LAN client may call the API. Role: admin.",
+        "tags": [
+          "auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/keys": {
+      "get": {
+        "operationId": "listKeys",
+        "summary": "List keys",
+        "description": "All issued keys including secrets, roles, labels and revoked flags. Role: admin.",
+        "tags": [
+          "auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "Keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "keys": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/KeyEntry"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createKey",
+        "summary": "Create a scoped key",
+        "description": "Issue a user or creator key, e.g. one per agent; the secret is only returned here. Role: admin.",
+        "tags": [
+          "auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "creator"
+                    ]
+                  },
+                  "label": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "role"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "New key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyEntry"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/keys/{id}": {
+      "delete": {
+        "operationId": "deleteKey",
+        "summary": "Delete key",
+        "description": "Drops the key entirely. Role: admin.",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Key id from GET /api/keys or POST /api/keys."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/keys/{id}/revoke": {
+      "post": {
+        "operationId": "revokeKey",
+        "summary": "Revoke key",
+        "description": "Marks the key revoked but keeps it listed. Role: admin.",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Key id from GET /api/keys or POST /api/keys."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/power": {
+      "post": {
+        "operationId": "setPower",
+        "summary": "Power on/off",
+        "description": "Turns the panel on or off with the configured fade; also clears a brown-out safe boot. Role: user.",
+        "tags": [
+          "control"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "on": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "on"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "New state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "on",
+                        "off"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/brightness": {
+      "get": {
+        "operationId": "getBrightness",
+        "summary": "Get brightness",
+        "description": "Current master brightness 0-255. Role: user.",
+        "tags": [
+          "control"
+        ],
+        "responses": {
+          "200": {
+            "description": "Brightness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Brightness"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "setBrightness",
+        "summary": "Set brightness",
+        "description": "Master brightness 0-255, persisted; capped by maxBrightness. Role: user.",
+        "tags": [
+          "control"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Brightness"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Brightness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Brightness"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/color": {
+      "post": {
+        "operationId": "setColor",
+        "summary": "Set colour",
+        "description": "Paint the lamp. Use `color` to fill every LED with one colour (simplest), or `colors` with exactly one [r,g,b] per logical LED (ledCount from GET /api). In js/frame mode the framebuffer is not touched (the effect owns it) but the base colour the running script tints from is updated. Role: user.",
+        "tags": [
+          "control"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "color": {
+                        "$ref": "#/components/schemas/RGB"
+                      }
+                    },
+                    "required": [
+                      "color"
+                    ],
+                    "description": "Fill: one colour for the whole lamp."
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "colors": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/components/schemas/RGB"
+                        }
+                      }
+                    },
+                    "required": [
+                      "colors"
+                    ],
+                    "description": "Per-pixel: one entry per logical LED, in index order."
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/base_color": {
+      "get": {
+        "operationId": "getBaseColor",
+        "summary": "Get base colour",
+        "description": "The colour JS effects blend onto; set it via POST /api/color. Role: user.",
+        "tags": [
+          "control"
+        ],
+        "responses": {
+          "200": {
+            "description": "Colour",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "color": {
+                      "$ref": "#/components/schemas/RGB"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/mode": {
+      "get": {
+        "operationId": "getMode",
+        "summary": "Get mode",
+        "description": "`mode` is the effective mode (stream while a WebSocket client streams), `persistent` the stored one, `current` the loaded effect. Role: user.",
+        "tags": [
+          "control"
+        ],
+        "responses": {
+          "200": {
+            "description": "Mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "enum": [
+                        "api",
+                        "js",
+                        "stream",
+                        "frame"
+                      ]
+                    },
+                    "persistent": {
+                      "type": "string",
+                      "enum": [
+                        "api",
+                        "js",
+                        "frame"
+                      ]
+                    },
+                    "current": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "setMode",
+        "summary": "Set mode",
+        "description": "`api` = solid colour from POST /api/color, `js` = run the current effect, `frame` = show the stored frame, `stream` = WebSocket frames. Prefer POST /api/play to start an effect (it switches to js for you). Role: user.",
+        "tags": [
+          "control"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "api",
+                      "js",
+                      "stream",
+                      "frame"
+                    ]
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "putMode",
+        "summary": "Set mode (alias)",
+        "description": "Same as POST /api/mode. Role: user.",
+        "tags": [
+          "control"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "api",
+                      "js",
+                      "stream",
+                      "frame"
+                    ]
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/limits": {
+      "get": {
+        "operationId": "getLimits",
+        "summary": "Get guardrails",
+        "description": "Brightness ceiling and current cap (mA, 0 = off). Role: user.",
+        "tags": [
+          "control"
+        ],
+        "responses": {
+          "200": {
+            "description": "Limits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Limits"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "setLimits",
+        "summary": "Set guardrails",
+        "description": "Any subset; maxCurrentMa scales brightness so estimated draw (20 mA/channel at 255) never exceeds it. Use to make an under-powered lamp safe. Role: admin.",
+        "tags": [
+          "control"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Limits"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Limits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Limits"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/grid": {
+      "get": {
+        "operationId": "getGrid",
+        "summary": "Get grid",
+        "description": "Physical vs logical pixel grid and the grouping between them. Role: user.",
+        "tags": [
+          "control"
+        ],
+        "responses": {
+          "200": {
+            "description": "Grid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Grid"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "setGrid",
+        "summary": "Set pixel grouping",
+        "description": "Combine W×H physical LEDs into one logical pixel (persisted). Role: admin.",
+        "tags": [
+          "control"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pixelGroupW": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "pixelGroupH": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Grid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Grid"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/fade": {
+      "get": {
+        "operationId": "getFade",
+        "summary": "Get fade",
+        "description": "Power-on / power-off fade durations in ms. Role: user.",
+        "tags": [
+          "control"
+        ],
+        "responses": {
+          "200": {
+            "description": "Fade",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Fade"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "setFade",
+        "summary": "Set fade",
+        "description": "Any subset; 0 = instant. Role: admin.",
+        "tags": [
+          "control"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Fade"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Fade",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Fade"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/js": {
+      "get": {
+        "operationId": "listEffects",
+        "summary": "List effects",
+        "description": "Every playable effect: `effects` carries name, description, tags and whether it is a built-in (hardcoded) or an uploaded script; `scripts` is the same set as bare names (legacy). Pick by description/tags, then POST /api/play. Role: user.",
+        "tags": [
+          "effects"
+        ],
+        "responses": {
+          "200": {
+            "description": "Effects",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "scripts": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "playing": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "effects": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/EffectItem"
+                      }
+                    }
+                  },
+                  "required": [
+                    "scripts",
+                    "playing",
+                    "effects"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/js/{name}": {
+      "get": {
+        "operationId": "getEffectSource",
+        "summary": "Get script source",
+        "description": "JS source of an uploaded script (404 for hardcoded effects). Role: user.",
+        "tags": [
+          "effects"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Effect/script name as listed by GET /api/js."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Source",
+            "content": {
+              "text/javascript": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "putEffectSource",
+        "summary": "Upload script",
+        "description": "Create/replace an effect from JS source implementing `function shade(x, y, idx, frame, base, params)` (see /api/form-prompt and shade-runtime.js). Validated and run once before it is stored; a `// @description` and `// @tags a,b` header comment is surfaced by GET /api/js. Name must not collide with a hardcoded effect. Role: creator.",
+        "tags": [
+          "effects"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Effect/script name as listed by GET /api/js."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/javascript": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteEffect",
+        "summary": "Delete script",
+        "description": "Removes an uploaded script. Role: creator.",
+        "tags": [
+          "effects"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Effect/script name as listed by GET /api/js."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/js/{name}/params": {
+      "get": {
+        "operationId": "getEffectParams",
+        "summary": "Get effect parameters",
+        "description": "Tunable parameters of an effect with range, default, live value and description. Role: user.",
+        "tags": [
+          "effects"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Effect/script name as listed by GET /api/js."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Params",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ParamItem"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "setEffectParams",
+        "summary": "Set effect parameters",
+        "description": "Partial update `{paramName: value, …}`; applies live and persists. Role: user.",
+        "tags": [
+          "effects"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Effect/script name as listed by GET /api/js."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/js/validate": {
+      "post": {
+        "operationId": "validateScript",
+        "summary": "Validate script",
+        "description": "Pre-flight JS source through the same check PUT /api/js/{name} uses, without storing it. 400 carries the reason. Role: creator.",
+        "tags": [
+          "effects"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/javascript": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/js/compile": {
+      "post": {
+        "operationId": "compileScript",
+        "summary": "Compile script",
+        "description": "Compile JS source to PLBC bytecode and return it (binary); 400 with the compiler message on failure. Role: creator.",
+        "tags": [
+          "effects"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/javascript": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bytecode",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/play": {
+      "post": {
+        "operationId": "playEffect",
+        "summary": "Play effect",
+        "description": "Load and run an effect by name (switches to js mode). `fps` optional, defaults per effect. Role: user.",
+        "tags": [
+          "effects"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "description": "Effect name from GET /api/js."
+                  },
+                  "fps": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": [
+                  "file"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Playing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "playing": {
+                      "type": "string"
+                    },
+                    "fps": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/stop": {
+      "post": {
+        "operationId": "stopEffect",
+        "summary": "Stop effect",
+        "description": "Stops playback. Role: user.",
+        "tags": [
+          "effects"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/play/next": {
+      "post": {
+        "operationId": "playNext",
+        "summary": "Next effect",
+        "description": "Advance alphabetically and play. Role: user.",
+        "tags": [
+          "effects"
+        ],
+        "responses": {
+          "200": {
+            "description": "Playing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayingName"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/play/prev": {
+      "post": {
+        "operationId": "playPrev",
+        "summary": "Previous effect",
+        "description": "Step back alphabetically and play. Role: user.",
+        "tags": [
+          "effects"
+        ],
+        "responses": {
+          "200": {
+            "description": "Playing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlayingName"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/play/current": {
+      "get": {
+        "operationId": "getCurrentEffect",
+        "summary": "Current effect",
+        "description": "`current` is the persisted selection (survives reboot), `playing` what runs right now (null in api mode). Role: user.",
+        "tags": [
+          "effects"
+        ],
+        "responses": {
+          "200": {
+            "description": "Current",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "current": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "playing": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/frame": {
+      "get": {
+        "operationId": "getFrame",
+        "summary": "Get stored frame",
+        "description": "Raw RGB bytes (logicalW×logicalH×3) with X-Frame-W/H headers; 404 if none stored. Role: user.",
+        "tags": [
+          "frames"
+        ],
+        "responses": {
+          "200": {
+            "description": "RGB bytes",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            },
+            "headers": {
+              "X-Frame-W": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Logical width."
+              },
+              "X-Frame-H": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Logical height."
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "setFrame",
+        "summary": "Store and show a frame",
+        "description": "Raw RGB body exactly logicalW×logicalH×3 bytes (GET /api/grid); stored, displayed and mode set to frame. For a single colour use POST /api/color instead. Role: creator.",
+        "tags": [
+          "frames"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/images": {
+      "get": {
+        "operationId": "listImages",
+        "summary": "List saved images",
+        "description": "Saved frames with their geometry. Role: user.",
+        "tags": [
+          "frames"
+        ],
+        "responses": {
+          "200": {
+            "description": "Images",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "images": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "w": {
+                            "type": "integer"
+                          },
+                          "h": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "max": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "saveImage",
+        "summary": "Save current frame",
+        "description": "Snapshot the stored frame into a new image slot; 409 when the store is full. Role: creator.",
+        "tags": [
+          "frames"
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/images/{name}": {
+      "get": {
+        "operationId": "getImage",
+        "summary": "Get image",
+        "description": "Raw RGB bytes with X-Frame-W/H headers. Role: user.",
+        "tags": [
+          "frames"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "RGB bytes",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            },
+            "headers": {
+              "X-Frame-W": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Logical width."
+              },
+              "X-Frame-H": {
+                "schema": {
+                  "type": "integer"
+                },
+                "description": "Logical height."
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteImage",
+        "summary": "Delete image",
+        "description": "Removes a saved image. Role: creator.",
+        "tags": [
+          "frames"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/images/{name}/show": {
+      "post": {
+        "operationId": "showImage",
+        "summary": "Show image",
+        "description": "Copy a saved image to the frame store, display it and persist frame mode. Role: user.",
+        "tags": [
+          "frames"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/swarm": {
+      "get": {
+        "operationId": "getSwarm",
+        "summary": "Swarm membership",
+        "description": "Whether this lamp is in an ESP-NOW swarm (effects follow the leader) and its channel. Role: user.",
+        "tags": [
+          "system"
+        ],
+        "responses": {
+          "200": {
+            "description": "Swarm",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "member": {
+                      "type": "boolean"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "channel": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/swarm/stats": {
+      "get": {
+        "operationId": "getSwarmStats",
+        "summary": "Swarm counters",
+        "description": "Link and protocol counters for swarm traffic. Role: user.",
+        "tags": [
+          "system"
+        ],
+        "responses": {
+          "200": {
+            "description": "Stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tx": {
+                      "type": "integer"
+                    },
+                    "rx": {
+                      "type": "integer"
+                    },
+                    "txFail": {
+                      "type": "integer"
+                    },
+                    "dropAuth": {
+                      "type": "integer"
+                    },
+                    "dropReplay": {
+                      "type": "integer"
+                    },
+                    "relayed": {
+                      "type": "integer"
+                    },
+                    "applied": {
+                      "type": "integer"
+                    },
+                    "stackFree": {
+                      "type": "integer"
+                    },
+                    "lastFrom": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/mqtt": {
+      "get": {
+        "operationId": "getMqtt",
+        "summary": "MQTT settings",
+        "description": "Broker settings and connection state. Role: admin.",
+        "tags": [
+          "system"
+        ],
+        "responses": {
+          "200": {
+            "description": "MQTT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "active": {
+                      "type": "boolean"
+                    },
+                    "host": {
+                      "type": "string"
+                    },
+                    "port": {
+                      "type": "integer"
+                    },
+                    "nodeName": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "setMqtt",
+        "summary": "Set MQTT",
+        "description": "Enable/disable and set broker port (host via /config page). Role: admin.",
+        "tags": [
+          "system"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "port": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Key from POST /api/pair (admin) or POST /api/keys (user/creator). Only required when GET /api/pair reports paired=true."
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "Error (400 bad body, 401 no/invalid key, 403 role too low, 404 not found or not applicable to this form, 409 conflicts with current state, 5xx firmware error).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "RGB": {
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "minItems": 3,
+        "maxItems": 3,
+        "description": "[r, g, b]"
+      },
+      "Status": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "ok"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "error"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "Brightness": {
+        "type": "object",
+        "properties": {
+          "brightness": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          }
+        },
+        "required": [
+          "brightness"
+        ]
+      },
+      "Limits": {
+        "type": "object",
+        "properties": {
+          "maxBrightness": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          },
+          "maxCurrentMa": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "0 disables the cap."
+          }
+        }
+      },
+      "Grid": {
+        "type": "object",
+        "properties": {
+          "pixelGroupW": {
+            "type": "integer"
+          },
+          "pixelGroupH": {
+            "type": "integer"
+          },
+          "physicalW": {
+            "type": "integer"
+          },
+          "physicalH": {
+            "type": "integer"
+          },
+          "logicalW": {
+            "type": "integer"
+          },
+          "logicalH": {
+            "type": "integer"
+          }
+        }
+      },
+      "Fade": {
+        "type": "object",
+        "properties": {
+          "onMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "offMs": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "PlayingName": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "playing": {
+            "type": "string"
+          }
+        }
+      },
+      "State": {
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "boolean"
+          },
+          "color": {
+            "$ref": "#/components/schemas/RGB"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "api",
+              "js",
+              "stream",
+              "frame"
+            ]
+          },
+          "brightness": {
+            "type": "integer"
+          },
+          "current": {
+            "type": "string",
+            "nullable": true,
+            "description": "Loaded effect name."
+          },
+          "fps": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "on",
+          "color",
+          "mode",
+          "brightness"
+        ]
+      },
+      "DeviceInfo": {
+        "type": "object",
+        "properties": {
+          "vendor": {
+            "type": "string"
+          },
+          "apiVersion": {
+            "type": "string"
+          },
+          "firmwareVersion": {
+            "type": "string"
+          },
+          "nodeName": {
+            "type": "string"
+          },
+          "deviceId": {
+            "type": "string",
+            "description": "Stable factory id (MAC); not a secret, never an auth token."
+          },
+          "ledPin": {
+            "type": "integer"
+          },
+          "ledClkPin": {
+            "type": "integer"
+          },
+          "ledCount": {
+            "type": "integer",
+            "description": "Logical LED count — the length POST /api/color `colors` must have."
+          },
+          "ledType": {
+            "type": "string"
+          },
+          "lampType": {
+            "type": "string"
+          },
+          "lampForm": {
+            "type": "string",
+            "description": "tower, cube, display, strip, rocket or wormhole."
+          },
+          "modelName": {
+            "type": "string"
+          },
+          "modelVersion": {
+            "type": "string"
+          },
+          "physicalW": {
+            "type": "integer"
+          },
+          "physicalH": {
+            "type": "integer"
+          },
+          "logicalW": {
+            "type": "integer"
+          },
+          "logicalH": {
+            "type": "integer"
+          },
+          "pixelGroupW": {
+            "type": "integer"
+          },
+          "pixelGroupH": {
+            "type": "integer"
+          },
+          "rotation": {
+            "type": "integer"
+          },
+          "origin": {
+            "type": "integer"
+          },
+          "serpentine": {
+            "type": "boolean"
+          },
+          "serpentineAxis": {
+            "type": "integer"
+          },
+          "buttonPwrPin": {
+            "type": "integer"
+          },
+          "buttonNextPin": {
+            "type": "integer"
+          },
+          "buttonPrevPin": {
+            "type": "integer"
+          }
+        }
+      },
+      "EffectItem": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string",
+            "description": "What the effect looks like; empty if the script has no header comment."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Mood/style/motion tags, e.g. calm, cozy, fire, fast."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "hardcoded",
+              "script"
+            ],
+            "description": "hardcoded = compiled into firmware (no source), script = uploaded JS."
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "tags",
+          "source"
+        ]
+      },
+      "ParamItem": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "min": {
+            "type": "number"
+          },
+          "max": {
+            "type": "number"
+          },
+          "default": {
+            "type": "number"
+          },
+          "value": {
+            "type": "number",
+            "description": "Live value."
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "min",
+          "max",
+          "default",
+          "value"
+        ]
+      },
+      "KeyEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string",
+            "description": "The bearer secret."
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "creator"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "created": {
+            "type": "integer",
+            "description": "Unix seconds."
+          },
+          "revoked": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  }
+}

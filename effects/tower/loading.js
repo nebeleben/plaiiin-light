@@ -1,3 +1,5 @@
+// @description Loading spinner on a tower - evenly spaced glowing bands chase steadily up the full height and wrap back to the bottom
+// @tags calm,geometric,monochrome,slow
 // Loading — a ring of evenly spaced dots chasing each other around the loop,
 // the classic "loading spinner". Each dot has a soft pow() falloff so it
 // reads as a glowing blob with a short trail rather than a hard pixel.

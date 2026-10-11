@@ -1,3 +1,5 @@
+// @description Loading spinner - evenly spaced glowing dots rotate steadily around the ring over a dim floor in the base colour
+// @tags calm,geometric,monochrome,slow
 // @mode mirror
 // @modeSwitch
 //

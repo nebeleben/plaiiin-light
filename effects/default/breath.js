@@ -1,3 +1,5 @@
+// @description Whole panel breathes in unison in the base colour, slow sine from bright to dim with a longer dwell at the dim end
+// @tags calm,slow,ambient,pulse,monochrome
 // Smooth sinusoidal whole-panel breath — all LEDs in unison, bright then
 // dim then bright. Mild gamma squashing on the wave so the transition
 // dwells longer near the dim end, which looks more like a real breath

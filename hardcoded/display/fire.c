@@ -23,6 +23,8 @@
  */
 
 // @effect fire 30
+// @description Classic rising fire - random heat is injected at the bottom, drifts up and cools through a red-to-yellow flame palette
+// @tags fire,warm,cozy,energetic,random
 // @param speed 0.5..10 = 3 Heat rows shifted per second
 // @param cooling 0.5..3 = 1 Multiplier on the value-mask subtraction (higher = dimmer)
 // @param sparkMin 0..255 = 64 Bottom-row random heat lower bound

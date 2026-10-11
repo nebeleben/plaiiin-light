@@ -1,3 +1,5 @@
+// @description Classic cellular-automaton fire - random heat rises from the bottom, cools and flickers through a red-to-yellow flame palette
+// @tags fire,warm,cozy,energetic,random
 // Fire — a per-pixel reformulation of the classic C++ FirePattern cellular
 // automaton (lampos/adaptations/FirePattern.cpp), ported to the PLBC
 // shade() subset so it scales to any panel size.

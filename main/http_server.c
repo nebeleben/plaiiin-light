@@ -303,6 +303,24 @@ extern const uint8_t style_css_start[] asm("_binary_style_css_start");
 extern const uint8_t style_css_end[]   asm("_binary_style_css_end");
 extern const uint8_t shade_runtime_js_start[] asm("_binary_shade_runtime_js_start");
 extern const uint8_t shade_runtime_js_end[]   asm("_binary_shade_runtime_js_end");
+extern const uint8_t openapi_json_gz_start[]  asm("_binary_openapi_json_gz_start");
+extern const uint8_t openapi_json_gz_end[]    asm("_binary_openapi_json_gz_end");
+
+// GET /api/openapi.json — the machine-readable API contract (OpenAPI 3), so an
+// AI agent or any tool-binding client can discover every operation from the
+// lamp itself. Built from docs/openapi.json at compile time and embedded
+// pre-gzipped (the C5 app slot is tight); every HTTP client and browser
+// transparently decodes Content-Encoding: gzip. Deliberately unauthenticated,
+// like GET /api/pair: it documents the API, it exposes no lamp state, and an
+// agent needs it *before* it can pair.
+static esp_err_t openapi_get_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    httpd_resp_set_hdr(req, "Cache-Control", "max-age=86400");
+    return httpd_resp_send(req, (const char *)openapi_json_gz_start,
+                           openapi_json_gz_end - openapi_json_gz_start);
+}
 extern const uint8_t control_html_start[] asm("_binary_control_html_start");
 extern const uint8_t control_html_end[]   asm("_binary_control_html_end");
 extern const uint8_t test_html_start[] asm("_binary_test_html_start");
@@ -653,6 +671,12 @@ httpd_handle_t http_server_start(void)
         .handler = health_get_handler
     };
     httpd_register_uri_handler(server, &health_info);
+
+    httpd_uri_t openapi = {
+        .uri = "/api/openapi.json", .method = HTTP_GET,
+        .handler = openapi_get_handler, .user_ctx = NULL,
+    };
+    httpd_register_uri_handler(server, &openapi);
 
     httpd_uri_t root_redirect = {
         .uri = "/",

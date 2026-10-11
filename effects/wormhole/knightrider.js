@@ -1,3 +1,5 @@
+// @description K.I.T.T. scanner - a bright head with a fading comet tail sweeps back and forth or loops around the ring in the base colour
+// @tags retro,fast,monochrome,energetic,wave
 // @mode mirror
 // @modeSwitch
 //

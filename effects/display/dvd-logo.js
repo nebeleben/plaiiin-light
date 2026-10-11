@@ -1,3 +1,5 @@
+// @description Small filled rectangle bounces around the panel, switching between six primary colours on every wall hit
+// @tags retro,geometric,colorful,energetic
 // DVD logo — small filled rectangle bounces around the panel, colour rotates
 // on every wall hit. Closed-form position: per-axis triangle wave from
 // fmod(t * vx, 2 * travel) folded onto [0, travel]. Stateless — the bounce

@@ -13,6 +13,8 @@
  */
 
 // @effect carousel 30
+// @description Slideshow of the lamp's saved draw images - shows each one for a dwell time and crossfades to the next, optionally shuffled
+// @tags image,calm,slow,colorful
 // @param dwell 1..60 = 5 Seconds each saved image is shown
 // @param fade 0..5 = 1 Crossfade seconds between images
 // @param shuffle 0..1 = 0 Random order (1) instead of slot order (0)

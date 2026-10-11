@@ -1,3 +1,5 @@
+// @description Smouldering glow - every LED independently eases to a random colour near the base colour, then picks a new target
+// @tags cozy,warm,calm,fire,random
 // Smouldering fire — every LED independently eases from its current colour
 // to a fresh random colour near baseColor, then rolls a new target. A
 // faithful port of the C++ BlazePattern: each pixel has its own start and

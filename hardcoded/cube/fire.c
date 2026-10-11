@@ -24,6 +24,8 @@
  */
 
 // @effect fire 30
+// @description Cube fire - four independent red-yellow flames rise on the side walls with softly twinkling warm embers on the top cap
+// @tags fire,warm,cozy,energetic,random
 // @param speed 0.5..10 = 3 Heat rows shifted per second
 // @param cooling 0.5..3 = 1 Multiplier on the value-mask subtraction (higher = dimmer)
 // @param sparkMin 0..255 = 64 Bottom-row random heat lower bound

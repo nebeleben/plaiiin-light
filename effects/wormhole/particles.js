@@ -1,3 +1,5 @@
+// @description Random LEDs ignite to full base colour and decay independently, giving a glittering twinkle across the rings
+// @tags sparkle,random,ambient,monochrome
 // @mode mirror
 // @modeSwitch
 

@@ -1,3 +1,5 @@
+// @description A restless bead orbits one ring with a fading tail, surging and slowing, then teleports to a random other ring
+// @tags random,energetic,monochrome,geometric
 // @mode strip
 //
 // Jumpy — a single travelling head races around one ring of the wormhole,

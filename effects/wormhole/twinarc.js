@@ -1,3 +1,5 @@
+// @description Two soft arcs counter-rotate on opposite sides of the ring and bloom into a bright flash twice per lap as they cross
+// @tags calm,geometric,monochrome,pulse
 // @mode mirror
 // @modeSwitch
 //

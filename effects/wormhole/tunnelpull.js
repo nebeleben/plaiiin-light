@@ -1,3 +1,5 @@
+// @description A bright ring-front flashes ring to ring along the depth axis, accelerating as it goes, pulling in a random direction each cycle
+// @tags pulse,energetic,geometric,monochrome,random
 // @mode strip
 //
 // Tunnel Pull — light dragged along the depth axis of the wormhole. A bright

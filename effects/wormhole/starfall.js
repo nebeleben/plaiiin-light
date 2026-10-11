@@ -1,3 +1,5 @@
+// @description Several stars with tails orbit the ring at different speeds and directions, burning out and respawning after random pauses
+// @tags sparkle,random,energetic,sky,monochrome
 // @mode mirror
 // @modeSwitch
 //

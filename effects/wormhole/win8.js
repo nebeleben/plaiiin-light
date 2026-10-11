@@ -1,3 +1,5 @@
+// @description Windows 8 spinner - a string of dots races around the ring with ease-in-out motion, bunching up and stretching out
+// @tags retro,geometric,monochrome,energetic
 // @mode mirror
 // @modeSwitch
 //

@@ -1,3 +1,5 @@
+// @description Japanese seigaiha wave pattern - overlapping arcs ripple outward in the base colour with white foam at the crests
+// @tags water,wave,geometric,calm,monochrome
 // @param speed 0.05..2.0 = 0.5 Wave motion speed
 // @param scale 0.1..1.0 = 0.35 Arc density
 // @param foam 0..1 = 0.6 White foam amount

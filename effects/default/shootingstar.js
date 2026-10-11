@@ -1,3 +1,5 @@
+// @description Meteors streak across a steady base colour backdrop, brightening pixels they cross and leaving fading tails
+// @tags sky,sparkle,random,ambient,monochrome
 // Shooting-star overlay. Every pixel normally sits at baseColor; meteors
 // pass through and brighten the pixels they touch, with the brightness
 // decaying back to baseColor over the next several frames (the tail).

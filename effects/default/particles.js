@@ -1,3 +1,5 @@
+// @description Random LEDs ignite to full base colour and decay independently, giving a glittering twinkle across the panel
+// @tags sparkle,random,ambient,monochrome
 // Stateful twinkle / sparkle. Each LED carries its own `energy` slot;
 // every frame the energy decays multiplicatively, and with `spawnRate`
 // probability the LED re-ignites to full brightness. Different LEDs fire

@@ -1,3 +1,5 @@
+// @description Each LED fades in, holds, fades out and rests on its own hash-offset phase in the base colour, like independent breathing points
+// @tags calm,ambient,random,monochrome,slow
 // Random fade-in / hold / fade-out per LED. Each LED runs on its own phase
 // inside a (fadeIn + hold + fadeOut + dark gap) cycle, offset by a
 // deterministic per-LED hash — so the panel looks like independent

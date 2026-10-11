@@ -1,3 +1,5 @@
+// @description A sine wave of brightness travels along the LED index in the base colour, scrolling steadily in one direction
+// @tags wave,calm,monochrome,ambient
 // Travelling sine wave along the LED index. Each LED's brightness is a sine
 // of its position, and the whole wave scrolls over time. Pure shader (no
 // state) — a faithful port of the C++ SinWavePattern.

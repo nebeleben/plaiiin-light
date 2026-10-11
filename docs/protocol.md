@@ -79,6 +79,7 @@ Stable endpoints. Newer endpoints are added in the companion specs.
 | GET  | `/api`              | Device info — `vendor`, `apiVersion`, `firmwareVersion`, `nodeName`, `deviceId`, `ledPin`, `ledClkPin`, `ledCount`, `ledType`, `lampType`, `lampForm`, `modelName`, `modelVersion`, `physicalW/H`, `logicalW/H`, `pixelGroupW/H`, `rotation`, `origin`, `serpentine`, `serpentineAxis`, button pins. |
 | GET  | `/api/state`        | `{on, color:[r,g,b], mode, brightness, currentScript?}` |
 | GET  | `/api/whoami`       | `{role, paired}` — see sharing-api. |
+| GET  | `/api/openapi.json` | The whole HTTP contract as **OpenAPI 3** (source: [`openapi.json`](openapi.json)), served `Content-Encoding: gzip`. No auth — so an AI agent or tool-binding client can bind every operation from the lamp itself, before pairing. |
 | GET  | `/api/pair`         | `{paired:bool, hasToken:bool}` (no auth). |
 | POST | `/api/pair`         | Mint or rotate the admin token. Body empty when unpaired (bootstrap), or `Authorization: Bearer <current>` when paired (rotate). Returns `{token}`. |
 | DELETE | `/api/pair`       | Unpair the lamp. Requires the current admin token. |
@@ -88,7 +89,7 @@ Stable endpoints. Newer endpoints are added in the companion specs.
 | Method | Path | Body |
 |---|---|---|
 | POST | `/api/power`       | `{on: bool}` |
-| POST | `/api/color`       | `{colors: [[r,g,b], …]}` — one entry per logical LED (clamped 0–255). |
+| POST | `/api/color`       | `{colors: [[r,g,b], …]}` — one entry per logical LED, **or** the fill form `{color: [r,g,b]}` — paints every LED that colour (clamped 0–255). Either form also sets the base colour JS scripts tint from; in `js`/`frame` mode only the base colour changes (the framebuffer belongs to the content). |
 | POST | `/api/brightness`  | `{brightness: 0..255}` (persisted to NVS). |
 | GET  | `/api/brightness`  | `{brightness}` |
 | POST | `/api/mode`        | `{mode: "stream" \| "api" \| "js" \| "frame"}` |
@@ -106,7 +107,7 @@ Stable endpoints. Newer endpoints are added in the companion specs.
 
 | Method | Path | Body / Returns |
 |---|---|---|
-| GET    | `/api/js`             | `{scripts:[…], playing:<name>\|null}` |
+| GET    | `/api/js`             | `{scripts:[…], playing:<name>\|null, effects:[{name, description, tags:[…], source:"hardcoded"\|"script"}]}` — `effects` is additive (same order as `scripts`) and is what an agent picks by: an effect's metadata comes from `// @description …` / `// @tags a,b` header lines, falling back to its leading comment block. |
 | GET    | `/api/js/<name>`      | Raw JS source. |
 | PUT    | `/api/js/<name>`      | Raw JS source. Validated + eval'd once before write. |
 | DELETE | `/api/js/<name>`      | — |
@@ -422,8 +423,10 @@ application-specific codes documented in [`wormhole-api.md`](wormhole-api.md).
 
 ## Versioning
 
-`GET /api` returns `apiVersion` (currently `"1.6.0"`). The contract is
-additive within a major version — new fields may appear, existing ones
+`GET /api` returns `apiVersion`. Its current value is `api.version` in
+[`version.properties`](../version.properties) (also advertised as the mDNS
+`api` TXT record); it is bumped whenever the wire contract gains something.
+The contract is additive within a major version — new fields may appear, existing ones
 will not change meaning. A breaking change increments the major component.
 
 ## Reference implementation

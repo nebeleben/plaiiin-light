@@ -1,3 +1,5 @@
+// @description Matrix rain - flickering glyph columns fall at their own speeds in the base colour with brighter white-tinted heads
+// @tags retro,fast,monochrome,random,energetic
 // Matrix rain — falling "glyph" columns in the lamp's base colour. Per-
 // column stateless: the column index seeds its own speed and start offset
 // via hash(), so every column drops at its own pace. The leading pixel

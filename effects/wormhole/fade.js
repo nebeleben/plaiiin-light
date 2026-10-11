@@ -1,3 +1,5 @@
+// @description Each LED fades in, holds, fades out and rests on its own hash-offset phase in the base colour, like independent breathing points
+// @tags calm,ambient,random,monochrome,slow
 // @mode mirror
 // @modeSwitch
 

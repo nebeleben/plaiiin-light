@@ -1,3 +1,5 @@
+// @description Flowing plasma - three overlapping sine layers drift across the panel, modulating brightness of the base colour
+// @tags ambient,wave,calm,monochrome,slow
 // Flowing plasma effect — three sin layers per pixel. Pure shader (no
 // state), exactly the kind of pattern the DSL was built for.
 //

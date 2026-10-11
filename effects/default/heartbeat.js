@@ -1,3 +1,5 @@
+// @description Whole panel pulses in the base colour with a two-beat lub-dub rhythm, then rests quietly until the next beat
+// @tags pulse,calm,monochrome,ambient
 // Heartbeat — two pulses per cycle in a "lub-dub" shape, then quiet until
 // the next beat. The pulses are short half-sine arches at fixed fractions
 // of the cycle (15% wide for each), so the rhythm holds its character at

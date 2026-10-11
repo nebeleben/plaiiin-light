@@ -1,3 +1,5 @@
+// @description Wiring debug sweep - a red head LED walks the logical index order, leaving every passed LED lit white
+// @tags monochrome,slow,geometric
 // Count — direction / serpentine debugging effect. Walks a single bright
 // head LED from logical index 0 up to the last LED, leaving every LED it
 // passed lit white behind it. The leading LED is red so the direction of

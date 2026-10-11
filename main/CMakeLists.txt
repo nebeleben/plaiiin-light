@@ -62,6 +62,27 @@ endforeach()
 # Pick up the generated registry + per-effect param .c files.
 file(GLOB LAMPOS_GEN_SRCS "${LAMPOS_GEN_DIR}/*.c")
 
+# Agent-facing API contract. docs/openapi.json is the source of truth (kept in
+# git, mirrored to the public repo); gzip it at configure time and embed the
+# result, served at GET /api/openapi.json. Deterministic (mtime 0) so the
+# firmware image doesn't change when nothing did.
+set(LAMPOS_OPENAPI_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../docs/openapi.json")
+set(LAMPOS_OPENAPI_GZ  "${LAMPOS_GEN_DIR}/openapi.json.gz")
+if(NOT EXISTS "${LAMPOS_OPENAPI_SRC}")
+    message(FATAL_ERROR "missing ${LAMPOS_OPENAPI_SRC} (the OpenAPI contract served at /api/openapi.json)")
+endif()
+execute_process(
+    COMMAND python3 -c
+        "import gzip,sys; d=open(sys.argv[1],'rb').read(); open(sys.argv[2],'wb').write(gzip.compress(d, 9, mtime=0))"
+        "${LAMPOS_OPENAPI_SRC}" "${LAMPOS_OPENAPI_GZ}"
+    RESULT_VARIABLE LAMPOS_GZ_RC
+    ERROR_VARIABLE  LAMPOS_GZ_ERR
+)
+if(NOT LAMPOS_GZ_RC EQUAL 0)
+    message(FATAL_ERROR "gzip of docs/openapi.json failed (${LAMPOS_GZ_RC}):\n${LAMPOS_GZ_ERR}")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${LAMPOS_OPENAPI_SRC}")
+
 idf_component_register(
     SRCS
         "main.c"
@@ -123,6 +144,8 @@ idf_component_register(
         plbc
         bt
         button
+    EMBED_FILES
+        "${LAMPOS_OPENAPI_GZ}"
     EMBED_TXTFILES
         "../portal/style.css"
         "../portal/index.html"

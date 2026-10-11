@@ -27,6 +27,8 @@
  */
 
 // @effect flight 30
+// @description Rocket in flight - yellow-to-red flames trail down the body from the tip while the booster ring glows as an engine halo
+// @tags fire,warm,energetic,fast,sky
 // @param speed 0.5..10 = 3 Heat rows shifted per second
 // @param cooling 0.5..3 = 1 Multiplier on the value-mask subtraction
 // @param sparkMin 0..255 = 64 Spawn-row random heat lower bound

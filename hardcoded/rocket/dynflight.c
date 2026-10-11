@@ -12,6 +12,8 @@
  */
 
 // @effect dynflight 30
+// @description Rocket in flight in the lamp's base color - flames trail down the body from the tip with a pulsing booster halo
+// @tags fire,energetic,fast,sky,monochrome
 // @param speed 0.5..10 = 3 Heat rows shifted per second
 // @param cooling 0.5..3 = 1 Multiplier on the value-mask subtraction
 // @param sparkMin 0..255 = 64 Spawn-row random heat lower bound

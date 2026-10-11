@@ -235,6 +235,15 @@ The firmware spreads and guards that surge:
 
 ### Local JS scripts
 
+Every effect is self-describing for clients and AI agents: `GET /api/js` returns an
+additive `effects` array (`name`, `description`, `tags`, `source`) next to the plain
+`scripts` name list. Put two header lines at the top of a script to drive it —
+`// @description <one sentence>` and `// @tags cozy,warm,slow` (lowercase,
+comma-separated) — or skip them and the leading `//` comment block is used as the
+description. Hardcoded C effects declare the same two lines after `// @effect`.
+The complete HTTP contract is also served machine-readably at `GET /api/openapi.json`
+(OpenAPI 3, source `docs/openapi.json`).
+
 User scripts are per-pixel **shaders**, not whole-frame renderers. Each script
 defines a `shade(x, y, idx, frame, base, params)` function that emits one colour
 per LED. Scripts are compiled to **PLBC** (PlaiiinLight Bytecode — a compact

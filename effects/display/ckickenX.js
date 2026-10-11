@@ -1,3 +1,5 @@
+// @description Cartoon white chicken dances, hops and flaps its wings on a green grass floor in front of a dim sky and hills
+// @tags image,nature,colorful,energetic,retro
 // @param speed 0.05..2.0 = 0.6 Dance speed
 // @param flap 0.1..2.0 = 1.0 Wing flap intensity
 // @param cadence 0.5..6.0 = 3.0 Hop cadence

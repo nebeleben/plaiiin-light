@@ -1,3 +1,5 @@
+// @description Fully lit base colour backlight with a slow sinus hue ripple twisted into a helix that cruises up the tower
+// @tags calm,ambient,colorful,slow,wave
 // Spiral — smooth backlight in the lamp's base colour with a sinus hue
 // ripple running vertically up the tower. Per-column phase shift wraps the
 // ripple into a helix that cruises along the rocket axis. Every LED stays

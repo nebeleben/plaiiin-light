@@ -37,6 +37,11 @@ EFFECT_RE = re.compile(r"^\s*//\s*@effect\s+(\S+)\s+(\d+)\s*$")
 PARAM_RE  = re.compile(
     r"^\s*//\s*@param\s+(\S+)\s+([-+0-9.eE]+)\.\.([-+0-9.eE]+)\s*=\s*([-+0-9.eE]+)\s+(.*)$"
 )
+# Agent-facing metadata (same header convention as the JS effects):
+#   // @description <one sentence>
+#   // @tags <comma,separated,lowercase>
+DESC_RE   = re.compile(r"^\s*//\s*@description\s+(.*\S)\s*$")
+TAGS_RE   = re.compile(r"^\s*//\s*@tags\s+(.*\S)\s*$")
 
 
 def parse_effect(c_path: Path):
@@ -45,7 +50,17 @@ def parse_effect(c_path: Path):
     name = None
     default_fps = 30
     params = []
+    description = ""
+    tags = ""
     for raw in text.splitlines():
+        m = DESC_RE.match(raw)
+        if m:
+            description = m.group(1)
+            continue
+        m = TAGS_RE.match(raw)
+        if m:
+            tags = ",".join(t.strip() for t in m.group(1).split(",") if t.strip())
+            continue
         m = EFFECT_RE.match(raw)
         if m:
             if name is not None:
@@ -64,7 +79,13 @@ def parse_effect(c_path: Path):
             })
     if name is None:
         return None
-    return {"name": name, "default_fps": default_fps, "params": params, "src": c_path}
+    return {"name": name, "default_fps": default_fps, "params": params,
+            "description": description, "tags": tags, "src": c_path}
+
+
+def c_str(s: str) -> str:
+    """Render a Python string as a C string literal (escaped, quoted)."""
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def num_fmt(v: float) -> str:
@@ -261,6 +282,8 @@ def emit_registry(out_dir: Path, effects: list, form: str):
         lines += [
             f"static const hardcoded_effect_t s_{name}_desc = {{",
             f'    .name = "{name}",',
+            f'    .description = {c_str(eff["description"])},',
+            f'    .tags = {c_str(eff["tags"])},',
             f'    .default_fps = {eff["default_fps"]},',
             f"    .init = {name}_init,",
             f"    .render_frame = {name}_render_frame,",

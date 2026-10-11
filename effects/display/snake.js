@@ -1,3 +1,5 @@
+// @description Auto-playing snake game - a green-tinted snake wanders the panel, eats fruit, grows and resets after a dead flash
+// @tags retro,geometric,energetic,random
 // Snake — an auto-play snake wanders the panel, eats fruit, and grows.
 // The head moves one cell every `moveInterval` ms (slowed by `speed`),
 // steered by a simple greedy heuristic: prefer the axis with the larger

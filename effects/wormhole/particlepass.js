@@ -1,3 +1,5 @@
+// @description Random points around the wormhole bloom to a peak and fade in two stages, outer rings lagging so blooms wash down the construct
+// @tags sparkle,random,ambient,calm,wave
 // @mode strip
 //
 // Particle Pass — density-driven wormhole shimmer. LED positions around the

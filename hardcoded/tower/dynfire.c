@@ -15,6 +15,8 @@
  */
 
 // @effect dynfire 30
+// @description Rising fire in the colour you picked - heat flickers up from the bottom with per-cell hue offsets around the base colour
+// @tags fire,cozy,warm,energetic,random
 // @param speed 0.5..10 = 3 Heat rows shifted per second
 // @param cooling 0.5..3 = 1 Multiplier on the value-mask subtraction (higher = dimmer)
 // @param sparkMin 0..255 = 64 Bottom-row random heat lower bound

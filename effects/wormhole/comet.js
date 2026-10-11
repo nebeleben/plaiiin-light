@@ -1,3 +1,5 @@
+// @description One bright dot in the base colour races around the ring dragging a fading comet tail, the same on every ring
+// @tags calm,monochrome,geometric,ambient
 // @mode mirror
 // @modeSwitch
 //

@@ -1,3 +1,5 @@
+// @description Water beads run down a window - hue-shifted drops with fading trails slide and wobble down over a base colour backlight
+// @tags water,calm,nature,ambient,slow
 // Drops — water beads running down a window. Smooth background light in the
 // lamp's base colour, with sparse vertical streaks (a drop head with a
 // fading trail above it) sliding from top to bottom. Each drop rolls its

@@ -1,3 +1,5 @@
+// @description Smouldering glow - every LED independently eases to a random colour near the base colour, then picks a new target
+// @tags cozy,warm,calm,fire,random
 // @mode mirror
 // @modeSwitch
 

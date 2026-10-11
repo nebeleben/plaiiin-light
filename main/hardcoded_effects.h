@@ -37,6 +37,13 @@ struct hardcoded_effect_s {
      * js_api's write_handler). */
     const char *name;
 
+    /* Agent-facing metadata from the effect's `// @description` / `// @tags`
+     * header lines (see gen_hardcoded.py). Surfaced by GET /api/js `effects`
+     * so a client (or an AI agent) can choose an effect by intent. Either
+     * may be "" when the effect declares none. `tags` is comma-separated. */
+    const char *description;
+    const char *tags;
+
     /* Default frames-per-second when /api/play doesn't specify. */
     int default_fps;
 
