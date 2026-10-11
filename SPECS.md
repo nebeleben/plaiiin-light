@@ -435,7 +435,7 @@ the byte-precise packet format and the `/api/swarm*` wire contract.
 
 A pixel group combines `pixelGroupW × pixelGroupH` physical LEDs into one logical pixel. A 16×16 matrix with group `2×2` renders as an 8×8 logical grid — `shade()` runs once per logical pixel (64 of them) and each result is tiled onto a 2×2 physical block.
 
-Configure it at `/js → Guardrails → Pixel group` or `POST /api/limits`. `GET /api` reports both `physicalW/H` and `logicalW/H` alongside `pixelGroupW/H` so clients can size their frames correctly.
+Set it with `POST /api/grid` (or bake it per-device with `profile-burn`); `GET /api/grid` and `GET /api` both report `physicalW/H` and `logicalW/H` alongside `pixelGroupW/H` so clients can size their frames correctly.
 
 ### Matrix Rotation
 
@@ -519,8 +519,10 @@ All pages share a consistent theme with day/night mode toggle (persisted in brow
 | `/api/state` | GET | `{on, color:[r,g,b], mode, brightness}` — Current lamp state |
 | `/api/brightness` | GET | `{"brightness": 255}` — Get current brightness |
 | `/api/brightness` | POST | `{"brightness": 128}` — Set brightness (0-255, saved to NVS) |
-| `/api/limits` | GET | `{maxBrightness, maxCurrentMa, pixelGroupW, pixelGroupH}` |
-| `/api/limits` | POST | Any subset of the four fields — persisted to NVS |
+| `/api/limits` | GET | `{maxBrightness, maxCurrentMa}` |
+| `/api/limits` | POST | Any subset of `{maxBrightness, maxCurrentMa}` — persisted to NVS |
+| `/api/grid` | GET | `{pixelGroupW, pixelGroupH, physicalW, physicalH, logicalW, logicalH}` |
+| `/api/grid` | POST | `{pixelGroupW, pixelGroupH}` — set pixel grouping, persisted to NVS |
 | `/api/mode` | POST | `{"mode": "stream/api/js/frame"}` — Switch lamp mode |
 | `/api/frame` | POST | Raw RGB body, `logicalW*logicalH*3` bytes (creator+) — save + display a drawn frame |
 | `/api/frame` | GET | Raw RGB body + `X-Frame-W`/`X-Frame-H` headers (user+) — read back the stored frame |

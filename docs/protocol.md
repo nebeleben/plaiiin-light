@@ -92,8 +92,10 @@ Stable endpoints. Newer endpoints are added in the companion specs.
 | POST | `/api/brightness`  | `{brightness: 0..255}` (persisted to NVS). |
 | GET  | `/api/brightness`  | `{brightness}` |
 | POST | `/api/mode`        | `{mode: "stream" \| "api" \| "js" \| "frame"}` |
-| GET  | `/api/limits`      | `{maxBrightness, maxCurrentMa, pixelGroupW, pixelGroupH}` |
-| POST | `/api/limits`      | Any subset of the four fields. |
+| GET  | `/api/limits`      | `{maxBrightness, maxCurrentMa}` |
+| POST | `/api/limits`      | Any subset of `{maxBrightness, maxCurrentMa}`. |
+| GET  | `/api/grid`        | `{pixelGroupW, pixelGroupH, physicalW, physicalH, logicalW, logicalH}` |
+| POST | `/api/grid`        | `{pixelGroupW, pixelGroupH}` — set pixel grouping (persisted to NVS). |
 | GET  | `/api/base_color`  | `{color:[r,g,b]}` — the base color JS scripts blend onto (read-only; set it via `/api/color`). |
 | GET  | `/api/fade`        | `{onMs, offMs}` — power-on / power-off fade durations. |
 | POST | `/api/fade`        | Any subset of `{onMs, offMs}`. |
