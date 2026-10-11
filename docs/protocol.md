@@ -119,6 +119,37 @@ each call emits one pixel via `emit()` / `emitBright()` / `emitHSV()`. The
 shared `lampos/portal/shade-runtime.js` runtime is the reference
 implementation used by the firmware and every client's preview.
 
+### Scenes (`/api/scenes`)
+
+A **scene** is a named, saved snapshot of the lamp's user-facing state,
+recalled in one call. Stored on the lamp (SPIFFS, up to 32), so it works for
+every client, for an AI agent, for Home Assistant and for the swarm. The
+document is plain JSON; every field is optional and an absent field means
+"leave as is" (so a partial scene that only sets a mood colour is valid):
+
+```json
+{ "on": true, "mode": "js", "script": "blaze", "params": { "speed": 2 },
+  "image": "img-003", "color": [255, 140, 40], "brightness": 120 }
+```
+
+`script` implies `js` mode and `image` implies `frame` mode; `mode` is only
+used when neither is given (e.g. `api` + `color` for a solid scene).
+
+| Method | Path | Role | Body / Returns |
+|---|---|---|---|
+| GET    | `/api/scenes`                  | user    | `{scenes:[{name, scene}]}` — every scene with its document. |
+| GET    | `/api/scenes/<name>`           | user    | The document. |
+| PUT    | `/api/scenes/<name>`           | creator | The document (validated, overwrites). `507` at the cap. |
+| DELETE | `/api/scenes/<name>`           | creator | — |
+| POST   | `/api/scenes/<name>/capture`   | creator | Snapshot the lamp's **current** state under `<name>`; returns `{status, name, scene}`. |
+| POST   | `/api/scenes/<name>/activate`  | user    | Apply it. Returns `{status, scene}`; `404` for a missing scene/script/image. |
+
+Activation applies the fields in the order the lamp needs — content
+(script/image/mode), params, brightness, power, then colour — through the same
+paths as manual control, so it persists and mirrors to MQTT and the swarm
+exactly as if the user had clicked through it. Names are 1–32 of `A-Z a-z 0-9
+_ -`.
+
 ### Draw mode (`/api/frame`)
 
 `frame` is a fourth value for `mode` (alongside `stream`, `api`, `js`):

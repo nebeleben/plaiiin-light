@@ -241,6 +241,12 @@ additive `effects` array (`name`, `description`, `tags`, `source`) next to the p
 `// @description <one sentence>` and `// @tags cozy,warm,slow` (lowercase,
 comma-separated) — or skip them and the leading `//` comment block is used as the
 description. Hardcoded C effects declare the same two lines after `// @effect`.
+**Scenes.** A named snapshot of the lamp's state (on, mode, script + params or
+image, colour, brightness), stored on the lamp and recalled with one call:
+`POST /api/scenes/<name>/capture` saves what the lamp is doing right now,
+`POST /api/scenes/<name>/activate` brings it back in the right order with the
+normal fades. Every field is optional, so partial "mood" scenes work. Up to 32.
+
 The complete HTTP contract is also served machine-readably at `GET /api/openapi.json`
 (OpenAPI 3, source `docs/openapi.json`).
 

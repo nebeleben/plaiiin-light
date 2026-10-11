@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "PlaiiinLightOS Lamp API",
-    "version": "2.4.0",
+    "version": "2.5.0",
     "description": "HTTP API of a PlaiiinLight lamp (ESP32 firmware). Discover lamps on the LAN via mDNS service `_plaiiinlight._tcp` (TXT: id, node, fw, api, lamp, paired); the base URL is `http://<lamp>.local`. Auth: when the lamp is *paired* every request needs `Authorization: Bearer <key>`; roles are user < creator < admin and `GET /api/whoami` tells you yours. An *unpaired* lamp needs no auth at all. Errors are JSON `{status:\"error\",message}` with 400 (bad body), 401 (missing/invalid key), 403 (role too low), 404 (not found / not applicable to this lamp form), 409 (conflicts with current state). The contract is additive within a major version."
   },
   "servers": [
@@ -2084,6 +2084,226 @@
           }
         }
       }
+    },
+    "/api/scenes": {
+      "get": {
+        "operationId": "listScenes",
+        "summary": "List saved scenes",
+        "description": "Returns every saved scene with its document, so a client or agent can pick one by content. Role: user.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "scenes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SceneEntry"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/scenes/{name}": {
+      "get": {
+        "operationId": "getScene",
+        "summary": "Get one scene",
+        "description": "The scene document. Role: user.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Scene"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,32}$"
+            }
+          }
+        ]
+      },
+      "put": {
+        "operationId": "saveScene",
+        "summary": "Save a scene",
+        "description": "Store an explicit scene document under this name (overwrites). Up to 32 scenes. Role: creator.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Scene"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,32}$"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteScene",
+        "summary": "Delete a scene",
+        "description": "Role: creator.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,32}$"
+            }
+          }
+        ]
+      }
+    },
+    "/api/scenes/{name}/capture": {
+      "post": {
+        "operationId": "captureScene",
+        "summary": "Capture current state as a scene",
+        "description": "Snapshots the lamp's CURRENT on/mode/script+params (or image)/color/brightness under this name and returns the document — the natural way to make a scene: set the lamp up, then save it. Role: creator.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "scene": {
+                      "$ref": "#/components/schemas/Scene"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,32}$"
+            }
+          }
+        ]
+      }
+    },
+    "/api/scenes/{name}/activate": {
+      "post": {
+        "operationId": "activateScene",
+        "summary": "Activate a scene",
+        "description": "Applies the scene in the correct order (content, params, brightness, power, then colour) using the lamp's normal fades; persists, and mirrors to MQTT/swarm like manual control. Prefer this over issuing the individual calls yourself. Role: user.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "scene": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,32}$"
+            }
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -2429,6 +2649,58 @@
           },
           "revoked": {
             "type": "boolean"
+          }
+        }
+      },
+      "Scene": {
+        "type": "object",
+        "description": "A saved lamp state. Every field is optional; an absent field means 'leave as is'. script implies js mode, image implies frame mode; mode is used only when neither is given (e.g. api + color for a solid scene).",
+        "properties": {
+          "on": {
+            "type": "boolean"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "api",
+              "js",
+              "frame"
+            ]
+          },
+          "script": {
+            "type": "string",
+            "description": "Effect to play (hardcoded or stored script name)."
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            },
+            "description": "Effect parameter values by name (partial OK)."
+          },
+          "image": {
+            "type": "string",
+            "description": "Saved image name (img-NNN) to show in frame mode."
+          },
+          "color": {
+            "$ref": "#/components/schemas/RGB",
+            "description": "Solid/base colour."
+          },
+          "brightness": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          }
+        }
+      },
+      "SceneEntry": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "scene": {
+            "$ref": "#/components/schemas/Scene"
           }
         }
       }

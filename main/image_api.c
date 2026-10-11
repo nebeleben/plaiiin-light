@@ -1,5 +1,6 @@
 #include "image_api.h"
 #include "image_store.h"
+#include "config_store.h"
 #include "frame_store.h"
 #include "led_control.h"
 #include "light_api.h"
@@ -145,6 +146,7 @@ static esp_err_t images_show_handler(httpd_req_t *req)
      * the exact push semantics. */
     int mode_err = light_api_apply_mode("frame");
     if (mode_err != 0) return send_err_json(req, 500, "mode apply failed");
+    config_store_set_str(CONFIG_KEY_CUR_IMAGE, name);   // so a scene capture can record it
     ESP_LOGI(TAG, "Showing %s", name);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"status\":\"ok\"}");

@@ -160,6 +160,9 @@
 // panel) latches a dark "safe boot" instead of looping. Operational state,
 // not personal data. See boot_guard.{h,c}.
 #define CONFIG_KEY_BOOT_FAIL     "boot_fail"
+// Name of the saved image last shown via POST /api/images/<name>/show (or a
+// scene). Lets a scene capture record "image" for frame mode.
+#define CONFIG_KEY_CUR_IMAGE     "cur_image"
 
 // PlanV3 Phase V2.5 — swarm mode (masterless lamp-to-lamp state propagation
 // over ESP-NOW, see swarm.{h,c}). One swarm per lamp: a client provisions a

@@ -28,6 +28,9 @@ int  light_api_apply_mode(const char *mode);
 /// status reporting — "stream" while a WS session owns the lamp, else the
 /// persisted mode. Always NUL-terminates `out`.
 void light_api_get_mode(char *out, size_t out_len);
+// The persisted (user-intended) mode: api | js | frame — unlike get_mode it
+// never reports the transient "stream" takeover. Used by scene capture.
+void light_api_get_persistent_mode(char *out, size_t out_len);
 
 // Stream takeover/restore — called by the WS layer (ws_server.c) when pixel
 // frames start/stop arriving, so streaming auto-suspends the JS effect and

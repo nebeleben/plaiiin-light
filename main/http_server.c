@@ -10,6 +10,7 @@
 #include "js_storage.h"
 #include "pairing.h"
 #include "boot_guard.h"
+#include "scene_api.h"
 #include "form_prompt.h"
 #include "wormhole.h"
 #include "wifi.h"
@@ -618,7 +619,7 @@ httpd_handle_t http_server_start(void)
     // sites) once this cap is hit, so any future module adding routes
     // must re-total the whole registration call graph, not just its own
     // new handlers.
-    config.max_uri_handlers = 96;
+    config.max_uri_handlers = 104;
     config.uri_match_fn = httpd_uri_match_wildcard;
     // JS validation runs mjs_exec on the request thread — needs more stack than default 4 KB.
     config.stack_size = 16 * 1024;
@@ -735,6 +736,7 @@ httpd_handle_t http_server_start(void)
     captive_portal_register_err_handler(server);
     light_api_register(server);
     image_api_register(server);
+    scene_api_register(server);
     ws_server_register(server);
     ota_update_register(server);
 

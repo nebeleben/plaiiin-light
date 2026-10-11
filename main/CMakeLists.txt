@@ -112,6 +112,8 @@ idf_component_register(
         "reset_key_api.c"
         "plug_reset.c"
         "boot_guard.c"
+        "scene_store.c"
+        "scene_api.c"
         "pairing.c"
         "form_prompt.c"
         "keys.c"
