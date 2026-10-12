@@ -402,40 +402,13 @@ void app_main(void)
     // onboarding. If no script is configured, the script is missing, or it
     // won't compile, fall back to the built-in blue pulse on LEDs 0..2.
     //
-    // Phase 36 — the default-scripts installer (former step 6a) runs INSIDE
-    // this block, before the play attempt. On a fresh boot the embedded
-    // built-ins (breath, fade, ...) aren't on SPIFFS yet, so without this
-    // ordering ap_js="breath" always failed with "not found" and the lamp
-    // only ever showed the 3-LED fallback blink. Installing first means the
-    // configured AP script is present when we try to play it.
+    // Phase 36 — the default-scripts installer (former step 6a) runs here, so
+    // on a fresh boot the embedded built-ins (breath, fade, ...) are on SPIFFS
+    // before the compile pass below turns them into bytecode, and the AP
+    // onboarding indicator (6a-ter, below that) can then actually play.
     install_default_scripts();
-    if (wifi_get_mode() == PLAIIIN_WIFI_AP) {
-        char ap_js_name[64] = {0};
-        config_get_str_or(CONFIG_KEY_AP_JS, ap_js_name, sizeof(ap_js_name), "");
-        bool played = false;
-        // Safe boot keeps the panel dark — fall through to the tiny 3-LED
-        // fallback blink instead of running the onboarding effect.
-        if (ap_js_name[0] && !boot_guard_is_safe()) {
-            char *src = NULL;
-            size_t src_len = 0;
-            if (js_storage_read(ap_js_name, &src, &src_len) == ESP_OK && src) {
-                if (js_player_start(src, JS_DEFAULT_FPS) == ESP_OK) {
-                    js_player_set_current_name(ap_js_name);
-                    led_control_set_brightness_override(75); // ~30 % of 255
-                    played = true;
-                    ESP_LOGI(TAG, "AP mode: playing '%s' as onboarding indicator", ap_js_name);
-                } else {
-                    ESP_LOGW(TAG, "AP mode: ap_js '%s' won't start — using fallback", ap_js_name);
-                }
-                free(src);
-            } else {
-                ESP_LOGW(TAG, "AP mode: ap_js '%s' not found on SPIFFS — using fallback", ap_js_name);
-            }
-        }
-        if (!played) {
-            error_light_set(ERROR_LIGHT_AP_MODE);
-        }
-    }
+    // (Phase 33 AP-mode onboarding indicator moved below the compile pass —
+    // see "6a-ter" — the player needs the script's .bc to exist first.)
 
     /* Default scripts are installed in install_default_scripts() above, just
      * before the AP-mode play attempt, so ap_js can find its script on a
@@ -490,6 +463,43 @@ void app_main(void)
                 free(bc);
             }
             free(names);
+        }
+    }
+
+    // 6a-ter. Phase 33 — AP-mode onboarding indicator. In AP mode play the
+    // configured ap_js script, capped to ~30 % brightness so the lamp doesn't
+    // run at full blast for hours during onboarding; otherwise fall back to
+    // the built-in blue pulse on LEDs 0..2.
+    //
+    // This runs AFTER the compile pass on purpose, and sets the current name
+    // BEFORE starting: in the PLBC era js_player_start() ignores its source
+    // argument and the player task loads s_current_name's .bc from storage.
+    // The old order (start, then set the name; before the compile pass) left
+    // the task looking for ''.bc — it died instantly and every freshly
+    // burned lamp sat dark in onboarding mode while logging success.
+    if (wifi_get_mode() == PLAIIIN_WIFI_AP) {
+        char ap_js_name[64] = {0};
+        config_get_str_or(CONFIG_KEY_AP_JS, ap_js_name, sizeof(ap_js_name), "");
+        bool played = false;
+        // Safe boot keeps the panel dark — fall through to the tiny 3-LED
+        // fallback blink instead of running the onboarding effect.
+        if (ap_js_name[0] && !boot_guard_is_safe()) {
+            if (js_storage_bc_current(ap_js_name)) {
+                js_player_set_current_name(ap_js_name);
+                if (js_player_start(NULL, JS_DEFAULT_FPS) == ESP_OK) {
+                    led_control_set_brightness_override(75); // ~30 % of 255
+                    played = true;
+                    ESP_LOGI(TAG, "AP mode: playing '%s' as onboarding indicator", ap_js_name);
+                } else {
+                    js_player_set_current_name(NULL);
+                    ESP_LOGW(TAG, "AP mode: ap_js '%s' won't start — using fallback", ap_js_name);
+                }
+            } else {
+                ESP_LOGW(TAG, "AP mode: ap_js '%s' has no bytecode — using fallback", ap_js_name);
+            }
+        }
+        if (!played) {
+            error_light_set(ERROR_LIGHT_AP_MODE);
         }
     }
 
