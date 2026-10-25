@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "PlaiiinLightOS Lamp API",
-    "version": "2.5.0",
+    "version": "2.6.0",
     "description": "HTTP API of a PlaiiinLight lamp (ESP32 firmware). Discover lamps on the LAN via mDNS service `_plaiiinlight._tcp` (TXT: id, node, fw, api, lamp, paired); the base URL is `http://<lamp>.local`. Auth: when the lamp is *paired* every request needs `Authorization: Bearer <key>`; roles are user < creator < admin and `GET /api/whoami` tells you yours. An *unpaired* lamp needs no auth at all. Errors are JSON `{status:\"error\",message}` with 400 (bad body), 401 (missing/invalid key), 403 (role too low), 404 (not found / not applicable to this lamp form), 409 (conflicts with current state). The contract is additive within a major version."
   },
   "servers": [
