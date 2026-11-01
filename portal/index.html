@@ -240,7 +240,11 @@
 
 <label>Model</label>
 <input id="aiModel" type="text" placeholder="claude-haiku-4-5-20251001">
-<p style="font-size:.68rem;color:var(--text-dim)">Claude: claude-haiku-4-5-20251001, claude-sonnet-4-6, claude-opus-4-6<br>OpenAI: gpt-4o-mini, gpt-4o<br>Custom: any model name your endpoint supports</p>
+<p style="font-size:.68rem;color:var(--text-dim);margin-bottom:10px">Claude: claude-haiku-4-5-20251001, claude-sonnet-4-6, claude-opus-4-6<br>OpenAI: gpt-4o-mini, gpt-4o<br>Custom: any model name your endpoint supports</p>
+
+<label>Token budget</label>
+<input id="aiMaxTokens" type="number" min="256" max="128000" step="256" placeholder="5000">
+<p style="font-size:.68rem;color:var(--text-dim)">Max output tokens per reply (256&ndash;128000, default 5000). Thinking models use part of it for reasoning; raise it if replies get cut off.</p>
 
 </div>
 <p class="copyright">&copy; <a href="https://plaiiin.com">plaiiin.com</a></p>
@@ -613,6 +617,15 @@ document.getElementById('aiProvider').onchange=function(){
 };
 document.getElementById('aiModel').oninput=function(){localStorage.setItem('aiModel',this.value.trim());};
 document.getElementById('aiBaseUrl').oninput=function(){localStorage.setItem('aiBaseUrl',this.value.trim());};
+
+// Token budget (max output tokens per reply), shared by all providers.
+var aiMaxTokensEl=document.getElementById('aiMaxTokens');
+aiMaxTokensEl.value=localStorage.getItem('aiMaxTokens')||'5000';
+aiMaxTokensEl.onchange=function(){
+  var v=parseInt(this.value,10);
+  v=isNaN(v)?5000:Math.min(128000,Math.max(256,v));
+  this.value=v;localStorage.setItem('aiMaxTokens',String(v));
+};
 </script>
 </body>
 </html>

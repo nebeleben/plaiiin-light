@@ -239,6 +239,9 @@ async function callAI(userMsg){
   var defaultBase={claude:'https://api.anthropic.com',openai:'https://api.openai.com',custom:''};
   var aiBase=(localStorage.getItem('aiBaseUrl')||defaultBase[aiProvider]||'').trim().replace(/\/$/,'');
   if(!aiBase){addChatMsg('ai','No base URL configured. Go to Config page to set it.');return null;}
+  // Token budget from the Config page; thinking models spend part of it on reasoning.
+  var maxTok=parseInt(localStorage.getItem('aiMaxTokens'),10);
+  maxTok=isNaN(maxTok)?5000:Math.min(128000,Math.max(256,maxTok));
   messages.push({role:'user',content:userMsg});
   document.getElementById('thinkingLabel').textContent='Thinking...';
   try{
@@ -246,16 +249,26 @@ async function callAI(userMsg){
     if(aiProvider==='claude'){
       url=aiBase+'/v1/messages';
       headers={'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'};
-      body=JSON.stringify({model:aiModel,max_tokens:4096,system:sysPrompt,messages:messages});
+      body=JSON.stringify({model:aiModel,max_tokens:maxTok,system:sysPrompt,messages:messages});
     } else {
       // openai + custom: OpenAI-compatible /v1/chat/completions
       url=aiBase+'/v1/chat/completions';
       headers={'Content-Type':'application/json','Authorization':'Bearer '+key};
-      body=JSON.stringify({model:aiModel,max_tokens:4096,messages:[{role:'system',content:sysPrompt}].concat(messages)});
+      // OpenAI itself wants max_completion_tokens (reasoning models reject max_tokens);
+      // OpenAI-compatible servers mostly only know max_tokens.
+      var oreq={model:aiModel,messages:[{role:'system',content:sysPrompt}].concat(messages)};
+      oreq[aiProvider==='openai'?'max_completion_tokens':'max_tokens']=maxTok;
+      body=JSON.stringify(oreq);
     }
     var resp=await fetch(url,{method:'POST',headers:headers,body:body});
     if(!resp.ok){var err=await resp.text();throw new Error('API '+resp.status+': '+err.slice(0,200));}
     var data=await resp.json();
+    var cut=aiProvider==='claude'?data.stop_reason==='max_tokens':(data.choices&&data.choices[0]&&data.choices[0].finish_reason==='length');
+    if(cut){
+      document.getElementById('thinkingLabel').textContent='';
+      addChatMsg('ai','The response was cut off at the token budget ('+maxTok+' tokens) before the script was complete. Raise the token budget on the Config page and send again.');
+      return null;
+    }
     respText=aiProvider==='claude'?data.content.map(function(c){return c.text;}).join(''):data.choices[0].message.content;
     messages.push({role:'assistant',content:respText});
     document.getElementById('thinkingLabel').textContent='';
