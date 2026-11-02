@@ -468,9 +468,33 @@ static esp_err_t set_all_impl(const led_color_t *colors, int count)
     return err;
 }
 
+// Keep a colour set while the lamp is off as the frame the next power-on
+// fades in to. Without this the write was dropped, the lamp came back in its
+// old colour, and the apps (which read baseColor) showed the new one.
+static void store_while_off(const led_color_t *colors, int count)
+{
+    if (count > s_led_count) count = s_led_count;
+    render_lock();
+    if (s_frame_buffer) {
+        memcpy(s_frame_buffer, colors, count * sizeof(led_color_t));
+        for (int i = count; i < s_led_count; i++) {
+            s_frame_buffer[i].r = 0;
+            s_frame_buffer[i].g = 0;
+            s_frame_buffer[i].b = 0;
+        }
+        s_has_frame_buffer = true;
+    }
+    render_unlock();
+}
+
 esp_err_t led_control_set_all(const led_color_t *colors, int count)
 {
     esp_err_t err = set_all_impl(colors, count);
+    if (err == ESP_ERR_INVALID_STATE && backend_ready() &&
+        !s_power_on && !s_painting_active && colors != NULL && count > 0) {
+        store_while_off(colors, count);
+        err = ESP_OK;
+    }
     if (err == ESP_OK && colors != NULL && count > 0) {
         s_last_color = colors[0];
         save_last_color();
