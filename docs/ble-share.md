@@ -25,7 +25,7 @@ the service from each characteristic.
 | `…0`        | `service` | —          | the primary service |
 | `…1`        | `meta`    | read       | plaintext JSON, non-secret (see below) |
 | `…2`        | `payload` | read       | `salt ‖ AES-GCM sealed box` (see below) |
-| `…3`        | `ack`     | write      | UTF-8 `"ok"` or `"err"` from the user back to the admin |
+| `…3`        | `ack`     | write      | UTF-8 `"ok"`, `"unreachable"` or `"err"` from the user back to the admin |
 
 The admin advertises `service` in the advertising packet, plus the lamp name as
 the local name where the platform allows it. iOS routes a 128-bit service UUID
@@ -41,11 +41,17 @@ is just a nicety for the scan list.
 ## `meta` — plaintext
 
 ```json
-{ "name": "<lamp name>", "role": "user|creator", "label": "<share label>" }
+{ "name": "<lamp name>", "role": "user|creator", "label": "<share label>",
+  "host": "<lamp host>", "port": 80 }
 ```
 
 Non-secret: lets the user's UI show which lamp / what access is on offer
 before the code is entered. Read straight after connecting.
+
+`host` and `port` are optional (added after the first release; older admins
+omit them, and older receivers ignore them). They are the same values as in
+the encrypted payload. A receiver that gets them checks right away whether it
+can reach the lamp, before the user types the code (see **Reachability**).
 
 ## `payload` — encrypted
 
@@ -87,5 +93,30 @@ an ECDH-based variant would be needed — out of scope for now.
 3. User's app connects, reads `meta`, then reads `payload` (cached locally).
 4. User types the code → app derives `K`, opens the sealed box locally
    (no extra round-trip per attempt). Wrong code → retry.
-5. On success the user's app writes `ack = "ok"`, then adds the shared lamp.
-6. The admin sees `ack = "ok"` → shows confirmation → stops advertising.
+5. On success the user's app adds the shared lamp (`/api/whoami` +
+   `/api/info`) while staying connected, **then** writes the ack:
+   `"ok"` if the lamp was added, `"unreachable"` if the lamp couldn't be
+   reached (see **Reachability**), `"err"` for any other failure.
+6. The admin shows the result and stops advertising: `"ok"` → confirmation;
+   `"unreachable"` → "the other device can't reach the lamp, it must be on
+   the same Wi-Fi as the lamp"; anything else → a generic failure. (Admins
+   built before `"unreachable"` existed show their generic failure for it.)
+
+## Reachability
+
+A share only works if the receiver is on the lamp's network: `host` is the
+lamp's LAN address. Both ends make that visible.
+
+- **Admin:** the share sheets (QR and BLE) say that the receiving device must
+  be on the same Wi-Fi as the lamp, naming the lamp and its host.
+- **Probe:** an HTTP `GET http://<host>:<port>/api/info` with a ~3 s timeout.
+  *Any* HTTP response (including 401/403) means reachable; a connection
+  error or timeout means unreachable. Demo hosts (`demo://…`) are always
+  reachable and never probed.
+- **Before the code (BLE):** when `meta` carries `host`, the receiver probes
+  it. Unreachable → it says "This device can't reach <lamp> at <host>. Join
+  the lamp's Wi-Fi network, then tap Retry." and keeps the code entry disabled
+  until a retry succeeds.
+- **After the code (BLE and QR):** if adding the lamp fails, the receiver
+  probes again to tell "unreachable" (same message, and BLE writes
+  `ack = "unreachable"`) from other errors (`ack = "err"`).
