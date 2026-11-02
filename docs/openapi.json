@@ -115,6 +115,10 @@
                     "minHeap": {
                       "type": "integer"
                     },
+                    "largestBlock": {
+                      "type": "integer",
+                      "description": "Largest single heap allocation possible right now, in bytes."
+                    },
                     "uptime": {
                       "type": "integer",
                       "description": "Seconds since boot."

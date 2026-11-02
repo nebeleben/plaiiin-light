@@ -18,6 +18,7 @@
 #include "image_api.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -135,7 +136,7 @@ static esp_err_t storage_info_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-// GET /api/health -> {"freeHeap":N,"minHeap":N,"uptime":N,"resetReason":"...","fps":N,"safeBoot":bool}
+// GET /api/health -> {"freeHeap":N,"minHeap":N,"largestBlock":N,"uptime":N,"resetReason":"...","fps":N,"safeBoot":bool}
 //
 // Hardware-test-suite metrics endpoint (read-only). "fps" reuses the same
 // rolling-render-fps accessor as /api/state (js_api_get_fps()) rather than
@@ -146,6 +147,9 @@ static esp_err_t health_get_handler(httpd_req_t *req)
 
     uint32_t free_heap = esp_get_free_heap_size();
     uint32_t min_heap = esp_get_minimum_free_heap_size();
+    // Largest single allocation that can succeed right now: fragmentation
+    // shows here long before freeHeap looks low.
+    size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     int64_t uptime_s = esp_timer_get_time() / 1000000;
     int fps = (int)(js_api_get_fps() + 0.5f);
 
@@ -161,10 +165,10 @@ static esp_err_t health_get_handler(httpd_req_t *req)
         default:                reset_reason = "unknown";  break;
     }
 
-    char json[192];
+    char json[224];
     snprintf(json, sizeof(json),
-        "{\"freeHeap\":%u,\"minHeap\":%u,\"uptime\":%lld,\"resetReason\":\"%s\",\"fps\":%d,\"safeBoot\":%s}",
-        (unsigned)free_heap, (unsigned)min_heap, (long long)uptime_s, reset_reason, fps,
+        "{\"freeHeap\":%u,\"minHeap\":%u,\"largestBlock\":%u,\"uptime\":%lld,\"resetReason\":\"%s\",\"fps\":%d,\"safeBoot\":%s}",
+        (unsigned)free_heap, (unsigned)min_heap, (unsigned)largest, (long long)uptime_s, reset_reason, fps,
         boot_guard_is_safe() ? "true" : "false");
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, json);

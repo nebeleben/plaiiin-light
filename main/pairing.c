@@ -197,8 +197,14 @@ static esp_err_t send_403(httpd_req_t *req)
 esp_err_t pairing_http_check(httpd_req_t *req, pl_role_t min_role)
 {
     pl_role_t role = pairing_resolve_role(req);
-    if (role == PL_ROLE_NONE) return send_401(req);
-    if (role < min_role)      return send_403(req);
+    if (role == PL_ROLE_NONE) {
+        ESP_LOGI(TAG, "401 %s", req->uri);
+        return send_401(req);
+    }
+    if (role < min_role) {
+        ESP_LOGI(TAG, "403 %s (role=%s)", req->uri, pl_role_name(role));
+        return send_403(req);
+    }
     return ESP_OK;
 }
 

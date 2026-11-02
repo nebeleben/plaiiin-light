@@ -2,6 +2,8 @@
 #include "config_store.h"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "esp_heap_caps.h"
+#include "nvs.h"
 #include "cJSON.h"
 #include <string.h>
 #include <stdlib.h>
@@ -16,15 +18,35 @@ static const char *TAG = "keys";
 
 // --- store helpers ----------------------------------------------------------
 
+// Bench diagnostics for the "share key rejected / can't be deleted until a
+// reboot" reports: a failed load used to look exactly like an empty key list.
+static void log_heap(const char *what)
+{
+    ESP_LOGE(TAG, "%s (free=%u largest=%u)", what,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+}
+
 // Load the share-key array from NVS. Always returns a valid cJSON array (empty
 // when the key is absent or unparseable). Caller must cJSON_Delete it.
 static cJSON *load_array(void)
 {
     char *buf = malloc(KEYS_BUF_SZ);
-    if (!buf) return cJSON_CreateArray();
+    if (!buf) {
+        log_heap("load: no memory for the key buffer, treating list as empty");
+        return cJSON_CreateArray();
+    }
     cJSON *arr = NULL;
-    if (config_store_get_str(CONFIG_KEY_SHARE_KEYS, buf, KEYS_BUF_SZ) == ESP_OK && buf[0]) {
+    esp_err_t err = config_store_get_str(CONFIG_KEY_SHARE_KEYS, buf, KEYS_BUF_SZ);
+    if (err == ESP_OK && buf[0]) {
         arr = cJSON_Parse(buf);
+        if (!arr) {
+            ESP_LOGE(TAG, "load: %u stored bytes didn't parse", (unsigned)strlen(buf));
+            log_heap("load: parse failed, treating list as empty");
+        }
+    } else if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGE(TAG, "load: NVS read failed: %s", esp_err_to_name(err));
+        log_heap("load: treating list as empty");
     }
     free(buf);
     if (!arr || !cJSON_IsArray(arr)) {
@@ -37,8 +59,15 @@ static cJSON *load_array(void)
 static esp_err_t save_array(cJSON *arr)
 {
     char *json = cJSON_PrintUnformatted(arr);
-    if (!json) return ESP_ERR_NO_MEM;
+    if (!json) {
+        log_heap("save: no memory to serialize the key list");
+        return ESP_ERR_NO_MEM;
+    }
     esp_err_t err = config_store_set_str(CONFIG_KEY_SHARE_KEYS, json);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "save: NVS write of %u bytes failed: %s",
+                 (unsigned)strlen(json), esp_err_to_name(err));
+    }
     free(json);
     return err;
 }
@@ -77,6 +106,9 @@ pl_role_t keys_role_for(const char *token)
             result = role_from_name(cJSON_IsString(r) ? r->valuestring : NULL);
             break;
         }
+    }
+    if (result == PL_ROLE_NONE) {
+        ESP_LOGI(TAG, "token matched none of %d share key(s)", cJSON_GetArraySize(arr));
     }
     cJSON_Delete(arr);
     return result;
@@ -239,8 +271,10 @@ static esp_err_t keys_revoke_handler(httpd_req_t *req)
         }
     }
     if (found) save_array(arr);
+    int count = cJSON_GetArraySize(arr);
     cJSON_Delete(arr);
     if (!found) {
+        ESP_LOGW(TAG, "revoke: id=%s not among %d share key(s)", id, count);
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no such key");
         return ESP_FAIL;
     }
@@ -273,8 +307,10 @@ static esp_err_t keys_delete_handler(httpd_req_t *req)
         cJSON_DeleteItemFromArray(arr, idx);
         save_array(arr);
     }
+    int count = cJSON_GetArraySize(arr);
     cJSON_Delete(arr);
     if (!found) {
+        ESP_LOGW(TAG, "delete: id=%s not among %d share key(s)", id, count);
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no such key");
         return ESP_FAIL;
     }
@@ -286,6 +322,7 @@ static esp_err_t keys_delete_handler(httpd_req_t *req)
 static esp_err_t whoami_handler(httpd_req_t *req)
 {
     pl_role_t role = pairing_resolve_role(req);
+    ESP_LOGI(TAG, "whoami: role=%s", pl_role_name(role));
     char out[64];
     snprintf(out, sizeof(out), "{\"role\":\"%s\",\"paired\":%s}",
              pl_role_name(role), pairing_is_paired() ? "true" : "false");
