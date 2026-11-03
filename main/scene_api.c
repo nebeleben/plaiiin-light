@@ -216,6 +216,10 @@ static int apply_scene(const cJSON *doc, const char **why)
     const cJSON *bright = cJSON_GetObjectItem(doc, "brightness");
     const cJSON *on     = cJSON_GetObjectItem(doc, "on");
     const cJSON *color  = cJSON_GetObjectItem(doc, "color");
+    // Starting an effect turns the LEDs' power flag on (js_player_start's
+    // "play implies on", right for /api/play). A scene without "on" must
+    // leave power as it was, so note it here and put it back after step 1.
+    const bool was_on = led_control_is_on();
 
     // 1. Content. A script implies js mode and an image implies frame mode;
     //    an explicit mode only matters when neither is given (e.g. api + color).
@@ -235,6 +239,10 @@ static int apply_scene(const cJSON *doc, const char **why)
     } else if (cJSON_IsString(mode)) {
         if (light_api_apply_mode(mode->valuestring) != 0) { *why = "bad mode"; return 400; }
     }
+
+    // Power is "leave as is": undo the player's auto power-on. Without this
+    // the lamp stayed dark (fade level 0) while /api/state reported on.
+    if (!cJSON_IsBool(on) && !was_on && led_control_is_on()) light_api_apply_power(false);
 
     // 3. Brightness before power so the fade-in lands at the target level.
     if (cJSON_IsNumber(bright)) {
