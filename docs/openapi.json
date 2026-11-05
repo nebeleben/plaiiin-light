@@ -2658,10 +2658,11 @@
       },
       "Scene": {
         "type": "object",
-        "description": "A saved lamp state. Every field is optional; an absent field means 'leave as is'. script implies js mode, image implies frame mode; mode is used only when neither is given (e.g. api + color for a solid scene).",
+        "description": "A saved lamp state. Every field is optional; an absent field means 'leave as is'. script implies js mode, image implies frame mode; mode is used only when neither is given (e.g. api + color for a solid scene). Power is not part of a scene: activating one leaves the lamp on or off (capture doesn't record it); an explicit `on` is still honoured for deliberate good-night/wake-up scenes.",
         "properties": {
           "on": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Optional. Set the power explicitly (API-written scenes only; capture and the apps leave it out)."
           },
           "mode": {
             "type": "string",

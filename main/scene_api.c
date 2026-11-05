@@ -1,8 +1,10 @@
-// Scenes: a named JSON document that captures the lamp's user-facing state and
-// can be recalled with one call. Every field is optional; an absent field
-// means "leave as is", so partial scenes (just a mood colour, say) work too.
+// Scenes: a named JSON document that captures what the lamp shows and can be
+// recalled with one call. Every field is optional; an absent field means
+// "leave as is", so partial scenes (just a mood colour, say) work too.
+// Power is not part of a scene (capture leaves "on" out, and activating one
+// keeps the lamp on or off); an explicit "on" from PUT is still honoured.
 //
-//   { "on": true, "mode": "js", "script": "blaze", "params": {"speed": 2},
+//   { "mode": "js", "script": "blaze", "params": {"speed": 2},
 //     "image": "img-003", "color": [255,140,40], "brightness": 120 }
 //
 // Why on the lamp: a scene stored here works for every client, for an AI
@@ -12,7 +14,7 @@
 //   script (-> js mode) / image (-> frame mode) / explicit mode   content first
 //   params                                                        onto the running script
 //   brightness                                                    before power, so the fade-in lands right
-//   power                                                         content is ready; power-on's resume is idempotent
+//   power (only if the scene sets "on")                           content is ready; power-on's resume is idempotent
 //   color                                                         last: a solid paint needs power on; in js/frame it just tints
 // Each step goes through the same light_api/js_api helpers the HTTP handlers
 // use, so persistence, MQTT and swarm mirroring all happen exactly as if the
@@ -137,8 +139,10 @@ static const char *validate_scene(const cJSON *doc)
 
 static cJSON *capture_scene(void)
 {
+    // No "on": a scene describes what the lamp shows, and activating one
+    // leaves power as it is (like changing the effect). An explicit "on"
+    // written through PUT is still honoured, e.g. for a "good night" scene.
     cJSON *doc = cJSON_CreateObject();
-    cJSON_AddBoolToObject(doc, "on", led_control_is_on());
 
     char mode[16] = {0};
     light_api_get_persistent_mode(mode, sizeof(mode));
@@ -216,11 +220,6 @@ static int apply_scene(const cJSON *doc, const char **why)
     const cJSON *bright = cJSON_GetObjectItem(doc, "brightness");
     const cJSON *on     = cJSON_GetObjectItem(doc, "on");
     const cJSON *color  = cJSON_GetObjectItem(doc, "color");
-    // Starting an effect turns the LEDs' power flag on (js_player_start's
-    // "play implies on", right for /api/play). A scene without "on" must
-    // leave power as it was, so note it here and put it back after step 1.
-    const bool was_on = led_control_is_on();
-
     // 1. Content. A script implies js mode and an image implies frame mode;
     //    an explicit mode only matters when neither is given (e.g. api + color).
     if (cJSON_IsString(script) && script->valuestring[0]) {
@@ -240,10 +239,6 @@ static int apply_scene(const cJSON *doc, const char **why)
         if (light_api_apply_mode(mode->valuestring) != 0) { *why = "bad mode"; return 400; }
     }
 
-    // Power is "leave as is": undo the player's auto power-on. Without this
-    // the lamp stayed dark (fade level 0) while /api/state reported on.
-    if (!cJSON_IsBool(on) && !was_on && led_control_is_on()) light_api_apply_power(false);
-
     // 3. Brightness before power so the fade-in lands at the target level.
     if (cJSON_IsNumber(bright)) {
         double v = bright->valuedouble;
@@ -251,7 +246,9 @@ static int apply_scene(const cJSON *doc, const char **why)
         light_api_apply_brightness((uint8_t)v);
     }
 
-    // 4. Power. Content is ready; power-on's resume is idempotent.
+    // 4. Power, only when the scene sets it explicitly (API-written scenes;
+    //    the apps and capture leave it out). Content is ready; power-on's
+    //    resume is idempotent.
     if (cJSON_IsBool(on)) light_api_apply_power(cJSON_IsTrue(on));
 
     // 5. Colour last: a solid paint needs power on; in js/frame it sets the

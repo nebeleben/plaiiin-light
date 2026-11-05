@@ -1,6 +1,7 @@
 #include "js_api.h"
 #include "js_storage.h"
 #include "js_player.h"
+#include "led_control.h"
 #include "hardcoded_effects.h"
 #include "plbc.h"
 #include "config_store.h"
@@ -639,6 +640,21 @@ esp_err_t js_api_play_ex(const char *name, int fps, bool autoswitch)
     /* Phase 35 — hardcoded effects take precedence by name. Stop whichever
      * runtime is live so the next start sees a clean stage. */
     const hardcoded_effect_t *hc = hardcoded_effect_find(name);
+
+    /* Changing the effect never turns the lamp on; only the user does (power
+     * on, or a scene that sets "on"). While off, playing just selects the
+     * effect: it's persisted, and power-on starts it (light_api_apply_power
+     * -> start_current_js). Starting the player here used to set the LEDs'
+     * power flag without a fade-in, so the lamp stayed dark while
+     * /api/state reported it on. */
+    if (!led_control_is_on()) {
+        if (!hc && !js_storage_exists(name)) return ESP_ERR_NOT_FOUND;
+        js_api_stop();
+        config_store_set_str(CONFIG_KEY_CURRENT_JS, name);
+        swarm_notify_state();
+        return ESP_OK;
+    }
+
     if (hc) {
         js_player_stop();
         js_player_set_current_name(NULL);

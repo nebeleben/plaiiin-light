@@ -121,19 +121,25 @@ implementation used by the firmware and every client's preview.
 
 ### Scenes (`/api/scenes`)
 
-A **scene** is a named, saved snapshot of the lamp's user-facing state,
-recalled in one call. Stored on the lamp (SPIFFS, up to 32), so it works for
+A **scene** is a named, saved snapshot of what the lamp shows, recalled in
+one call. Stored on the lamp (SPIFFS, up to 32), so it works for
 every client, for an AI agent, for Home Assistant and for the swarm. The
 document is plain JSON; every field is optional and an absent field means
 "leave as is" (so a partial scene that only sets a mood colour is valid):
 
 ```json
-{ "on": true, "mode": "js", "script": "blaze", "params": { "speed": 2 },
+{ "mode": "js", "script": "blaze", "params": { "speed": 2 },
   "image": "img-003", "color": [255, 140, 40], "brightness": 120 }
 ```
 
 `script` implies `js` mode and `image` implies `frame` mode; `mode` is only
 used when neither is given (e.g. `api` + `color` for a solid scene).
+
+**Power is not part of a scene.** Activating one leaves the lamp on or off,
+just as changing the effect does; on an off lamp the scene's content shows at
+the next power-on. Capture doesn't record power. An explicit `"on": true|false`
+written with `PUT` is still honoured, for integrations that want a deliberate
+"good night" (or "wake up") scene; the apps never write it.
 
 | Method | Path | Role | Body / Returns |
 |---|---|---|---|
@@ -145,7 +151,8 @@ used when neither is given (e.g. `api` + `color` for a solid scene).
 | POST   | `/api/scenes/<name>/activate`  | user    | Apply it. Returns `{status, scene}`; `404` for a missing scene/script/image. |
 
 Activation applies the fields in the order the lamp needs — content
-(script/image/mode), params, brightness, power, then colour — through the same
+(script/image/mode), params, brightness, power (only when the scene sets
+`on`), then colour — through the same
 paths as manual control, so it persists and mirrors to MQTT and the swarm
 exactly as if the user had clicked through it. Names are 1–32 of `A-Z a-z 0-9
 _ -`.
