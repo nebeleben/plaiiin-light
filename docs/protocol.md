@@ -221,11 +221,15 @@ the wire contract — any client may implement its own editor against it.
 
 The lamp keeps a small library of saved drawings (max 30, ~1.5 KB each) on
 the same SPIFFS partition, in the same binary layout as the frame store.
+An image's `name` (`img-NNN`) is its id, used by scenes and every call below.
+A user-chosen `label` (1–32 bytes UTF-8, no control characters) is shown in
+its place; renaming changes only the label, so scenes keep working.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/images` | `{"status":"ok","images":[{"name":"img-001","w":16,"h":8}],"count":1,"max":30}` — user role. |
-| POST | `/api/images` | Snapshot the currently stored frame into the lowest free slot; returns `{"status":"ok","name":"img-001"}`. 404 `no frame stored`, 409 `image store full`. Creator role. |
+| GET | `/api/images` | `{"status":"ok","images":[{"name":"img-001","w":16,"h":8,"label":"Heart"}],"count":1,"max":30}` — `label` only when set. User role. |
+| POST | `/api/images` | Snapshot the currently stored frame into the lowest free slot; optional body `{"label":"Heart"}`. Returns `{"status":"ok","name":"img-001"}`. 400 `bad label`, 404 `no frame stored`, 409 `image store full`. Creator role. |
+| POST | `/api/images/{name}/label` | Rename: `{"label":"Heart"}`; an empty or `null` label clears it. 400 `bad label`, 404 `no such image`. Creator role. |
 | GET | `/api/images/{name}` | Raw RGB octet-stream + `X-Frame-W`/`X-Frame-H` headers — same shape as `GET /api/frame`. User role. |
 | POST | `/api/images/{name}/show` | Copy the image into the frame store, display it, persist mode `frame`. 400 `geometry mismatch` if it was drawn on a different grid. Creator role. |
 | DELETE | `/api/images/{name}` | Remove the image. Creator role. |

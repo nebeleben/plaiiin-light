@@ -2,6 +2,7 @@
 #include "led_control.h"
 
 #include "esp_log.h"
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +29,49 @@ static void slot_path(int slot, char *out, size_t cap)
     snprintf(out, cap, "/storage/img-%03d.pli", slot);
 }
 
+static void label_path(int slot, char *out, size_t cap)
+{
+    snprintf(out, cap, "/storage/img-%03d.lbl", slot);
+}
+
+/* A label is 1..IMAGE_STORE_LABEL_MAX bytes with no control characters
+ * (UTF-8 above 0x7F passes through). */
+static bool label_ok(const char *label)
+{
+    size_t len = strlen(label);
+    if (len == 0 || len > IMAGE_STORE_LABEL_MAX) return false;
+    for (size_t i = 0; i < len; i++) {
+        if ((unsigned char)label[i] < 0x20 || label[i] == 0x7F) return false;
+    }
+    return true;
+}
+
+static esp_err_t write_label(int slot, const char *label)
+{
+    char path[32];
+    label_path(slot, path, sizeof(path));
+    if (!label || !*label) { remove(path); return ESP_OK; }
+    FILE *f = fopen(path, "wb");
+    if (!f) return ESP_FAIL;
+    size_t len = strlen(label);
+    bool ok = fwrite(label, 1, len, f) == len;
+    fclose(f);
+    if (!ok) { remove(path); return ESP_FAIL; }
+    return ESP_OK;
+}
+
+static void read_label(int slot, char *out, size_t cap)
+{
+    out[0] = '\0';
+    char path[32];
+    label_path(slot, path, sizeof(path));
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    size_t n = fread(out, 1, cap - 1, f);
+    fclose(f);
+    out[n] = '\0';
+}
+
 /* Read just the header of one slot file. Returns ESP_OK with *w and *h filled,
  * ESP_ERR_NOT_FOUND when absent or the magic is wrong. */
 static esp_err_t slot_header(int slot, int *w, int *h)
@@ -46,9 +90,10 @@ static esp_err_t slot_header(int slot, int *w, int *h)
     return ESP_OK;
 }
 
-esp_err_t image_store_save_current(char *out_name, size_t out_cap)
+esp_err_t image_store_save_current(const char *label, char *out_name, size_t out_cap)
 {
     if (!out_name || out_cap < IMAGE_STORE_NAME_CAP) return ESP_ERR_INVALID_ARG;
+    if (label && *label && !label_ok(label)) return ESP_ERR_INVALID_ARG;
 
     /* Validate the source frame the same way frame_store_load does: magic +
      * geometry matches the current logical grid. Copy the whole file raw. */
@@ -87,6 +132,8 @@ esp_err_t image_store_save_current(char *out_name, size_t out_cap)
     fclose(src);
     fclose(dst);
     if (!ok) { remove(path); return ESP_FAIL; }
+    /* Also clears a stale label left by an image deleted on older firmware. */
+    if (write_label(slot, label) != ESP_OK) { remove(path); return ESP_FAIL; }
 
     snprintf(out_name, out_cap, "img-%03d", slot);
     ESP_LOGI(TAG, "Saved %dx%d frame as %s", fw, fh, out_name);
@@ -101,6 +148,7 @@ int image_store_list(image_store_entry_t *out, int max)
         int w, h;
         if (slot_header(s, &w, &h) != ESP_OK) continue;
         snprintf(out[count].name, IMAGE_STORE_NAME_CAP, "img-%03d", s);
+        read_label(s, out[count].label, sizeof(out[count].label));
         out[count].w = w;
         out[count].h = h;
         count++;
@@ -147,7 +195,19 @@ esp_err_t image_store_delete(const char *name)
     if (slot < 0) return ESP_ERR_INVALID_ARG;
     char path[32];
     slot_path(slot, path, sizeof(path));
-    return remove(path) == 0 ? ESP_OK : ESP_ERR_NOT_FOUND;
+    if (remove(path) != 0) return ESP_ERR_NOT_FOUND;
+    write_label(slot, NULL);
+    return ESP_OK;
+}
+
+esp_err_t image_store_set_label(const char *name, const char *label)
+{
+    int slot = slot_from_name(name);
+    if (slot < 0) return ESP_ERR_INVALID_ARG;
+    if (label && *label && !label_ok(label)) return ESP_ERR_INVALID_ARG;
+    int w, h;
+    if (slot_header(slot, &w, &h) != ESP_OK) return ESP_ERR_NOT_FOUND;
+    return write_label(slot, label);
 }
 
 void image_store_erase_all(void)
@@ -156,5 +216,6 @@ void image_store_erase_all(void)
         char path[32];
         slot_path(s, path, sizeof(path));
         remove(path);
+        write_label(s, NULL);
     }
 }

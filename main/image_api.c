@@ -6,6 +6,7 @@
 #include "light_api.h"
 #include "pairing.h"
 
+#include "cJSON.h"
 #include "esp_log.h"
 #include <stdbool.h>
 #include <stdio.h>
@@ -27,11 +28,14 @@ static esp_err_t send_err_json(httpd_req_t *req, int status, const char *msg)
     return ESP_OK;
 }
 
-/** Extract the image name from "/api/images/<name>" or ".../<name>/show".
- *  Same shape as js_api's split_uri. Returns false on a malformed URI. */
-static bool split_uri(const char *uri, char *out, size_t out_cap, bool *is_show)
+/** Extract the image name from "/api/images/<name>", ".../<name>/show" or
+ *  ".../<name>/label" (is_label may be NULL where that sub-resource isn't
+ *  served). Same shape as js_api's split_uri. Returns false on a malformed URI. */
+static bool split_uri_ex(const char *uri, char *out, size_t out_cap, bool *is_show,
+                         bool *is_label)
 {
     *is_show = false;
+    if (is_label) *is_label = false;
     if (out_cap == 0) return false;
     out[0] = '\0';
     const char *prefix = "/api/images/";
@@ -41,9 +45,14 @@ static bool split_uri(const char *uri, char *out, size_t out_cap, bool *is_show)
     size_t len = strlen(name);
     const char *suffix = "/show";
     size_t slen = strlen(suffix);
+    const char *lsuffix = "/label";
+    size_t lslen = strlen(lsuffix);
     if (len > slen && strcmp(name + len - slen, suffix) == 0) {
         *is_show = true;
         len -= slen;
+    } else if (is_label && len > lslen && strcmp(name + len - lslen, lsuffix) == 0) {
+        *is_label = true;
+        len -= lslen;
     }
     if (len + 1 > out_cap) return false;
     memcpy(out, name, len);
@@ -51,37 +60,92 @@ static bool split_uri(const char *uri, char *out, size_t out_cap, bool *is_show)
     return out[0] != '\0';
 }
 
-// GET /api/images -> {"status":"ok","images":[{name,w,h}...],"count":N,"max":30}
+static bool split_uri(const char *uri, char *out, size_t out_cap, bool *is_show)
+{
+    return split_uri_ex(uri, out, out_cap, is_show, NULL);
+}
+
+static char *recv_body(httpd_req_t *req, size_t max)
+{
+    int len = req->content_len;
+    if (len <= 0 || (size_t)len > max) return NULL;
+    char *buf = malloc((size_t)len + 1);
+    if (!buf) return NULL;
+    int got = 0;
+    while (got < len) {
+        int r = httpd_req_recv(req, buf + got, len - got);
+        if (r <= 0) { free(buf); return NULL; }
+        got += r;
+    }
+    buf[len] = 0;
+    return buf;
+}
+
+/* Optional {"label":"…"} body. *out_label is "" without a body or label.
+ * Returns false for a body that isn't valid JSON or has a non-string label. */
+static bool read_label_body(httpd_req_t *req, char *out_label, size_t cap)
+{
+    out_label[0] = '\0';
+    if (req->content_len <= 0) return true;
+    char *body = recv_body(req, 256);
+    if (!body) return false;
+    cJSON *doc = cJSON_Parse(body);
+    free(body);
+    if (!doc) return false;
+    const cJSON *l = cJSON_GetObjectItemCaseSensitive(doc, "label");
+    bool ok = true;
+    if (cJSON_IsString(l) && l->valuestring) {
+        if (strlen(l->valuestring) >= cap) ok = false;
+        else strcpy(out_label, l->valuestring);
+    } else if (l && !cJSON_IsNull(l)) {
+        ok = false;
+    }
+    cJSON_Delete(doc);
+    return ok;
+}
+
+// GET /api/images -> {"status":"ok","images":[{name,w,h[,label]}...],"count":N,"max":30}
+// "label" is present only when the image has one.
 static esp_err_t images_list_handler(httpd_req_t *req)
 {
     if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
-    image_store_entry_t entries[IMAGE_STORE_MAX];
+    image_store_entry_t *entries = malloc(sizeof(image_store_entry_t) * IMAGE_STORE_MAX);
+    if (!entries) return send_err_json(req, 500, "out of memory");
     int count = image_store_list(entries, IMAGE_STORE_MAX);
 
-    /* 30 entries × ~44 B each + wrapper — 2 KB is deliberate headroom (the
-     * 1 KB js_api list buffer is a known ceiling; don't repeat it here). */
-    char resp[2048];
-    int n = snprintf(resp, sizeof(resp), "{\"status\":\"ok\",\"images\":[");
+    cJSON *doc = cJSON_CreateObject();
+    cJSON_AddStringToObject(doc, "status", "ok");
+    cJSON *arr = cJSON_AddArrayToObject(doc, "images");
     for (int i = 0; i < count; i++) {
-        n += snprintf(resp + n, sizeof(resp) - n,
-                      "%s{\"name\":\"%s\",\"w\":%d,\"h\":%d}",
-                      i ? "," : "", entries[i].name, entries[i].w, entries[i].h);
-        if ((size_t)n >= sizeof(resp) - 64) break;
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "name", entries[i].name);
+        cJSON_AddNumberToObject(o, "w", entries[i].w);
+        cJSON_AddNumberToObject(o, "h", entries[i].h);
+        if (entries[i].label[0]) cJSON_AddStringToObject(o, "label", entries[i].label);
+        cJSON_AddItemToArray(arr, o);
     }
-    n += snprintf(resp + n, sizeof(resp) - n, "],\"count\":%d,\"max\":%d}",
-                  count, IMAGE_STORE_MAX);
-    if (n < 0 || (size_t)n >= sizeof(resp)) return send_err_json(req, 500, "list too large");
+    cJSON_AddNumberToObject(doc, "count", count);
+    cJSON_AddNumberToObject(doc, "max", IMAGE_STORE_MAX);
+    free(entries);
+    char *out = cJSON_PrintUnformatted(doc);
+    cJSON_Delete(doc);
+    if (!out) return send_err_json(req, 500, "out of memory");
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, resp);
+    httpd_resp_sendstr(req, out);
+    cJSON_free(out);
     return ESP_OK;
 }
 
-// POST /api/images — snapshot the current stored frame into a new slot.
+// POST /api/images [{"label":"…"}] — snapshot the current stored frame into a
+// new slot, optionally labelled.
 static esp_err_t images_save_handler(httpd_req_t *req)
 {
     if (pairing_http_check(req, PL_ROLE_CREATOR) != ESP_OK) return ESP_FAIL;
+    char label[IMAGE_STORE_LABEL_MAX + 1];
+    if (!read_label_body(req, label, sizeof(label))) return send_err_json(req, 400, "bad label");
     char name[IMAGE_STORE_NAME_CAP];
-    esp_err_t err = image_store_save_current(name, sizeof(name));
+    esp_err_t err = image_store_save_current(label, name, sizeof(name));
+    if (err == ESP_ERR_INVALID_ARG) return send_err_json(req, 400, "bad label");
     if (err == ESP_ERR_NOT_FOUND) return send_err_json(req, 404, "no frame stored");
     if (err == ESP_ERR_NO_MEM)    return send_err_json(req, 409, "image store full");
     if (err != ESP_OK)            return send_err_json(req, 500, "save failed");
@@ -118,16 +182,36 @@ static esp_err_t images_get_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// POST /api/images/<name>/label {"label":"…"} — rename (an empty or null
+// label clears it). Served by the POST wildcard below: the httpd handler table
+// is nearly full, so no extra registration.
+static esp_err_t images_label(httpd_req_t *req, const char *name)
+{
+    char label[IMAGE_STORE_LABEL_MAX + 1];
+    if (!read_label_body(req, label, sizeof(label))) return send_err_json(req, 400, "bad label");
+    esp_err_t err = image_store_set_label(name, label);
+    if (err == ESP_ERR_NOT_FOUND) return send_err_json(req, 404, "no such image");
+    if (err == ESP_ERR_INVALID_ARG) return send_err_json(req, 400, "bad label");
+    if (err != ESP_OK) return send_err_json(req, 500, "label write failed");
+    ESP_LOGI(TAG, "Labelled %s", name);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    return ESP_OK;
+}
+
 // POST /api/images/<name>/show — copy into the frame store, display, persist
 // mode "frame". Identical end state to a client push (POST /api/frame + mode).
+// Also serves POST /api/images/<name>/label (see images_label).
 static esp_err_t images_show_handler(httpd_req_t *req)
 {
     if (pairing_http_check(req, PL_ROLE_CREATOR) != ESP_OK) return ESP_FAIL;
     char name[16];
-    bool is_show = false;
-    if (!split_uri(req->uri, name, sizeof(name), &is_show) || !is_show) {
+    bool is_show = false, is_label = false;
+    if (!split_uri_ex(req->uri, name, sizeof(name), &is_show, &is_label)) {
         return send_err_json(req, 404, "no such image");
     }
+    if (is_label) return images_label(req, name);
+    if (!is_show) return send_err_json(req, 404, "no such image");
     int w = 0, h = 0;
     uint8_t *buf = NULL;
     size_t len = 0;
@@ -186,8 +270,8 @@ esp_err_t image_api_register(httpd_handle_t server)
     register_or_warn(server, &save);
     httpd_uri_t get_one = {.uri = "/api/images/*", .method = HTTP_GET, .handler = images_get_handler};
     register_or_warn(server, &get_one);
-    /* POST wildcard serves only the /show sub-resource; split_uri rejects
-     * everything else with 404. */
+    /* POST wildcard serves the /show and /label sub-resources; split_uri_ex
+     * rejects everything else with 404. */
     httpd_uri_t show = {.uri = "/api/images/*", .method = HTTP_POST, .handler = images_show_handler};
     register_or_warn(server, &show);
     httpd_uri_t del = {.uri = "/api/images/*", .method = HTTP_DELETE, .handler = images_delete_handler};

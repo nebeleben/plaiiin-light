@@ -1715,7 +1715,7 @@
       "get": {
         "operationId": "listImages",
         "summary": "List saved images",
-        "description": "Saved frames with their geometry. Role: user.",
+        "description": "Saved frames with their geometry and optional label. Role: user.",
         "tags": [
           "frames"
         ],
@@ -1743,6 +1743,10 @@
                           },
                           "h": {
                             "type": "integer"
+                          },
+                          "label": {
+                            "type": "string",
+                            "description": "User-chosen name, present only when set. Show it in place of `name`."
                           }
                         }
                       }
@@ -1766,10 +1770,20 @@
       "post": {
         "operationId": "saveImage",
         "summary": "Save current frame",
-        "description": "Snapshot the stored frame into a new image slot; 409 when the store is full. Role: creator.",
+        "description": "Snapshot the stored frame into a new image slot, optionally labelled; 400 for a bad label, 409 when the store is full. Role: creator.",
         "tags": [
           "frames"
         ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageLabel"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Saved",
@@ -1896,6 +1910,51 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/images/{name}/label": {
+      "post": {
+        "operationId": "labelImage",
+        "summary": "Rename image",
+        "description": "Set or clear a saved image's label. The img-NNN name stays, so scenes using the image keep working. Role: creator.",
+        "tags": [
+          "frames"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageLabel"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "OK",
@@ -2706,6 +2765,17 @@
           },
           "scene": {
             "$ref": "#/components/schemas/Scene"
+          }
+        }
+      },
+      "ImageLabel": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 32,
+            "description": "1–32 bytes UTF-8, no control characters. Empty or null clears it (rename only)."
           }
         }
       }
