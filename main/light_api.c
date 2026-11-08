@@ -890,7 +890,7 @@ static esp_err_t orientation_set_handler(httpd_req_t *req)
 // "mode" reflects the *effective* mode: stream when WS is active, otherwise
 // the persisted lamp mode. "current" is the name of the currently-loaded JS
 // script (or null). "fps" (Phase 22) is the rolling-5s rendered-FPS of the
-// JS player — 0 when no script is producing frames. "scene" (2.6.1) is the
+// JS player — 0 when no script is producing frames. "scene" (2.7.0) is the
 // scene last activated while the lamp still shows it (scene_api_current).
 static esp_err_t state_get_handler(httpd_req_t *req)
 {

@@ -198,7 +198,7 @@ explicitly welcome.
 
 ## Latest release
 
-**Current firmware: v2.6.0** — grab it from the
+**Current firmware: v2.7.0** — grab it from the
 [releases page](https://github.com/nebeleben/plaiiin-light/releases/latest).
 Every release ships, per form and per chip (classic ESP32, ESP32-C3,
 ESP32-C6 and ESP32-C5, the RISC-V ones with an `-esp32c3` / `-esp32c6` /
@@ -208,6 +208,17 @@ an ESP Web Tools manifest for browser flashing, and `SHA256SUMS`.
 
 What's new in the 2.x line:
 
+- **v2.7.0** — scenes across the swarm. The lamp now remembers which scene
+  it is showing: `GET /api/state` reports `"scene"` until another effect,
+  image or an explicit mode pick takes over, so every app (and Home
+  Assistant) shows the same active scene. In a swarm, activating a scene
+  makes every lamp that has a scene of the same name activate its own copy,
+  and tune changes on one lamp follow on the others (new "PLSW" v2 swarm
+  packets, sent next to the v1 state — older lamps keep mirroring as before).
+  An off lamp now follows the effect choice too. Saved images can carry a
+  name (`POST /api/images` with `{"label"}`, renamable later). Power is no
+  longer part of a scene, and picking an effect while off only selects it.
+  API version 2.6.0 (additive).
 - **v2.6.0** — scenes. A scene is a named, saved snapshot of the lamp's state
   (on, mode, effect and its params or a saved image, colour, brightness),
   stored on the lamp and recalled in one call: `POST /api/scenes/<name>/capture`

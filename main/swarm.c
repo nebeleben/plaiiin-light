@@ -56,7 +56,7 @@ void light_api_get_persistent_mode(char *out, size_t out_len);
 //    31 |    L | effect name (no NUL)
 //  31+L |   16 | HMAC-SHA256 over bytes [0, 31+L), truncated to 16 bytes
 //
-// "PLSW" v2 — extension packets (2.6.1), sent NEXT TO the v1 snapshot, never
+// "PLSW" v2 — extension packets (2.7.0), sent NEXT TO the v1 snapshot, never
 // instead of it. Same first 24 bytes and the same per-origin seq counter;
 // a v1 lamp drops them at its version check (silently, before any crypto),
 // so mixed-firmware swarms keep mirroring the v1 state as before.
@@ -442,7 +442,7 @@ static void swarm_apply(const swarm_snapshot_t *pkt)
         //     (light_api.c) — otherwise every accepted packet (e.g. a
         //     peer's brightness-only nudge) restarted the animation from
         //     frame 0 on every receiver.
-        //   2.6.1 — the "only when ON" guard is gone: js_api_play() itself
+        //   2.7.0 — the "only when ON" guard is gone: js_api_play() itself
         //     no longer starts anything on an off lamp (it just selects the
         //     effect, which power-on then starts), so an off peer now
         //     follows the selection too instead of keeping its old effect.
@@ -774,7 +774,7 @@ static void swarm_broadcast_snapshot(void)
         mode_bit = 2;   // frame, stream (transient, never persisted here anyway), or future modes
     }
     const char *name = (mode_bit == 1) ? js_api_current_name() : NULL;
-    // 2.6.1 — an off lamp runs nothing, but it still has a selected effect
+    // 2.7.0 — an off lamp runs nothing, but it still has a selected effect
     // (what power-on starts). Send that, so off peers follow the selection.
     char selected[64] = {0};
     if (mode_bit == 1 && (!name || !name[0])) {

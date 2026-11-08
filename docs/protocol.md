@@ -77,7 +77,7 @@ Stable endpoints. Newer endpoints are added in the companion specs.
 | Method | Path | Returns / Body |
 |---|---|---|
 | GET  | `/api`              | Device info — `vendor`, `apiVersion`, `firmwareVersion`, `nodeName`, `deviceId`, `ledPin`, `ledClkPin`, `ledCount`, `ledType`, `lampType`, `lampForm`, `modelName`, `modelVersion`, `physicalW/H`, `logicalW/H`, `pixelGroupW/H`, `rotation`, `origin`, `serpentine`, `serpentineAxis`, button pins. |
-| GET  | `/api/state`        | `{on, color:[r,g,b], mode, brightness, currentScript?, scene?}` — `scene` (2.6.1): the scene last activated, while the lamp still shows it, else `null` (see [Scenes](#scenes-apiscenes)) |
+| GET  | `/api/state`        | `{on, color:[r,g,b], mode, brightness, currentScript?, scene?}` — `scene` (2.7.0): the scene last activated, while the lamp still shows it, else `null` (see [Scenes](#scenes-apiscenes)) |
 | GET  | `/api/whoami`       | `{role, paired}` — see sharing-api. |
 | GET  | `/api/openapi.json` | The whole HTTP contract as **OpenAPI 3** (source: [`openapi.json`](openapi.json)), served `Content-Encoding: gzip`. No auth — so an AI agent or tool-binding client can bind every operation from the lamp itself, before pairing. |
 | GET  | `/api/pair`         | `{paired:bool, hasToken:bool}` (no auth). |
@@ -157,7 +157,7 @@ paths as manual control, so it persists and mirrors to MQTT and the swarm
 exactly as if the user had clicked through it. Names are 1–32 of `A-Z a-z 0-9
 _ -`.
 
-**Current scene (2.6.1).** After an activation, `GET /api/state` reports
+**Current scene (2.7.0).** After an activation, `GET /api/state` reports
 `"scene": "<name>"` for as long as the lamp still shows what the scene put up:
 the same mode and, in `js`/`frame` mode, the same effect/image. Colour,
 brightness and tune changes don't end it (clients show them as drift from the
@@ -166,7 +166,7 @@ scene); switching effect or image does, and so does any explicit mode pick
 `scene` becomes `null`. It
 survives a reboot and is cleared when the scene is deleted. In a swarm the
 activation is announced to the peers, which activate their own scene of the
-same name (see [Extension packets](#extension-packets--plsw-v2-261)).
+same name (see [Extension packets](#extension-packets--plsw-v2-270)).
 
 ### Draw mode (`/api/frame`)
 
@@ -438,12 +438,12 @@ truncated HMAC.
 - **Multi-hop caveat:** relay-once flooding is implemented and shipped,
   but hardware verification so far covers only a 2-lamp bench (single
   hop, no relay traversal actually exercised).
-- **Off lamps follow the effect (2.6.1):** a `js` packet from an off origin
+- **Off lamps follow the effect (2.7.0):** a `js` packet from an off origin
   carries its *selected* effect (what power-on starts), and an off
-  receiver selects it without switching on. Before 2.6.1 an off origin sent
+  receiver selects it without switching on. Before 2.7.0 an off origin sent
   no effect name and an off receiver ignored it.
 
-### Extension packets — "PLSW" v2 (2.6.1)
+### Extension packets — "PLSW" v2 (2.7.0)
 
 Sent **next to** the v1 snapshot, never instead of it, so a v1-only lamp
 keeps mirroring the plain state: it drops version-2 packets at its version
