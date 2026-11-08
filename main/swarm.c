@@ -5,7 +5,9 @@
 #include "js_player.h"
 #include "led_control.h"
 #include "config_store.h"
+#include "scene_api.h"
 #include "wifi.h"
+#include "cJSON.h"
 
 #include "mbedtls/md.h"
 #include "mbedtls/constant_time.h"
@@ -54,6 +56,27 @@ void light_api_get_persistent_mode(char *out, size_t out_len);
 //    31 |    L | effect name (no NUL)
 //  31+L |   16 | HMAC-SHA256 over bytes [0, 31+L), truncated to 16 bytes
 //
+// "PLSW" v2 — extension packets (2.6.1), sent NEXT TO the v1 snapshot, never
+// instead of it. Same first 24 bytes and the same per-origin seq counter;
+// a v1 lamp drops them at its version check (silently, before any crypto),
+// so mixed-firmware swarms keep mirroring the v1 state as before.
+//
+//   off | size | field
+//   ----|------|------
+//     0 |   24 | magic, version = 2, swarm id, origin, seq, hop (as v1)
+//    24 |    1 | kind: 1 = scene activated, 2 = tunes (params)
+//    25 |    1 | name length L (1-32): the scene name (kind 1) or the
+//               effect name (kind 2); L = 0 in kind 1 = "the scene ended"
+//    26 |    L | name
+//   kind 2 only, after the name:
+//       |    1 | count N
+//       |  N x | [1 len K (1-32)] [K param name] [4 float32 LE value]
+//   end |   16 | HMAC-SHA256 over everything before it, truncated
+//
+// A scene packet makes every peer that has a scene of that name activate its
+// own copy; a params packet applies the values to the peer's copy of the
+// effect (a long list is split over several packets — partial is fine).
+//
 // NOTE the HMAC-covered region INCLUDES the hop byte (offset 23) — a
 // relayer that flips hop 0->1 therefore MUST recompute the tag over the
 // mutated bytes with the shared swarm key (it has the key, being a member);
@@ -64,6 +87,11 @@ void light_api_get_persistent_mode(char *out, size_t out_len);
 #define SW_MAGIC            "PLSW"
 #define SW_MAGIC_LEN        4
 #define SW_VERSION          1
+#define SW_VERSION_EXT      2
+#define SW_EXT_HDR_LEN      24   // bytes before the kind byte
+#define SW_KIND_SCENE       1
+#define SW_KIND_PARAMS      2
+#define SW_MAX_PARAM_NAME   32
 #define SW_ID_LEN           8    // raw bytes (16 hex chars)
 #define SW_MAC_LEN          6
 #define SW_KEY_LEN          32   // raw bytes (64 hex chars)
@@ -131,6 +159,15 @@ static volatile bool s_applying = false;
 // TX coalescing.
 static volatile bool    s_tx_pending = false;
 static volatile int64_t s_tx_pending_since_ms = 0;
+
+// v2 extension TX — set from any task, consumed by the worker. The names are
+// copied under a spinlock (the only state here wider than a flag).
+static portMUX_TYPE     s_ext_lock = portMUX_INITIALIZER_UNLOCKED;
+static volatile bool    s_scene_pending = false;
+static char             s_scene_name[SW_MAX_NAME_LEN + 1];
+static volatile bool    s_params_pending = false;
+static volatile int64_t s_params_pending_since_ms = 0;
+static char             s_params_name[SW_MAX_NAME_LEN + 1];
 
 // Diagnostics — written only by the worker task; read from any task via
 // swarm_debug_stats(), so kept volatile for cross-task visibility.
@@ -405,10 +442,19 @@ static void swarm_apply(const swarm_snapshot_t *pkt)
         //     (light_api.c) — otherwise every accepted packet (e.g. a
         //     peer's brightness-only nudge) restarted the animation from
         //     frame 0 on every receiver.
+        //   2.6.1 — the "only when ON" guard is gone: js_api_play() itself
+        //     no longer starts anything on an off lamp (it just selects the
+        //     effect, which power-on then starts), so an off peer now
+        //     follows the selection too instead of keeping its old effect.
         bool ok_to_flip_mode = true;
-        if (pkt->on && pkt->name[0]) {
+        if (pkt->name[0]) {
             const char *cur = js_api_current_name();
             bool already_playing = js_api_is_running() && cur && strcmp(cur, pkt->name) == 0;
+            if (!already_playing && !pkt->on) {
+                char selected[64] = {0};
+                config_get_str_or(CONFIG_KEY_CURRENT_JS, selected, sizeof(selected), "");
+                already_playing = strcmp(selected, pkt->name) == 0;   // already selected
+            }
             if (!already_playing) {
                 esp_err_t rc = js_api_play(pkt->name, JS_DEFAULT_FPS);
                 ok_to_flip_mode = (rc == ESP_OK);
@@ -480,6 +526,174 @@ static void swarm_relay(const swarm_rx_item_t *item, size_t hdr_len)
     s_relayed++;
 }
 
+// ---- v2 extension packets --------------------------------------------------
+
+// Writes the shared 24-byte header (magic .. hop) with version 2.
+static size_t swarm_pack_ext_header(uint8_t *out, uint32_t seq)
+{
+    size_t off = 0;
+    memcpy(out + off, SW_MAGIC, SW_MAGIC_LEN); off += SW_MAGIC_LEN;
+    out[off++] = SW_VERSION_EXT;
+    memcpy(out + off, s_id_raw, SW_ID_LEN); off += SW_ID_LEN;
+    memcpy(out + off, s_own_mac, SW_MAC_LEN); off += SW_MAC_LEN;
+    out[off++] = (uint8_t)(seq & 0xFF);
+    out[off++] = (uint8_t)((seq >> 8) & 0xFF);
+    out[off++] = (uint8_t)((seq >> 16) & 0xFF);
+    out[off++] = (uint8_t)((seq >> 24) & 0xFF);
+    out[off++] = 0;   // hop
+    return off;
+}
+
+static void swarm_send_ext(uint8_t *buf, size_t off)
+{
+    uint8_t tag[SW_HMAC_LEN];
+    swarm_hmac(s_key_raw, buf, off, tag);
+    memcpy(buf + off, tag, SW_HMAC_LEN);
+    swarm_radio_send(buf, off + SW_HMAC_LEN);
+}
+
+// `name` "" announces "no scene" (the origin's scene ended).
+static void swarm_broadcast_scene(const char *name)
+{
+    if (!s_member || !s_enabled) return;
+    size_t n = strlen(name);
+    if (n > SW_MAX_NAME_LEN) return;
+    uint8_t buf[SW_MAX_PACKET_LEN];
+    size_t off = swarm_pack_ext_header(buf, swarm_next_seq());
+    buf[off++] = SW_KIND_SCENE;
+    buf[off++] = (uint8_t)n;
+    memcpy(buf + off, name, n); off += n;
+    swarm_send_ext(buf, off);
+}
+
+// Sends the effect's CURRENT tune values (not just what changed), split over
+// as many packets as needed.
+static void swarm_broadcast_params(const char *effect)
+{
+    if (!s_member || !s_enabled || !effect[0]) return;
+    size_t en = strlen(effect);
+    if (en > SW_MAX_NAME_LEN) return;
+    char *pj = malloc(2048);
+    if (!pj) return;
+    int got = js_api_params_json(effect, pj, 2048);
+    cJSON *root = got > 0 ? cJSON_Parse(pj) : NULL;
+    free(pj);
+    cJSON *items = root ? cJSON_GetObjectItem(root, "items") : NULL;
+    if (!cJSON_IsArray(items) || cJSON_GetArraySize(items) == 0) { cJSON_Delete(root); return; }
+
+    uint8_t buf[SW_MAX_PACKET_LEN];
+    const cJSON *it = items->child;
+    while (it) {
+        size_t off = swarm_pack_ext_header(buf, swarm_next_seq());
+        buf[off++] = SW_KIND_PARAMS;
+        buf[off++] = (uint8_t)en;
+        memcpy(buf + off, effect, en); off += en;
+        size_t count_at = off++;
+        uint8_t count = 0;
+        for (; it; it = it->next) {
+            const cJSON *n = cJSON_GetObjectItem(it, "name");
+            const cJSON *v = cJSON_GetObjectItem(it, "value");
+            if (!cJSON_IsString(n) || !cJSON_IsNumber(v)) continue;
+            size_t k = strlen(n->valuestring);
+            if (k == 0 || k > SW_MAX_PARAM_NAME) continue;
+            if (off + 1 + k + 4 + SW_HMAC_LEN > SW_MAX_PACKET_LEN) break;   // next packet
+            buf[off++] = (uint8_t)k;
+            memcpy(buf + off, n->valuestring, k); off += k;
+            float f = (float)v->valuedouble;
+            memcpy(buf + off, &f, 4); off += 4;   // ESP32 is little-endian
+            count++;
+        }
+        if (count == 0) break;
+        buf[count_at] = count;
+        swarm_send_ext(buf, off);
+    }
+    cJSON_Delete(root);
+}
+
+static void swarm_apply_scene(const char *name)
+{
+    if (!name[0]) {   // the origin's scene ended: end ours too
+        s_applying = true;
+        scene_api_end();
+        s_applying = false;
+        return;
+    }
+    if (!scene_api_exists(name)) return;   // the v1 snapshot still mirrors the state
+    s_applying = true;
+    const char *why = "";
+    int st = scene_api_activate(name, &why);
+    s_applying = false;
+    if (st) ESP_LOGW(TAG, "swarm scene '%s' failed: %s", name, why);
+}
+
+// Body after the effect name: count, then [len][name][f32] entries.
+static void swarm_apply_params(const char *effect, const uint8_t *p, size_t len)
+{
+    if (len < 1) return;
+    uint8_t count = p[0];
+    size_t off = 1;
+    cJSON *obj = cJSON_CreateObject();
+    if (!obj) return;
+    for (uint8_t i = 0; i < count; i++) {
+        if (off >= len) break;
+        uint8_t k = p[off++];
+        if (k == 0 || k > SW_MAX_PARAM_NAME || off + k + 4 > len) break;
+        char pname[SW_MAX_PARAM_NAME + 1];
+        memcpy(pname, p + off, k); pname[k] = 0; off += k;
+        float f;
+        memcpy(&f, p + off, 4); off += 4;
+        cJSON_AddNumberToObject(obj, pname, f);
+    }
+    char *json = cJSON_PrintUnformatted(obj);
+    cJSON_Delete(obj);
+    if (!json) return;
+    s_applying = true;
+    (void)js_api_apply_params(effect, json, strlen(json));   // not found here: ignored
+    s_applying = false;
+    free(json);
+}
+
+static void swarm_handle_rx_ext(const swarm_rx_item_t *item)
+{
+    const uint8_t *d = item->data;
+    size_t len = item->len;
+    // Shape: header, kind, name len, name, (body), HMAC.
+    if (len < SW_EXT_HDR_LEN + 2 + SW_HMAC_LEN) return;   // L may be 0 ("no scene")
+    size_t hdr_len = len - SW_HMAC_LEN;
+    uint8_t origin[SW_MAC_LEN];
+    memcpy(origin, d + 13, SW_MAC_LEN);
+    uint32_t seq = (uint32_t)d[19] | ((uint32_t)d[20] << 8) |
+                   ((uint32_t)d[21] << 16) | ((uint32_t)d[22] << 24);
+    uint8_t hop = d[SW_OFF_HOP];
+    if (hop > 1) return;
+    uint8_t kind = d[SW_EXT_HDR_LEN];
+    uint8_t nlen = d[SW_EXT_HDR_LEN + 1];
+    size_t name_at = SW_EXT_HDR_LEN + 2;
+    if (nlen > SW_MAX_NAME_LEN || name_at + nlen > hdr_len) return;
+    if (nlen == 0 && kind != SW_KIND_SCENE) return;   // L = 0 only as "no scene"
+    if (kind == SW_KIND_SCENE && name_at + nlen != hdr_len) return;   // exact length
+    if (kind != SW_KIND_SCENE && kind != SW_KIND_PARAMS) return;
+
+    if (s_own_mac_valid && memcmp(origin, s_own_mac, SW_MAC_LEN) == 0) return;
+
+    uint8_t tag[SW_HMAC_LEN];
+    swarm_hmac(s_key_raw, d, hdr_len, tag);
+    if (!swarm_ct_eq(tag, d + hdr_len, SW_HMAC_LEN)) { s_drop_auth++; return; }
+    if (!swarm_dedupe_accept(origin, seq)) { s_drop_replay++; return; }
+
+    char name[SW_MAX_NAME_LEN + 1];
+    memcpy(name, d + name_at, nlen);
+    name[nlen] = 0;
+    if (kind == SW_KIND_SCENE) {
+        swarm_apply_scene(name);
+    } else {
+        swarm_apply_params(name, d + name_at + nlen, hdr_len - (name_at + nlen));
+    }
+    s_applied++;
+
+    if (hop == 0) swarm_relay(item, hdr_len);
+}
+
 static void swarm_handle_rx(const swarm_rx_item_t *item)
 {
     if (!s_member || !s_enabled) return;
@@ -491,6 +705,11 @@ static void swarm_handle_rx(const swarm_rx_item_t *item)
     if (item->len < SW_ID_LEN + 13) return;   // sanity floor before indexing the id field
     if (memcmp(item->data, SW_MAGIC, SW_MAGIC_LEN) != 0) return;
     if (memcmp(item->data + 5, s_id_raw, SW_ID_LEN) != 0) return;   // not our swarm
+
+    if (item->data[4] == SW_VERSION_EXT) {
+        swarm_handle_rx_ext(item);
+        return;
+    }
 
     swarm_snapshot_t pkt;
     size_t hdr_len = 0;
@@ -555,6 +774,13 @@ static void swarm_broadcast_snapshot(void)
         mode_bit = 2;   // frame, stream (transient, never persisted here anyway), or future modes
     }
     const char *name = (mode_bit == 1) ? js_api_current_name() : NULL;
+    // 2.6.1 — an off lamp runs nothing, but it still has a selected effect
+    // (what power-on starts). Send that, so off peers follow the selection.
+    char selected[64] = {0};
+    if (mode_bit == 1 && (!name || !name[0])) {
+        config_get_str_or(CONFIG_KEY_CURRENT_JS, selected, sizeof(selected), "");
+        name = selected;
+    }
 
     uint32_t seq = swarm_next_seq();
     uint8_t buf[SW_MAX_PACKET_LEN];
@@ -612,11 +838,31 @@ static void swarm_worker_task(void *arg)
             swarm_handle_rx(&item);
         }
 
+        // Scene first: peers then activate their own copy, and the v1
+        // snapshot that follows finds them already showing it.
+        if (s_scene_pending) {
+            char name[SW_MAX_NAME_LEN + 1];
+            taskENTER_CRITICAL(&s_ext_lock);
+            memcpy(name, s_scene_name, sizeof(name));
+            s_scene_pending = false;
+            taskEXIT_CRITICAL(&s_ext_lock);
+            swarm_broadcast_scene(name);
+        }
+
         if (s_tx_pending) {
             if (now_ms() - s_tx_pending_since_ms >= 100) {
                 s_tx_pending = false;
                 swarm_broadcast_snapshot();
             }
+        }
+
+        if (s_params_pending && now_ms() - s_params_pending_since_ms >= 150) {
+            char name[SW_MAX_NAME_LEN + 1];
+            taskENTER_CRITICAL(&s_ext_lock);
+            memcpy(name, s_params_name, sizeof(name));
+            s_params_pending = false;
+            taskEXIT_CRITICAL(&s_ext_lock);
+            swarm_broadcast_params(name);
         }
 
         if (--recapture_countdown <= 0) {
@@ -666,7 +912,7 @@ static void swarm_activate(void)
         s_rx_cb_installed = true;
     }
     if (!s_task_started && s_rx_queue) {
-        if (xTaskCreate(swarm_worker_task, "swarm_worker", 4096, NULL,
+        if (xTaskCreate(swarm_worker_task, "swarm_worker", 6144, NULL,
                          tskIDLE_PRIORITY + 2, &s_worker_task_handle) == pdPASS) {
             s_task_started = true;
         } else {
@@ -795,6 +1041,27 @@ void swarm_notify_state(void)
         s_tx_pending_since_ms = now_ms();
     }
     s_tx_pending = true;
+}
+
+void swarm_notify_scene(const char *name)
+{
+    if (!s_member || !s_enabled || s_applying || !name) return;
+    taskENTER_CRITICAL(&s_ext_lock);
+    snprintf(s_scene_name, sizeof(s_scene_name), "%s", name);
+    s_scene_pending = true;
+    taskEXIT_CRITICAL(&s_ext_lock);
+}
+
+void swarm_notify_params(const char *name)
+{
+    if (!s_member || !s_enabled || s_applying || !name) return;
+    taskENTER_CRITICAL(&s_ext_lock);
+    if (!s_params_pending || strcmp(s_params_name, name) != 0) {
+        s_params_pending_since_ms = now_ms();
+    }
+    snprintf(s_params_name, sizeof(s_params_name), "%s", name);
+    s_params_pending = true;
+    taskEXIT_CRITICAL(&s_ext_lock);
 }
 
 void swarm_debug_stats(uint32_t *drop_auth, uint32_t *drop_replay,

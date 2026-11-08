@@ -37,6 +37,7 @@
 #include "frame_store.h"
 #include "config_store.h"
 #include "pairing.h"
+#include "swarm.h"
 #include "cJSON.h"
 #include "esp_log.h"
 #include <stdio.h>
@@ -265,6 +266,116 @@ static int apply_scene(const cJSON *doc, const char **why)
     return 0;
 }
 
+// ---------- current scene ---------------------------------------------------
+//
+// The last activated scene stays "current" while the lamp shows what it put
+// up: the same mode and, in js / frame mode, the same effect / image. The
+// signature is taken from the live state right after activation, so it holds
+// whatever the scene left in place (a colour-only scene keeps the effect).
+
+#define SIG_SEP '\x1f'
+
+static char s_cur_name[SCENE_MAX_NAME + 1];
+static char s_cur_mode[8];
+static char s_cur_content[72];
+static bool s_cur_loaded = false;
+
+static void live_signature(char *mode, size_t mode_cap, char *content, size_t content_cap)
+{
+    light_api_get_persistent_mode(mode, mode_cap);
+    content[0] = 0;
+    if (strcmp(mode, "js") == 0) {
+        const char *running = js_api_is_running() ? js_api_current_name() : NULL;
+        if (running && *running) snprintf(content, content_cap, "%s", running);
+        else config_get_str_or(CONFIG_KEY_CURRENT_JS, content, content_cap, "");
+    } else if (strcmp(mode, "frame") == 0) {
+        config_get_str_or(CONFIG_KEY_CUR_IMAGE, content, content_cap, "");
+    }
+}
+
+static void cur_save(void)
+{
+    char buf[SCENE_MAX_NAME + 1 + 8 + 72 + 4];
+    if (!s_cur_name[0]) {
+        const char *keys[] = { CONFIG_KEY_CUR_SCENE };
+        config_store_erase_keys(keys, 1);
+        return;
+    }
+    snprintf(buf, sizeof(buf), "%s%c%s%c%s", s_cur_name, SIG_SEP, s_cur_mode, SIG_SEP, s_cur_content);
+    config_store_set_str(CONFIG_KEY_CUR_SCENE, buf);
+}
+
+static void cur_load(void)
+{
+    if (s_cur_loaded) return;
+    s_cur_loaded = true;
+    char buf[SCENE_MAX_NAME + 1 + 8 + 72 + 4];
+    config_get_str_or(CONFIG_KEY_CUR_SCENE, buf, sizeof(buf), "");
+    char *a = strchr(buf, SIG_SEP);
+    char *b = a ? strchr(a + 1, SIG_SEP) : NULL;
+    if (!a || !b) return;
+    *a = 0; *b = 0;
+    if (strlen(buf) > SCENE_MAX_NAME || strlen(a + 1) >= sizeof(s_cur_mode)
+        || strlen(b + 1) >= sizeof(s_cur_content)) return;
+    memcpy(s_cur_name, buf, strlen(buf) + 1);
+    memcpy(s_cur_mode, a + 1, strlen(a + 1) + 1);
+    memcpy(s_cur_content, b + 1, strlen(b + 1) + 1);
+}
+
+static void cur_set(const char *name)
+{
+    s_cur_loaded = true;
+    snprintf(s_cur_name, sizeof(s_cur_name), "%s", name ? name : "");
+    if (s_cur_name[0]) live_signature(s_cur_mode, sizeof(s_cur_mode), s_cur_content, sizeof(s_cur_content));
+    cur_save();
+}
+
+bool scene_api_current(char *out, size_t cap)
+{
+    cur_load();
+    if (!s_cur_name[0]) return false;
+    char mode[8], content[72];
+    live_signature(mode, sizeof(mode), content, sizeof(content));
+    if (strcmp(mode, s_cur_mode) != 0 || strcmp(content, s_cur_content) != 0) {
+        cur_set(NULL);   // something else took over the lamp
+        return false;
+    }
+    snprintf(out, cap, "%s", s_cur_name);
+    return true;
+}
+
+void scene_api_end(void)
+{
+    cur_load();
+    if (!s_cur_name[0]) return;
+    cur_set(NULL);
+    swarm_notify_scene("");   // "" = no scene
+}
+
+bool scene_api_exists(const char *name)
+{
+    char *json = NULL;
+    if (!name || !name[0] || scene_store_read(name, &json, NULL) != ESP_OK) return false;
+    free(json);
+    return true;
+}
+
+int scene_api_activate(const char *name, const char **why)
+{
+    char *json = NULL;
+    if (scene_store_read(name, &json, NULL) != ESP_OK) { *why = "no such scene"; return 404; }
+    cJSON *doc = cJSON_Parse(json);
+    free(json);
+    if (!doc) { *why = "scene is corrupt"; return 500; }
+    int st = apply_scene(doc, why);
+    cJSON_Delete(doc);
+    if (st) return st;
+    cur_set(name);
+    swarm_notify_scene(name);
+    ESP_LOGI(TAG, "activated scene '%s'", name);
+    return 0;
+}
+
 // ---------- handlers --------------------------------------------------------
 
 static void list_cb(const char *name, void *arg)
@@ -342,6 +453,8 @@ static esp_err_t scene_delete_handler(httpd_req_t *req)
     if (!split_uri(req->uri, name, sizeof(name), action, sizeof(action)) || action[0])
         return send_err_json(req, 404, "no such scene");
     if (scene_store_delete(name) != ESP_OK) return send_err_json(req, 404, "no such scene");
+    cur_load();
+    if (strcmp(s_cur_name, name) == 0) cur_set(NULL);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
     return ESP_OK;
@@ -375,16 +488,9 @@ static esp_err_t scene_post_handler(httpd_req_t *req)
 
     if (strcmp(action, "activate") == 0) {
         if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
-        char *json = NULL;
-        if (scene_store_read(name, &json, NULL) != ESP_OK) return send_err_json(req, 404, "no such scene");
-        cJSON *doc = cJSON_Parse(json);
-        free(json);
-        if (!doc) return send_err_json(req, 500, "scene is corrupt");
         const char *why = "failed";
-        int st = apply_scene(doc, &why);
-        cJSON_Delete(doc);
+        int st = scene_api_activate(name, &why);
         if (st) return send_err_json(req, st, why);
-        ESP_LOGI(TAG, "activated scene '%s'", name);
         char body[80];
         snprintf(body, sizeof(body), "{\"status\":\"ok\",\"scene\":\"%s\"}", name);
         httpd_resp_set_type(req, "application/json");

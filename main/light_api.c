@@ -13,6 +13,7 @@
 #include "plaiiin_mqtt.h"   // mirror app/BLE changes to MQTT subscribers
 #include "swarm_radio.h"    // PlanV3 V2.5 Task 1 — ESP-NOW coexistence spike
 #include "swarm.h"          // PlanV3 V2.5 Task 2 — swarm_notify_state() hooks
+#include "scene_api.h"      // "scene" in GET /api/state
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_mac.h"
@@ -884,12 +885,13 @@ static esp_err_t orientation_set_handler(httpd_req_t *req)
 
 // GET /api/state ->
 //   {"on":bool,"color":[r,g,b],"mode":"api"|"js"|"stream",
-//    "brightness":int,"current":"name"|null,"fps":float}
+//    "brightness":int,"current":"name"|null,"fps":float,"scene":"name"|null}
 //
 // "mode" reflects the *effective* mode: stream when WS is active, otherwise
 // the persisted lamp mode. "current" is the name of the currently-loaded JS
 // script (or null). "fps" (Phase 22) is the rolling-5s rendered-FPS of the
-// JS player — 0 when no script is producing frames.
+// JS player — 0 when no script is producing frames. "scene" (2.6.1) is the
+// scene last activated while the lamp still shows it (scene_api_current).
 static esp_err_t state_get_handler(httpd_req_t *req)
 {
     if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
@@ -911,15 +913,19 @@ static esp_err_t state_get_handler(httpd_req_t *req)
     // One-decimal formatting keeps the payload compact and matches what UIs
     // want to display anyway. snprintf with %.1f rounds for us.
 
-    char resp[256];
+    char scene[40] = {0};
+    char scene_json[48] = "null";
+    if (scene_api_current(scene, sizeof(scene))) snprintf(scene_json, sizeof(scene_json), "\"%s\"", scene);
+
+    char resp[320];
     if (current) {
         snprintf(resp, sizeof(resp),
-                 "{\"on\":%s,\"color\":[%u,%u,%u],\"mode\":\"%s\",\"brightness\":%u,\"current\":\"%s\",\"fps\":%.1f}",
-                 on ? "true" : "false", br, bg, bb, mode, brightness, current, fps);
+                 "{\"on\":%s,\"color\":[%u,%u,%u],\"mode\":\"%s\",\"brightness\":%u,\"current\":\"%s\",\"fps\":%.1f,\"scene\":%s}",
+                 on ? "true" : "false", br, bg, bb, mode, brightness, current, fps, scene_json);
     } else {
         snprintf(resp, sizeof(resp),
-                 "{\"on\":%s,\"color\":[%u,%u,%u],\"mode\":\"%s\",\"brightness\":%u,\"current\":null,\"fps\":%.1f}",
-                 on ? "true" : "false", br, bg, bb, mode, brightness, fps);
+                 "{\"on\":%s,\"color\":[%u,%u,%u],\"mode\":\"%s\",\"brightness\":%u,\"current\":null,\"fps\":%.1f,\"scene\":%s}",
+                 on ? "true" : "false", br, bg, bb, mode, brightness, fps, scene_json);
     }
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, resp);
@@ -998,6 +1004,7 @@ static esp_err_t mode_set_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "mode must be 'api', 'js', or 'stream'");
         return ESP_FAIL;
     }
+    scene_api_end();   // an explicit mode pick ends the current scene
     return mode_get_handler(req);
 }
 

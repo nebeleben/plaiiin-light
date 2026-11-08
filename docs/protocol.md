@@ -77,7 +77,7 @@ Stable endpoints. Newer endpoints are added in the companion specs.
 | Method | Path | Returns / Body |
 |---|---|---|
 | GET  | `/api`              | Device info — `vendor`, `apiVersion`, `firmwareVersion`, `nodeName`, `deviceId`, `ledPin`, `ledClkPin`, `ledCount`, `ledType`, `lampType`, `lampForm`, `modelName`, `modelVersion`, `physicalW/H`, `logicalW/H`, `pixelGroupW/H`, `rotation`, `origin`, `serpentine`, `serpentineAxis`, button pins. |
-| GET  | `/api/state`        | `{on, color:[r,g,b], mode, brightness, currentScript?}` |
+| GET  | `/api/state`        | `{on, color:[r,g,b], mode, brightness, currentScript?, scene?}` — `scene` (2.6.1): the scene last activated, while the lamp still shows it, else `null` (see [Scenes](#scenes-apiscenes)) |
 | GET  | `/api/whoami`       | `{role, paired}` — see sharing-api. |
 | GET  | `/api/openapi.json` | The whole HTTP contract as **OpenAPI 3** (source: [`openapi.json`](openapi.json)), served `Content-Encoding: gzip`. No auth — so an AI agent or tool-binding client can bind every operation from the lamp itself, before pairing. |
 | GET  | `/api/pair`         | `{paired:bool, hasToken:bool}` (no auth). |
@@ -156,6 +156,17 @@ Activation applies the fields in the order the lamp needs — content
 paths as manual control, so it persists and mirrors to MQTT and the swarm
 exactly as if the user had clicked through it. Names are 1–32 of `A-Z a-z 0-9
 _ -`.
+
+**Current scene (2.6.1).** After an activation, `GET /api/state` reports
+`"scene": "<name>"` for as long as the lamp still shows what the scene put up:
+the same mode and, in `js`/`frame` mode, the same effect/image. Colour,
+brightness and tune changes don't end it (clients show them as drift from the
+scene); switching effect or image does, and so does any explicit mode pick
+(`POST /api/mode`, BLE, MQTT), even to the mode the lamp is already in — then
+`scene` becomes `null`. It
+survives a reboot and is cleared when the scene is deleted. In a swarm the
+activation is announced to the peers, which activate their own scene of the
+same name (see [Extension packets](#extension-packets--plsw-v2-261)).
 
 ### Draw mode (`/api/frame`)
 
@@ -344,7 +355,7 @@ on the roadmap.
 for handing share keys between phones — that one does not touch the
 firmware at all.
 
-## Swarm mode (ESP-NOW, PLSW v1)
+## Swarm mode (ESP-NOW, PLSW v1 + v2)
 
 This documents PlaiiinLightOS's lamp-to-lamp broadcast protocol byte for
 byte, so a third-party firmware or bridge can join a swarm without access
@@ -427,6 +438,40 @@ truncated HMAC.
 - **Multi-hop caveat:** relay-once flooding is implemented and shipped,
   but hardware verification so far covers only a 2-lamp bench (single
   hop, no relay traversal actually exercised).
+- **Off lamps follow the effect (2.6.1):** a `js` packet from an off origin
+  carries its *selected* effect (what power-on starts), and an off
+  receiver selects it without switching on. Before 2.6.1 an off origin sent
+  no effect name and an off receiver ignored it.
+
+### Extension packets — "PLSW" v2 (2.6.1)
+
+Sent **next to** the v1 snapshot, never instead of it, so a v1-only lamp
+keeps mirroring the plain state: it drops version-2 packets at its version
+check, silently and before any crypto. Same first 24 bytes as v1 (with
+`version = 2`) and the same per-origin `seq` counter, de-dupe, relay-once
+and HMAC rules.
+
+| Offset | Size | Field | Notes |
+|---|---|---|---|
+| 0 | 24 | header | magic, version `2`, swarm id, origin, seq, hop — as v1 |
+| 24 | 1 | kind | `1` = scene activated, `2` = tunes |
+| 25 | 1 | name length (L) | `1`–`32`; in kind 1, `0` = "the scene ended" |
+| 26 | L | name | scene name (kind 1) or effect name (kind 2), ASCII, no NUL |
+| 26+L | … | body | kind 1: none. Kind 2: `count` (1 byte), then `count` × [`len` (1 byte, 1–32), param name, value as float32 LE] |
+| end | 16 | HMAC | over everything before it, as v1 |
+
+- **Scene (kind 1):** sent when a scene is activated. A receiver that has a
+  scene of that name activates its **own** copy, so its tunes and image come
+  along and its `/api/state` reports the scene. A receiver without one
+  ignores it; the v1 snapshot still mirrors the state. The scene packet goes
+  out before the coalesced v1 snapshot. An empty name is sent when the
+  origin's scene ends by an explicit mode pick, and receivers end theirs.
+- **Tunes (kind 2):** sent ~150 ms after an effect's tunes change (coalescing
+  a knob drag), carrying the effect's **current** values, not just the
+  changed one; a long list is split over several packets. A receiver applies
+  them to its copy of the effect (stored, and live if it's playing it) and
+  ignores an effect it doesn't have.
+- **No echo:** applying a received packet never broadcasts one of its own.
 
 ## Form factors & geometry
 

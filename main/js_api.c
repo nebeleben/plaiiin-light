@@ -287,6 +287,7 @@ esp_err_t js_api_apply_params(const char *name, const char *body, size_t len)
     const hardcoded_effect_t *hc_eff = hardcoded_effect_find(name);
     if (hc_eff) {
         hc_eff->apply_params_json(body, len);
+        swarm_notify_params(name);   // tunes follow in the swarm
         return ESP_OK;
     }
     void *bc = NULL; size_t bc_len = 0;
@@ -313,6 +314,7 @@ esp_err_t js_api_apply_params(const char *name, const char *body, size_t len)
         js_player_apply_params_json(body, len);
     }
     free(prog);
+    swarm_notify_params(name);   // tunes follow in the swarm
     return ESP_OK;
 }
 
@@ -478,6 +480,7 @@ static esp_err_t write_handler(httpd_req_t *req)
         if (is_params) {
             int applied = hc_eff->apply_params_json(body, body_len);
             (void)applied;
+            swarm_notify_params(name);   // tunes follow in the swarm
             char buf[2048];
             int n = hc_eff->get_params_json(buf, sizeof(buf));
             free(body);
@@ -517,6 +520,7 @@ static esp_err_t write_handler(httpd_req_t *req)
             js_player_apply_params_json(body, body_len);
         }
         free(body);
+        swarm_notify_params(name);   // tunes follow in the swarm
         char buf[2048];
         int n = plbc_params_to_json(prog, buf, sizeof(buf));
         free(prog);

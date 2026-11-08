@@ -2527,6 +2527,11 @@
           },
           "fps": {
             "type": "number"
+          },
+          "scene": {
+            "type": "string",
+            "nullable": true,
+            "description": "2.6.1: the scene last activated, while the lamp still shows it (same mode and effect / image); null otherwise. Colour, brightness and tune changes don't end it."
           }
         },
         "required": [

@@ -2,6 +2,7 @@
 #include "config_store.h"
 #include "device_id.h"
 #include "wifi.h"
+#include "scene_api.h"
 #include "light_api.h"
 #include "js_api.h"
 #include "js_player.h"
@@ -403,6 +404,7 @@ static int access_mode(uint16_t conn, uint16_t attr,
         char m[16] = {0};
         if (copy_mbuf_str(ctxt->om, m, sizeof(m)) != 0) return BLE_ATT_ERR_UNLIKELY;
         if (light_api_apply_mode(m) != 0) return BLE_ATT_ERR_INVALID_PDU;
+        scene_api_end();   // an explicit mode pick ends the current scene
         return 0;
     }
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {

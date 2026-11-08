@@ -68,6 +68,18 @@ int swarm_get_channel(void);
  *  when not an active member, or while applying a received snapshot. */
 void swarm_notify_state(void);
 
+/** Announce that scene `name` was just activated here (2.6.1, "PLSW" v2
+ *  scene packet): every peer that has a scene of that name activates its own
+ *  copy, so its tunes and image come along. Peers without it keep the plain
+ *  state mirroring. Same no-op rules as swarm_notify_state(). */
+void swarm_notify_scene(const char *name);
+
+/** Mark the tunes of effect `name` changed (2.6.1, "PLSW" v2 params packet):
+ *  the worker sends its current values ~150 ms later (coalescing a knob
+ *  drag) and peers apply them to their copy of the effect. Same no-op rules
+ *  as swarm_notify_state(). */
+void swarm_notify_params(const char *name);
+
 /** Snapshot of the running diagnostic counters. Any pointer may be NULL to
  *  skip it. */
 void swarm_debug_stats(uint32_t *drop_auth, uint32_t *drop_replay,

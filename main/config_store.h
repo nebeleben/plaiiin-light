@@ -163,6 +163,10 @@
 // Name of the saved image last shown via POST /api/images/<name>/show (or a
 // scene). Lets a scene capture record "image" for frame mode.
 #define CONFIG_KEY_CUR_IMAGE     "cur_image"
+// The scene last activated and still showing, as "name\x1fmode\x1fcontent"
+// (content = effect or image it put up). GET /api/state reports the name
+// until the mode or content changes (see scene_api_current).
+#define CONFIG_KEY_CUR_SCENE     "cur_scene"
 
 // PlanV3 Phase V2.5 — swarm mode (masterless lamp-to-lamp state propagation
 // over ESP-NOW, see swarm.{h,c}). One swarm per lamp: a client provisions a

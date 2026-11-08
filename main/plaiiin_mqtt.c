@@ -1,6 +1,7 @@
 #include "plaiiin_mqtt.h"
 #include "config_store.h"
 #include "led_control.h"
+#include "scene_api.h"
 #include "light_api.h"
 #include "js_api.h"        // effect next/prev playlist stepping
 #include "js_player.h"     // base color = the user-intent tint
@@ -142,6 +143,7 @@ static void handle_message(const char *topic, const char *data, int data_len)
         else if (strcmp(val, "js")    == 0) mode = "js";
         if (mode) {
             light_api_apply_mode(mode);
+            scene_api_end();   // an explicit mode pick ends the current scene
             ESP_LOGI(TAG, "Mode '%s' via MQTT", val);
         } else {
             ESP_LOGW(TAG, "Invalid mode '%s' (expected 'color' or 'js')", val);
