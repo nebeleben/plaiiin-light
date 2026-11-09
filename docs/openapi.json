@@ -2798,7 +2798,8 @@
                 "scenes",
                 "stream",
                 "ota",
-                "rename"
+                "rename",
+                "swarm"
               ]
             },
             "description": "role ai only."
@@ -2907,7 +2908,8 @@
                 "scenes",
                 "stream",
                 "ota",
-                "rename"
+                "rename",
+                "swarm"
               ]
             },
             "description": "AI keys only: granted permissions."
@@ -2954,7 +2956,8 @@
                 "scenes",
                 "stream",
                 "ota",
-                "rename"
+                "rename",
+                "swarm"
               ]
             },
             "description": "Required for role ai, ignored otherwise."
@@ -2993,7 +2996,8 @@
                 "scenes",
                 "stream",
                 "ota",
-                "rename"
+                "rename",
+                "swarm"
               ]
             }
           },

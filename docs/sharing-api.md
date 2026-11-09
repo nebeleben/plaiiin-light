@@ -7,7 +7,9 @@ Frozen contract every workstream builds against. Roles: **user < creator < admin
 ## Device key storage (NVS, namespace `plaiiin_cfg`)
 
 - `pair_token` — existing. The lamp's single **admin** key. Mechanism unchanged.
-- `share_keys` — new. JSON array, max 32 entries, stored as one NVS string:
+- `share_keys_b` — JSON array, max 20 entries, stored as an NVS blob (fw
+  2.8.0+; older firmware used the string `share_keys`, which the first save
+  migrates and erases):
   ```json
   [{"id":"a1b2c3d4","key":"<43-char base64url>","role":"user",
     "label":"Guest","revoked":false,"created":1747000000}]
@@ -81,11 +83,16 @@ carries a permission list chosen per key, plus two optional extras.
 | `stream` | WebSocket `/ws` |
 | `ota` | `POST /api/ota` — the one admin action that can be granted |
 | `rename` | `POST /api/name` |
+| `swarm` | `GET /api/swarm`, `GET /api/swarm/stats` — read swarm membership (id, enabled, channel; never the swarm key). Joining, leaving and enabling stay admin-only. |
 
 - **Reads**: a `GET` that a `user` may make (`/api`, `/api/state`, js, images,
   scenes, grid, form-prompt, limits, storage, ota/info,
   `/api/whoami`, …) always works, with no permission. Admin/creator-only
   reads (e.g. `GET /api/keys`) stay closed.
+- **Pages**: a page load carries the admin token (`<meta name="plk-token">`)
+  and, on `/compose`, the AI provider key only when the request itself was
+  made with the admin token (or the lamp is unpaired). Share keys of any
+  role never receive either.
 - **Never grantable** (always 403 `insufficient role`): pair/unpair, keys,
   Wi-Fi/network, MQTT, limits/grid/orientation, BT, factory reset, AI
   provider key, and any write not listed above.
@@ -106,7 +113,9 @@ carries a permission list chosen per key, plus two optional extras.
   clamped to the cap and the response echoes the capped value. It applies only to
   requests made with that key — not buttons, swarm, MQTT, BLE or other clients.
 - **Limit**: at most 4 AI keys (`400 ai-key limit reached`); revoked AI keys
-  still count until deleted. The overall 24-key limit applies too.
+  still count until deleted. The overall limit is 20 keys (`400 share-key
+  limit reached`), and a list too large for storage is refused with
+  `400 share-key list full`.
 - `POST /api/name` `{"name":"…"}` (admin or `rename`): 1..32 **bytes**, no quotes, backslashes or control characters (else 400); stores
   the name, replies `{"status":"ok","rebooting":true}`, and the lamp reboots
   ~800 ms later.
