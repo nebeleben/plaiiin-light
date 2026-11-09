@@ -4,7 +4,7 @@
 static const struct { uint32_t bit; const char *name; } k_names[] = {
     {AI_PERM_CONTROL, "control"}, {AI_PERM_EFFECTS, "effects"}, {AI_PERM_IMAGES, "images"},
     {AI_PERM_SCENES, "scenes"},   {AI_PERM_STREAM, "stream"},   {AI_PERM_OTA, "ota"},
-    {AI_PERM_RENAME, "rename"},
+    {AI_PERM_RENAME, "rename"},   {AI_PERM_SWARM, "swarm"},
 };
 #define N_NAMES (sizeof k_names / sizeof k_names[0])
 
@@ -53,6 +53,8 @@ static const route_t k_routes[] = {
     {AI_M_GET,    "/ws",                          AI_PERM_STREAM},
     {AI_M_POST,   "/api/ota",                     AI_PERM_OTA},
     {AI_M_POST,   "/api/name",                    AI_PERM_RENAME},
+    {AI_M_GET,    "/api/swarm",                   AI_PERM_SWARM},
+    {AI_M_GET,    "/api/swarm/stats",             AI_PERM_SWARM},
 };
 
 /* path (length n, query already stripped) against pattern; '*' = one non-empty segment */

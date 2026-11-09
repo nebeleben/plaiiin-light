@@ -13,7 +13,8 @@ enum {
     AI_PERM_STREAM  = 1u << 4,
     AI_PERM_OTA     = 1u << 5,
     AI_PERM_RENAME  = 1u << 6,
-    AI_PERM_ALL     = 0x7Fu,
+    AI_PERM_SWARM   = 1u << 7, /* read swarm membership/stats; never join/leave */
+    AI_PERM_ALL     = 0xFFu,
 };
 
 #define AI_ROUTE_READ    0xFFFFFFFFu /* a plain read, allowed if the handler's min role is user */

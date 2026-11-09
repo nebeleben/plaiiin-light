@@ -8,7 +8,7 @@
 int main(void)
 {
     static const uint32_t bits[] = {AI_PERM_CONTROL, AI_PERM_EFFECTS, AI_PERM_IMAGES, AI_PERM_SCENES,
-                                    AI_PERM_STREAM,  AI_PERM_OTA,     AI_PERM_RENAME};
+                                    AI_PERM_STREAM,  AI_PERM_OTA,     AI_PERM_RENAME, AI_PERM_SWARM};
     for (unsigned i = 0; i < sizeof bits / sizeof bits[0]; i++) {
         const char *n = ai_perm_name(bits[i]);
         assert(n && ai_perm_from_name(n) == bits[i]);
@@ -16,7 +16,7 @@ int main(void)
     assert(ai_perm_from_name("admin") == 0);
     assert(ai_perm_name(AI_PERM_CONTROL | AI_PERM_OTA) == NULL);
     assert(ai_perm_name(0) == NULL);
-    assert(AI_PERM_ALL == 0x7Fu);
+    assert(AI_PERM_ALL == 0xFFu);
 
     R(POST, "/api/power", AI_PERM_CONTROL);
     R(POST, "/api/color", AI_PERM_CONTROL);
@@ -45,6 +45,11 @@ int main(void)
     R(GET, "/ws", AI_PERM_STREAM);
     R(POST, "/api/ota", AI_PERM_OTA);
     R(POST, "/api/name", AI_PERM_RENAME);
+    R(GET, "/api/swarm", AI_PERM_SWARM);
+    R(GET, "/api/swarm/stats", AI_PERM_SWARM);
+    R(DELETE, "/api/swarm", AI_ROUTE_DENIED);
+    R(POST, "/api/swarm/enable", AI_ROUTE_DENIED);
+    R(POST, "/api/swarm/ping", AI_ROUTE_DENIED);
 
     R(GET, "/api/state", AI_ROUTE_READ);
     R(GET, "/api/js/rain", AI_ROUTE_READ);
