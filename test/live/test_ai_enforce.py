@@ -1,6 +1,7 @@
 """AI share keys are enforced: permission mask, only-while-on, brightness cap,
 whoami (Task 3)."""
 import contextlib
+import time
 
 import pytest
 import requests
@@ -182,3 +183,47 @@ def test_ws_needs_stream_perm(lamp):
         assert not ws_usable(_ws_url(lamp, tok))
     with ai_key(lamp, ["stream"]) as (tok, _):
         assert ws_usable(_ws_url(lamp, tok))
+
+
+def test_rename_needs_rename_perm(lamp):
+    with ai_key(lamp, ["control"]) as (tok, _):
+        r = lamp.post("/api/name", token=tok, json={"name": "aitest-nope"})
+        assert r.status_code == 403, r.text
+
+
+def test_rename_validates(lamp):
+    for body in ({"name": ""}, {"name": "x" * 33}, {}):
+        r = lamp.post("/api/name", json=body)
+        assert r.status_code == 400, (body, r.status_code, r.text)
+
+
+def _wait_node_name(lamp, expect, timeout=40):
+    """Poll GET /api until the lamp is back and reports nodeName == expect."""
+    deadline = time.time() + timeout
+    last = None
+    time.sleep(2)  # let the 800 ms reboot timer fire first
+    while time.time() < deadline:
+        try:
+            last = lamp.get("/api").json().get("nodeName")
+            if last == expect:
+                return
+        except (requests.RequestException, ValueError):
+            pass
+        time.sleep(1)
+    raise AssertionError(f"nodeName never became {expect!r} (last {last!r})")
+
+
+# Must stay last: it reboots the lamp twice.
+def test_rename_with_perm(lamp):
+    original = lamp.get("/api").json()["nodeName"]
+    temp = "aitest-rename"
+    try:
+        with ai_key(lamp, ["rename"]) as (tok, _):
+            r = lamp.post("/api/name", token=tok, json={"name": temp})
+            assert r.status_code == 200, r.text
+            assert r.json() == {"status": "ok", "rebooting": True}
+        _wait_node_name(lamp, temp)
+    finally:
+        r = lamp.post("/api/name", json={"name": original})
+        assert r.status_code == 200, r.text
+        _wait_node_name(lamp, original)

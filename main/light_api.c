@@ -17,6 +17,10 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_mac.h"
+#include "cJSON.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_system.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -886,6 +890,48 @@ static esp_err_t orientation_set_handler(httpd_req_t *req)
     return orientation_get_handler(req);
 }
 
+// POST /api/name  body: {"name":"<1..32 chars>"} — rename the lamp. Admin, or
+// an AI key holding the "rename" permission (pairing_http_check's route table).
+// Stores the node name, answers, then reboots ~800 ms later (same as the BLE
+// rename path) so mDNS / BLE / HA pick the new name up.
+static void name_reboot_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(800));
+    esp_restart();
+}
+
+static esp_err_t name_post_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
+    char buf[160] = {0};
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "name must be 1..32 characters");
+        return ESP_FAIL;
+    }
+    cJSON *root = cJSON_Parse(buf);
+    const cJSON *n = root ? cJSON_GetObjectItemCaseSensitive(root, "name") : NULL;
+    if (!cJSON_IsString(n) || !n->valuestring ||
+        n->valuestring[0] == 0 || strlen(n->valuestring) > 32) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "name must be 1..32 characters");
+        return ESP_FAIL;
+    }
+    esp_err_t err = config_store_set_str(CONFIG_KEY_NODE_NAME, n->valuestring);
+    ESP_LOGI(TAG, "HTTP rename -> '%s' (%s) — scheduling reboot",
+             n->valuestring, esp_err_to_name(err));
+    cJSON_Delete(root);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "could not store name");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"ok\",\"rebooting\":true}");
+    xTaskCreate(name_reboot_task, "name_reboot", 2048, NULL, 5, NULL);
+    return ESP_OK;
+}
+
 // GET /api/state ->
 //   {"on":bool,"color":[r,g,b],"mode":"api"|"js"|"stream",
 //    "brightness":int,"current":"name"|null,"fps":float,"scene":"name"|null}
@@ -1559,6 +1605,16 @@ esp_err_t light_api_register(httpd_handle_t server)
         .handler = state_get_handler
     };
     httpd_register_uri_handler(server, &state_get);
+
+    httpd_uri_t name_post = {
+        .uri = "/api/name",
+        .method = HTTP_POST,
+        .handler = name_post_handler
+    };
+    esp_err_t nerr = httpd_register_uri_handler(server, &name_post);
+    if (nerr != ESP_OK) {
+        ESP_LOGE(TAG, "POST /api/name not registered: %s", esp_err_to_name(nerr));
+    }
 
     httpd_uri_t base_color_get = {
         .uri = "/api/base_color",
