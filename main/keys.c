@@ -582,11 +582,37 @@ static esp_err_t keys_delete_handler(httpd_req_t *req)
 // GET /api/whoami — any caller. Reports the role the request's token grants.
 static esp_err_t whoami_handler(httpd_req_t *req)
 {
-    pl_role_t role = pairing_resolve_role(req);
+    pl_access_t acc = pairing_resolve_access(req);
+    pl_role_t role = acc.role;
     ESP_LOGI(TAG, "whoami: role=%s", pl_role_name(role));
-    char out[64];
-    snprintf(out, sizeof(out), "{\"role\":\"%s\",\"paired\":%s}",
-             pl_role_name(role), pairing_is_paired() ? "true" : "false");
+    if (role != PL_ROLE_AI) {
+        char out[64];
+        snprintf(out, sizeof(out), "{\"role\":\"%s\",\"paired\":%s}",
+                 pl_role_name(role), pairing_is_paired() ? "true" : "false");
+        return send_json(req, out);
+    }
+    // AI key: also report what it may do — perms (names, bit order),
+    // maxBrightness (number or null) and onlyWhenOn.
+    char out[256];
+    int n = snprintf(out, sizeof(out), "{\"role\":\"ai\",\"paired\":true,\"perms\":[");
+    bool first = true;
+    for (int b = 0; b < 32 && n < (int)sizeof(out); b++) {
+        const char *name = (acc.perms & (1u << b)) ? ai_perm_name(1u << b) : NULL;
+        if (!name) continue;
+        n += snprintf(out + n, sizeof(out) - n, "%s\"%s\"", first ? "" : ",", name);
+        first = false;
+    }
+    if (n < (int)sizeof(out)) {
+        if (acc.max_brightness >= 0) {
+            n += snprintf(out + n, sizeof(out) - n, "],\"maxBrightness\":%d", acc.max_brightness);
+        } else {
+            n += snprintf(out + n, sizeof(out) - n, "],\"maxBrightness\":null");
+        }
+    }
+    if (n < (int)sizeof(out)) {
+        snprintf(out + n, sizeof(out) - n, ",\"onlyWhenOn\":%s}",
+                 acc.only_when_on ? "true" : "false");
+    }
     return send_json(req, out);
 }
 

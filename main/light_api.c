@@ -203,6 +203,8 @@ void light_api_apply_color_solid(uint8_t r, uint8_t g, uint8_t b)
 // and BLE both persist-free apply it AND notify MQTT subscribers.
 void light_api_apply_brightness(uint8_t value)
 {
+    // AI key with a brightness cap (only on the httpd task that authorised it).
+    value = pairing_clamp_brightness(value);
     led_control_set_brightness(value);
     mqtt_client_publish_state();
     swarm_notify_state();   // PlanV3 V2.5 — mirror to swarm (no-op if not an active member)
@@ -576,6 +578,7 @@ static esp_err_t brightness_set_handler(httpd_req_t *req)
     int val = p ? atoi(p) : -1;
     if (val < 0) val = 0;
     if (val > 255) val = 255;
+    val = pairing_clamp_brightness((uint8_t)val);   // echo what an AI cap applies
 
     light_api_apply_brightness((uint8_t)val);
 

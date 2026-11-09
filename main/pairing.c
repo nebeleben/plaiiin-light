@@ -1,11 +1,16 @@
 #include "pairing.h"
 #include "keys.h"
+#include "ai_access.h"
 #include "config_store.h"
+#include "led_control.h"
 #include "wifi.h"
 
 #include "esp_log.h"
 #include "esp_random.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 static const char *TAG = "pairing";
@@ -92,10 +97,17 @@ bool pairing_ct_strcmp(const char *a, const char *b)
     return diff == 0;
 }
 
-pl_role_t pairing_role_for_token(const char *token)
+static const pl_access_t k_admin_access = {
+    .role = PL_ROLE_ADMIN, .perms = 0, .max_brightness = -1, .only_when_on = false,
+};
+static const pl_access_t k_no_access = {
+    .role = PL_ROLE_NONE, .perms = 0, .max_brightness = -1, .only_when_on = false,
+};
+
+static pl_access_t access_for_token(const char *token)
 {
-    if (!s_paired_cached) return PL_ROLE_ADMIN;
-    if (!token || !*token) return PL_ROLE_NONE;
+    if (!s_paired_cached) return k_admin_access;
+    if (!token || !*token) return k_no_access;
 
     char stored[TOKEN_B64_LEN];
     esp_err_t err = config_store_get_str(CONFIG_KEY_PAIR_TOKEN, stored, sizeof(stored));
@@ -105,40 +117,50 @@ pl_role_t pairing_role_for_token(const char *token)
         ESP_LOGW(TAG, "paired without token; reverting to unpaired");
         config_store_set_str(CONFIG_KEY_PAIR_MODE, "unpaired");
         s_paired_cached = false;
-        return PL_ROLE_ADMIN;
+        return k_admin_access;
     }
-    if (pairing_ct_strcmp(stored, token)) return PL_ROLE_ADMIN;
+    if (pairing_ct_strcmp(stored, token)) return k_admin_access;
 
-    // Not the admin token — try the limited-role share keys.
+    // Not the admin token — try the limited-role share keys (user, creator,
+    // ai). Looked up on every request, so a revoke/delete bites immediately.
     pl_access_t acc;
-    if (!keys_lookup(token, &acc)) return PL_ROLE_NONE;
-    // Interim: AI keys are refused (401) until their permission mask is
-    // enforced. PL_ROLE_AI = 4 would otherwise pass every `role < min_role`
-    // check as if it outranked admin.
-    if (acc.role == PL_ROLE_AI) return PL_ROLE_NONE;
-    return acc.role;
+    if (!keys_lookup(token, &acc)) return k_no_access;
+    return acc;
+}
+
+pl_role_t pairing_role_for_token(const char *token)
+{
+    return access_for_token(token).role;
 }
 
 bool pairing_check(const char *token)
 {
-    return pairing_role_for_token(token) != PL_ROLE_NONE;
+    // AI keys are excluded: the one caller (http_server.c page meta) embeds
+    // the admin token for an authenticated page load.
+    pl_role_t role = pairing_role_for_token(token);
+    return role != PL_ROLE_NONE && role != PL_ROLE_AI;
+}
+
+pl_access_t pairing_resolve_access(httpd_req_t *req)
+{
+    if (!s_paired_cached) return k_admin_access;
+    // Provisioning bypass: in AP mode the user is on the captive portal with
+    // no way to produce a token — auth would lock them out of recovery.
+    if (wifi_get_mode() == PLAIIIN_WIFI_AP) return k_admin_access;
+
+    char hdr[160] = {0};
+    if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr) - 1) != ESP_OK) {
+        return k_no_access;
+    }
+    const char *prefix = "Bearer ";
+    size_t pl = strlen(prefix);
+    if (strncmp(hdr, prefix, pl) != 0) return k_no_access;
+    return access_for_token(hdr + pl);
 }
 
 pl_role_t pairing_resolve_role(httpd_req_t *req)
 {
-    if (!s_paired_cached) return PL_ROLE_ADMIN;
-    // Provisioning bypass: in AP mode the user is on the captive portal with
-    // no way to produce a token — auth would lock them out of recovery.
-    if (wifi_get_mode() == PLAIIIN_WIFI_AP) return PL_ROLE_ADMIN;
-
-    char hdr[160] = {0};
-    if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr) - 1) != ESP_OK) {
-        return PL_ROLE_NONE;
-    }
-    const char *prefix = "Bearer ";
-    size_t pl = strlen(prefix);
-    if (strncmp(hdr, prefix, pl) != 0) return PL_ROLE_NONE;
-    return pairing_role_for_token(hdr + pl);
+    return pairing_resolve_access(req).role;
 }
 
 esp_err_t pairing_pair(char *out_token, size_t out_len)
@@ -193,23 +215,110 @@ static esp_err_t send_401(httpd_req_t *req)
     return ESP_FAIL;
 }
 
-static esp_err_t send_403(httpd_req_t *req)
+static esp_err_t send_403_msg(httpd_req_t *req, const char *msg)
 {
+    char body[96];
+    snprintf(body, sizeof(body), "{\"status\":\"error\",\"message\":\"%s\"}", msg);
     httpd_resp_set_status(req, "403 Forbidden");
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"insufficient role\"}");
+    httpd_resp_sendstr(req, body);
     return ESP_FAIL;
+}
+
+static esp_err_t send_403(httpd_req_t *req)
+{
+    return send_403_msg(req, "insufficient role");
+}
+
+// Brightness cap of the AI key that authorised the request now running on
+// the httpd task. Cleared at the start of every pairing_http_check /
+// pairing_ws_check, set only when a capped AI key passes. Bound to the task
+// that set it, so a brightness change on any other task (buttons, swarm,
+// MQTT, scheduler, BLE) is never clamped. Only the httpd task writes it.
+static volatile int16_t      s_cap_value = -1;
+static volatile TaskHandle_t s_cap_task  = NULL;
+
+static void cap_clear(void)
+{
+    s_cap_task  = NULL;
+    s_cap_value = -1;
+}
+
+uint8_t pairing_clamp_brightness(uint8_t value)
+{
+    TaskHandle_t task = s_cap_task;
+    int16_t cap = s_cap_value;
+    if (task == NULL || task != xTaskGetCurrentTaskHandle() || cap < 0) return value;
+    return value > cap ? (uint8_t)cap : value;
+}
+
+static ai_method_t method_of(httpd_req_t *req)
+{
+    switch (req->method) {
+        case HTTP_GET:    return AI_M_GET;
+        case HTTP_POST:   return AI_M_POST;
+        case HTTP_PUT:    return AI_M_PUT;
+        case HTTP_PATCH:  return AI_M_PATCH;
+        case HTTP_DELETE: return AI_M_DELETE;
+        default:          return AI_M_OTHER;
+    }
+}
+
+// POST /api/power, query and one trailing slash ignored (as ai_route_perm).
+static bool is_power_post(ai_method_t m, const char *uri)
+{
+    if (m != AI_M_POST) return false;
+    size_t n = strcspn(uri, "?");
+    if (n > 1 && uri[n - 1] == '/') n--;
+    return n == 10 && strncmp(uri, "/api/power", 10) == 0;
+}
+
+// The AI-key branch of both checks. `acc->role` is PL_ROLE_AI. The role
+// ladder does not apply: the route's permission decides (ai_access.c).
+static esp_err_t ai_check(httpd_req_t *req, const pl_access_t *acc, pl_role_t min_role)
+{
+    ai_method_t m = method_of(req);
+    uint32_t p = ai_route_perm(m, req->uri);
+    if (p == AI_ROUTE_DENIED) {
+        ESP_LOGI(TAG, "403 %s (ai: denied route)", req->uri);
+        return send_403(req);
+    }
+    bool is_read = (p == AI_ROUTE_READ);
+    if (is_read) {
+        // A plain read is fine only where any user may read; admin/creator
+        // reads (key list, Wi-Fi, ...) stay closed.
+        if (min_role > PL_ROLE_USER) {
+            ESP_LOGI(TAG, "403 %s (ai: read needs %s)", req->uri, pl_role_name(min_role));
+            return send_403(req);
+        }
+    } else if ((acc->perms & p) == 0) {
+        ESP_LOGI(TAG, "403 %s (ai: missing %s)", req->uri, ai_perm_name(p) ? ai_perm_name(p) : "?");
+        return send_403_msg(req, "not permitted for this AI key");
+    }
+    // Only-while-on: a switched-off lamp accepts reads and power-on only.
+    if (acc->only_when_on && !is_read && !is_power_post(m, req->uri)
+        && !led_control_is_on()) {
+        ESP_LOGI(TAG, "403 %s (ai: lamp is off)", req->uri);
+        return send_403_msg(req, "lamp is off");
+    }
+    if (acc->max_brightness >= 0) {
+        s_cap_value = acc->max_brightness;
+        s_cap_task  = xTaskGetCurrentTaskHandle();
+    }
+    return ESP_OK;
 }
 
 esp_err_t pairing_http_check(httpd_req_t *req, pl_role_t min_role)
 {
-    pl_role_t role = pairing_resolve_role(req);
-    if (role == PL_ROLE_NONE) {
+    cap_clear();
+    pl_access_t acc = pairing_resolve_access(req);
+    if (acc.role == PL_ROLE_NONE) {
         ESP_LOGI(TAG, "401 %s", req->uri);
         return send_401(req);
     }
-    if (role < min_role) {
-        ESP_LOGI(TAG, "403 %s (role=%s)", req->uri, pl_role_name(role));
+    if (acc.role == PL_ROLE_AI) return ai_check(req, &acc, min_role);
+    if (acc.role < min_role) {
+        ESP_LOGI(TAG, "403 %s (role=%s)", req->uri, pl_role_name(acc.role));
         return send_403(req);
     }
     return ESP_OK;
@@ -217,6 +326,7 @@ esp_err_t pairing_http_check(httpd_req_t *req, pl_role_t min_role)
 
 esp_err_t pairing_ws_check(httpd_req_t *req, pl_role_t min_role)
 {
+    cap_clear();
     if (!s_paired_cached) return ESP_OK;
     size_t qlen = httpd_req_get_url_query_len(req);
     if (qlen == 0) return send_401(req);
@@ -227,8 +337,9 @@ esp_err_t pairing_ws_check(httpd_req_t *req, pl_role_t min_role)
     esp_err_t got = httpd_query_key_value(q, "token", tok, sizeof(tok));
     free(q);
     if (got != ESP_OK) return send_401(req);
-    pl_role_t role = pairing_role_for_token(tok);
-    if (role == PL_ROLE_NONE) return send_401(req);
-    if (role < min_role)      return send_403(req);
+    pl_access_t acc = access_for_token(tok);
+    if (acc.role == PL_ROLE_NONE) return send_401(req);
+    if (acc.role == PL_ROLE_AI)   return ai_check(req, &acc, min_role);
+    if (acc.role < min_role)      return send_403(req);
     return ESP_OK;
 }

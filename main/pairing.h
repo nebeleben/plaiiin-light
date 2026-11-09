@@ -4,6 +4,7 @@
 #include "esp_http_server.h"
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /**
  * Phase 9 — pairing token + mode. Phase 27 — role-based sharing.
@@ -32,6 +33,15 @@ typedef enum {
     PL_ROLE_AI      = 4,
 } pl_role_t;
 
+/** What a token grants. perms/max_brightness/only_when_on only mean
+ *  something for PL_ROLE_AI (filled by keys_lookup, see keys.h). */
+typedef struct {
+    pl_role_t role;           /* PL_ROLE_NONE / USER / CREATOR / ADMIN / AI */
+    uint32_t  perms;          /* AI only: AI_PERM_* mask */
+    int16_t   max_brightness; /* AI only: -1 = no cap, else 0..255 */
+    bool      only_when_on;   /* AI only */
+} pl_access_t;
+
 /** Lowercase name of a role ("admin"/"creator"/"user"/"ai"/"none"). */
 const char *pl_role_name(pl_role_t role);
 
@@ -46,15 +56,26 @@ bool pairing_is_paired(void);
 bool pairing_is_provisioned(void);
 
 /** Resolve the role a raw token grants: admin when unpaired, admin for the
- *  pair_token, user|creator for a matching non-revoked share key, else NONE. */
+ *  pair_token, user|creator|ai for a matching non-revoked share key, else NONE. */
 pl_role_t pairing_role_for_token(const char *token);
 
-/** Resolve the role of an HTTP request from its Authorization header.
- *  Returns PL_ROLE_ADMIN when unpaired or in Wi-Fi AP mode. */
+/** Resolve the full access record of an HTTP request from its Authorization
+ *  header. An admin record when unpaired or in Wi-Fi AP mode. */
+pl_access_t pairing_resolve_access(httpd_req_t *req);
+
+/** Role part of pairing_resolve_access(). May be PL_ROLE_AI — never compare
+ *  the result with `<`/`>`. */
 pl_role_t pairing_resolve_role(httpd_req_t *req);
 
-/** Legacy helper — true if `token` grants any valid role. */
+/** Legacy helper — true if `token` grants a user/creator/admin role. AI keys
+ *  are deliberately false: callers use it to decide whether to hand out the
+ *  admin token (http_server.c page meta). */
 bool pairing_check(const char *token);
+
+/** Clamp a brightness to the cap of the AI key that authorised the HTTP
+ *  request currently running on this task. Identity on every other task
+ *  (buttons, swarm, MQTT, scheduler, BLE) and for every non-capped caller. */
+uint8_t pairing_clamp_brightness(uint8_t value);
 
 /** Generate a fresh admin token, switch to paired mode, write it to
  *  `out_token` (NUL-terminated, ≤64 bytes). */
@@ -70,6 +91,10 @@ esp_err_t pairing_get_token(char *out, size_t out_len);
  * Standard guard for HTTP handlers. Requires the request to carry a token
  * granting at least `min_role`. Sends 401 (no/invalid token) or 403
  * (insufficient role) and returns ESP_FAIL on failure.
+ *
+ * AI keys ignore the role ladder: the route's permission (ai_access.h)
+ * decides — plain reads only where `min_role` is user, everything else needs
+ * the matching AI_PERM_* bit; plus only-while-on and the brightness cap.
  *
  *     if (pairing_http_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
  */
