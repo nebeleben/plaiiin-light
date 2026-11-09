@@ -1,4 +1,5 @@
 #include "keys.h"
+#include "ai_access.h"
 #include "config_store.h"
 #include "esp_log.h"
 #include "esp_random.h"
@@ -14,6 +15,11 @@ static const char *TAG = "keys";
 // Cap so the serialized JSON array stays well under the NVS 4000-byte string
 // limit (~140 bytes/entry).
 #define MAX_SHARE_KEYS 24
+// AI keys are capped separately (revoked ones count until deleted) — they
+// carry three extra fields (~25 bytes) on top of a regular entry.
+#define MAX_AI_KEYS    4
+// Request body cap for POST/PATCH /api/keys.
+#define KEYS_BODY_MAX  512
 #define KEYS_BUF_SZ    4096
 
 // --- store helpers ----------------------------------------------------------
@@ -77,7 +83,14 @@ static pl_role_t role_from_name(const char *name)
     if (!name) return PL_ROLE_NONE;
     if (strcmp(name, "creator") == 0) return PL_ROLE_CREATOR;
     if (strcmp(name, "user") == 0)    return PL_ROLE_USER;
+    if (strcmp(name, "ai") == 0)      return PL_ROLE_AI;
     return PL_ROLE_NONE;
+}
+
+static bool entry_is_ai(const cJSON *e)
+{
+    const cJSON *r = cJSON_GetObjectItem(e, "role");
+    return cJSON_IsString(r) && r->valuestring && strcmp(r->valuestring, "ai") == 0;
 }
 
 // --- public API -------------------------------------------------------------
@@ -90,11 +103,15 @@ esp_err_t keys_init(void)
     return ESP_OK;
 }
 
-pl_role_t keys_role_for(const char *token)
+bool keys_lookup(const char *token, pl_access_t *out)
 {
-    if (!token || !*token) return PL_ROLE_NONE;
+    pl_access_t acc = { .role = PL_ROLE_NONE, .perms = 0,
+                        .max_brightness = -1, .only_when_on = false };
+    if (!token || !*token) {
+        if (out) *out = acc;
+        return false;
+    }
     cJSON *arr = load_array();
-    pl_role_t result = PL_ROLE_NONE;
     cJSON *e = NULL;
     cJSON_ArrayForEach(e, arr) {
         cJSON *k  = cJSON_GetObjectItem(e, "key");
@@ -103,15 +120,25 @@ pl_role_t keys_role_for(const char *token)
         if (cJSON_IsTrue(rv)) continue;
         if (pairing_ct_strcmp(k->valuestring, token)) {
             cJSON *r = cJSON_GetObjectItem(e, "role");
-            result = role_from_name(cJSON_IsString(r) ? r->valuestring : NULL);
+            acc.role = role_from_name(cJSON_IsString(r) ? r->valuestring : NULL);
+            if (acc.role == PL_ROLE_AI) {
+                cJSON *jp  = cJSON_GetObjectItem(e, "p");
+                cJSON *jmb = cJSON_GetObjectItem(e, "mb");
+                acc.perms = cJSON_IsNumber(jp) ? ((uint32_t)jp->valuedouble & AI_PERM_ALL) : 0;
+                if (cJSON_IsNumber(jmb) && jmb->valueint >= 0 && jmb->valueint <= 255) {
+                    acc.max_brightness = (int16_t)jmb->valueint;
+                }
+                acc.only_when_on = cJSON_IsTrue(cJSON_GetObjectItem(e, "ow"));
+            }
             break;
         }
     }
-    if (result == PL_ROLE_NONE) {
+    if (acc.role == PL_ROLE_NONE) {
         ESP_LOGI(TAG, "token matched none of %d share key(s)", cJSON_GetArraySize(arr));
     }
     cJSON_Delete(arr);
-    return result;
+    if (out) *out = acc;
+    return acc.role != PL_ROLE_NONE;
 }
 
 void keys_clear_all(void)
@@ -163,14 +190,151 @@ static bool parse_key_id(const char *uri, char *out, size_t out_len)
     return n > 0;
 }
 
-// GET /api/keys — admin. Returns {"keys":[ ...full entries incl. secrets... ]}.
+// Render a stored entry for the HTTP API. Non-AI entries come out unchanged;
+// AI entries swap the compact p/mb/ow for perms (names, bit order),
+// maxBrightness (number or null) and onlyWhenOn. Returns a new object (caller
+// owns it) or NULL on OOM.
+static cJSON *render_entry(const cJSON *stored)
+{
+    cJSON *out = cJSON_Duplicate(stored, true);
+    if (!out || !entry_is_ai(stored)) return out;
+
+    cJSON *jp  = cJSON_GetObjectItem(stored, "p");
+    cJSON *jmb = cJSON_GetObjectItem(stored, "mb");
+    uint32_t mask = cJSON_IsNumber(jp) ? (uint32_t)jp->valuedouble : 0;
+    cJSON_DeleteItemFromObject(out, "p");
+    cJSON_DeleteItemFromObject(out, "mb");
+    cJSON_DeleteItemFromObject(out, "ow");
+
+    cJSON *perms = cJSON_AddArrayToObject(out, "perms");
+    for (int b = 0; b < 32; b++) {
+        const char *n = (mask & (1u << b)) ? ai_perm_name(1u << b) : NULL;
+        if (n && perms) cJSON_AddItemToArray(perms, cJSON_CreateString(n));
+    }
+    if (cJSON_IsNumber(jmb) && jmb->valueint >= 0 && jmb->valueint <= 255) {
+        cJSON_AddNumberToObject(out, "maxBrightness", jmb->valueint);
+    } else {
+        cJSON_AddNullToObject(out, "maxBrightness");
+    }
+    cJSON_AddBoolToObject(out, "onlyWhenOn", cJSON_IsTrue(cJSON_GetObjectItem(stored, "ow")));
+    return out;
+}
+
+static esp_err_t send_entry(httpd_req_t *req, const cJSON *stored)
+{
+    cJSON *r = render_entry(stored);
+    char *json = r ? cJSON_PrintUnformatted(r) : NULL;
+    cJSON_Delete(r);
+    esp_err_t ret = json ? send_json(req, json)
+                         : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "oom");
+    free(json);
+    return ret;
+}
+
+// AI-key fields from a POST/PATCH body. has_* say which were present.
+typedef struct {
+    bool     has_perms, has_mb, has_ow;
+    uint32_t perms;
+    int      mb;   /* -1 = no cap */
+    bool     ow;
+} ai_fields_t;
+
+// Validate perms/maxBrightness/onlyWhenOn in `in`. On error writes the
+// message into `err` and returns false. `perms` must be present when
+// require_perms; when present it must be a non-empty array of known names.
+static bool parse_ai_fields(const cJSON *in, bool require_perms, ai_fields_t *f,
+                            char *err, size_t err_len)
+{
+    memset(f, 0, sizeof(*f));
+    f->mb = -1;
+
+    const cJSON *jp = cJSON_GetObjectItem(in, "perms");
+    if (jp) {
+        if (!cJSON_IsArray(jp) || cJSON_GetArraySize(jp) == 0) {
+            snprintf(err, err_len, "perms must be a non-empty list");
+            return false;
+        }
+        const cJSON *n = NULL;
+        cJSON_ArrayForEach(n, jp) {
+            if (!cJSON_IsString(n) || !n->valuestring) {
+                snprintf(err, err_len, "perms must be a list of names");
+                return false;
+            }
+            uint32_t bit = ai_perm_from_name(n->valuestring);
+            if (!bit) {
+                snprintf(err, err_len, "unknown permission: %.32s", n->valuestring);
+                return false;
+            }
+            f->perms |= bit;
+        }
+        f->has_perms = true;
+    } else if (require_perms) {
+        snprintf(err, err_len, "perms required");
+        return false;
+    }
+
+    const cJSON *jmb = cJSON_GetObjectItem(in, "maxBrightness");
+    if (jmb) {
+        if (cJSON_IsNull(jmb)) {
+            f->mb = -1;
+        } else if (cJSON_IsNumber(jmb) && jmb->valuedouble >= 0 && jmb->valuedouble <= 255
+                   && jmb->valuedouble == (double)jmb->valueint) {
+            f->mb = jmb->valueint;
+        } else {
+            snprintf(err, err_len, "maxBrightness must be 0..255 or null");
+            return false;
+        }
+        f->has_mb = true;
+    }
+
+    const cJSON *jow = cJSON_GetObjectItem(in, "onlyWhenOn");
+    if (jow) {
+        if (!cJSON_IsBool(jow)) {
+            snprintf(err, err_len, "onlyWhenOn must be true or false");
+            return false;
+        }
+        f->ow = cJSON_IsTrue(jow);
+        f->has_ow = true;
+    }
+    return true;
+}
+
+static void set_number(cJSON *e, const char *name, double v)
+{
+    if (cJSON_GetObjectItem(e, name)) cJSON_ReplaceItemInObject(e, name, cJSON_CreateNumber(v));
+    else cJSON_AddNumberToObject(e, name, v);
+}
+
+static void set_bool(cJSON *e, const char *name, bool v)
+{
+    if (cJSON_GetObjectItem(e, name)) cJSON_ReplaceItemInObject(e, name, cJSON_CreateBool(v));
+    else cJSON_AddBoolToObject(e, name, v);
+}
+
+static void set_string(cJSON *e, const char *name, const char *v)
+{
+    if (cJSON_GetObjectItem(e, name)) cJSON_ReplaceItemInObject(e, name, cJSON_CreateString(v));
+    else cJSON_AddStringToObject(e, name, v);
+}
+
+// GET /api/keys — admin. Returns {"keys":[ ...full entries incl. secrets... ]},
+// AI entries rendered (perms/maxBrightness/onlyWhenOn).
 static esp_err_t keys_get_handler(httpd_req_t *req)
 {
     if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
     cJSON *arr = load_array();
     cJSON *root = cJSON_CreateObject();
-    cJSON_AddItemToObject(root, "keys", arr);  // transfers ownership of arr
-    char *json = cJSON_PrintUnformatted(root);
+    cJSON *list = cJSON_AddArrayToObject(root, "keys");
+    bool oom = !root || !list;
+    cJSON *e = NULL;
+    cJSON_ArrayForEach(e, arr) {
+        if (oom) break;
+        cJSON *r = render_entry(e);
+        if (!r) { oom = true; break; }
+        cJSON_AddItemToArray(list, r);
+    }
+    cJSON_Delete(arr);
+    char *json = oom ? NULL : cJSON_PrintUnformatted(root);
     esp_err_t ret = json ? send_json(req, json)
                          : httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "oom");
     free(json);
@@ -178,13 +342,14 @@ static esp_err_t keys_get_handler(httpd_req_t *req)
     return ret;
 }
 
-// POST /api/keys — admin. Body {"role":"user|creator","label":"..."}.
-// Creates a key, returns the new entry.
+// POST /api/keys — admin. Body {"role":"user|creator","label":"..."} or
+// {"role":"ai","label":"...","perms":[...],"maxBrightness":n|null,
+// "onlyWhenOn":bool}. Creates a key, returns the new (rendered) entry.
 static esp_err_t keys_post_handler(httpd_req_t *req)
 {
     if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
 
-    char *body = recv_body(req, 512);
+    char *body = recv_body(req, KEYS_BODY_MAX);
     cJSON *in = body ? cJSON_Parse(body) : NULL;
     free(body);
     if (!in) {
@@ -203,11 +368,19 @@ static esp_err_t keys_post_handler(httpd_req_t *req)
     if (cJSON_IsString(jlabel) && jlabel->valuestring) {
         strncpy(label, jlabel->valuestring, sizeof(label) - 1);
     }
+    bool is_ai = strcmp(role, "ai") == 0;
+    ai_fields_t ai;
+    char err[64] = {0};
+    bool ai_ok = !is_ai || parse_ai_fields(in, true, &ai, err, sizeof(err));
     cJSON_Delete(in);
 
-    // Only user/creator can be minted here — admin is the pairing token only.
-    if (strcmp(role, "user") != 0 && strcmp(role, "creator") != 0) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "role must be user or creator");
+    // Only user/creator/ai can be minted here — admin is the pairing token only.
+    if (!is_ai && strcmp(role, "user") != 0 && strcmp(role, "creator") != 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "role must be user, creator or ai");
+        return ESP_FAIL;
+    }
+    if (!ai_ok) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err);
         return ESP_FAIL;
     }
 
@@ -216,6 +389,16 @@ static esp_err_t keys_post_handler(httpd_req_t *req)
         cJSON_Delete(arr);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "share-key limit reached");
         return ESP_FAIL;
+    }
+    if (is_ai) {
+        int n_ai = 0;
+        cJSON *it = NULL;
+        cJSON_ArrayForEach(it, arr) if (entry_is_ai(it)) n_ai++;
+        if (n_ai >= MAX_AI_KEYS) {
+            cJSON_Delete(arr);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "ai-key limit reached");
+            return ESP_FAIL;
+        }
     }
 
     // 8-hex id, 43-char base64url key.
@@ -233,21 +416,99 @@ static esp_err_t keys_post_handler(httpd_req_t *req)
     cJSON_AddStringToObject(e, "label", label);
     cJSON_AddNumberToObject(e, "created", (double)time(NULL));
     cJSON_AddBoolToObject(e, "revoked", false);
+    if (is_ai) {
+        cJSON_AddNumberToObject(e, "p", ai.perms);
+        cJSON_AddNumberToObject(e, "mb", ai.has_mb ? ai.mb : -1);
+        cJSON_AddBoolToObject(e, "ow", ai.has_ow && ai.ow);
+    }
     cJSON_AddItemToArray(arr, e);
 
     esp_err_t serr = save_array(arr);
-    cJSON_Delete(arr);
     if (serr != ESP_OK) {
+        cJSON_Delete(arr);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "save failed");
         return ESP_FAIL;
     }
     ESP_LOGI(TAG, "share key created: id=%s role=%s", id, role);
+    esp_err_t ret = send_entry(req, e);
+    cJSON_Delete(arr);
+    return ret;
+}
 
-    char out[256];
-    snprintf(out, sizeof(out),
-        "{\"id\":\"%s\",\"key\":\"%s\",\"role\":\"%s\",\"label\":\"%s\",\"revoked\":false}",
-        id, key, role, label);
-    return send_json(req, out);
+// PATCH /api/keys/<id> — admin. Edits an AI key: any of perms,
+// maxBrightness, onlyWhenOn, label. Returns the updated (rendered) entry.
+static esp_err_t keys_patch_handler(httpd_req_t *req)
+{
+    if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
+    char id[16] = {0};
+    if (!parse_key_id(req->uri, id, sizeof(id))) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing key id");
+        return ESP_FAIL;
+    }
+
+    char *body = recv_body(req, KEYS_BODY_MAX);
+    cJSON *in = body ? cJSON_Parse(body) : NULL;
+    free(body);
+    if (!in || !cJSON_IsObject(in)) {
+        cJSON_Delete(in);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad request body");
+        return ESP_FAIL;
+    }
+    ai_fields_t ai;
+    char err[64] = {0};
+    bool ok = parse_ai_fields(in, false, &ai, err, sizeof(err));
+    cJSON *jlabel = cJSON_GetObjectItem(in, "label");
+    bool has_label = jlabel != NULL;
+    char label[33] = {0};
+    if (ok && has_label) {
+        if (cJSON_IsString(jlabel) && jlabel->valuestring) {
+            strncpy(label, jlabel->valuestring, sizeof(label) - 1);
+        } else {
+            snprintf(err, sizeof(err), "label must be a string");
+            ok = false;
+        }
+    }
+    cJSON_Delete(in);
+
+    cJSON *arr = load_array();
+    cJSON *e = NULL;
+    cJSON_ArrayForEach(e, arr) {
+        cJSON *jid = cJSON_GetObjectItem(e, "id");
+        if (cJSON_IsString(jid) && strcmp(jid->valuestring, id) == 0) break;
+    }
+    if (!e) {
+        int count = cJSON_GetArraySize(arr);
+        cJSON_Delete(arr);
+        ESP_LOGW(TAG, "patch: id=%s not among %d share key(s)", id, count);
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no such key");
+        return ESP_FAIL;
+    }
+    if (!entry_is_ai(e)) {
+        cJSON_Delete(arr);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "not an ai key");
+        return ESP_FAIL;
+    }
+    if (!ok) {
+        cJSON_Delete(arr);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err);
+        return ESP_FAIL;
+    }
+
+    if (ai.has_perms) set_number(e, "p", ai.perms);
+    if (ai.has_mb)    set_number(e, "mb", ai.mb);
+    if (ai.has_ow)    set_bool(e, "ow", ai.ow);
+    if (has_label)    set_string(e, "label", label);
+
+    esp_err_t serr = save_array(arr);
+    if (serr != ESP_OK) {
+        cJSON_Delete(arr);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "save failed");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "ai key edited: id=%s", id);
+    esp_err_t ret = send_entry(req, e);
+    cJSON_Delete(arr);
+    return ret;
 }
 
 // POST /api/keys/<id>/revoke — admin. Marks the entry revoked (kept in list).
@@ -345,4 +606,11 @@ void keys_api_register(httpd_handle_t server)
     httpd_register_uri_handler(server, &krevoke);
     httpd_uri_t kdel = { .uri = "/api/keys/*", .method = HTTP_DELETE, .handler = keys_delete_handler };
     httpd_register_uri_handler(server, &kdel);
+    // PATCH /api/keys/<id> — edit an AI key. Last registration on the server:
+    // log a full handler table instead of failing silently.
+    httpd_uri_t kpatch = { .uri = "/api/keys/*", .method = HTTP_PATCH, .handler = keys_patch_handler };
+    esp_err_t perr = httpd_register_uri_handler(server, &kpatch);
+    if (perr != ESP_OK) {
+        ESP_LOGE(TAG, "PATCH /api/keys/* not registered: %s", esp_err_to_name(perr));
+    }
 }

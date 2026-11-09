@@ -21,15 +21,18 @@
  * Token comparison is constant-time.
  */
 
-/** Access roles, ordered: NONE < USER < CREATOR < ADMIN. */
+/** Access roles, ordered: NONE < USER < CREATOR < ADMIN. PL_ROLE_AI sits
+ *  OUTSIDE that ladder (an AI key's rights are a permission mask, see
+ *  ai_access.h) — never compare it with `<`/`>`. */
 typedef enum {
     PL_ROLE_NONE    = 0,
     PL_ROLE_USER    = 1,
     PL_ROLE_CREATOR = 2,
     PL_ROLE_ADMIN   = 3,
+    PL_ROLE_AI      = 4,
 } pl_role_t;
 
-/** Lowercase name of a role ("admin"/"creator"/"user"/"none"). */
+/** Lowercase name of a role ("admin"/"creator"/"user"/"ai"/"none"). */
 const char *pl_role_name(pl_role_t role);
 
 esp_err_t pairing_init(void);

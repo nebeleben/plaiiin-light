@@ -59,6 +59,7 @@ const char *pl_role_name(pl_role_t role)
         case PL_ROLE_ADMIN:   return "admin";
         case PL_ROLE_CREATOR: return "creator";
         case PL_ROLE_USER:    return "user";
+        case PL_ROLE_AI:      return "ai";
         default:              return "none";
     }
 }
@@ -109,7 +110,13 @@ pl_role_t pairing_role_for_token(const char *token)
     if (pairing_ct_strcmp(stored, token)) return PL_ROLE_ADMIN;
 
     // Not the admin token — try the limited-role share keys.
-    return keys_role_for(token);
+    pl_access_t acc;
+    if (!keys_lookup(token, &acc)) return PL_ROLE_NONE;
+    // Interim: AI keys are refused (401) until their permission mask is
+    // enforced. PL_ROLE_AI = 4 would otherwise pass every `role < min_role`
+    // check as if it outranked admin.
+    if (acc.role == PL_ROLE_AI) return PL_ROLE_NONE;
+    return acc.role;
 }
 
 bool pairing_check(const char *token)
