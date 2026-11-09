@@ -1,5 +1,7 @@
 """Live tests against a real lamp.
 
+Requirements: pytest, requests, websocket-client.
+
 Set LAMP_HOST to an UNPAIRED test lamp (e.g. LAMP_HOST=192.168.178.195).
 The session fixture pairs it, hands the tests an admin client, and always
 unpairs again on teardown (which also drops every share key), so the lamp is
