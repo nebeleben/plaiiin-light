@@ -1502,7 +1502,6 @@ static esp_err_t swarm_post_handler(httpd_req_t *req)
     // the swarm. Refuse unless the caller pins the channel explicitly (the
     // hook a future BLE-aware client would use).
     if (have_id && have_key && channel == 0 && !wifi_is_connected()) {
-        free(buf);
         httpd_resp_set_status(req, "409 Conflict");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, "{\"status\":\"error\",\"message\":\"lamp is not on WiFi — joining a swarm needs a WiFi connection (or an explicit channel)\"}");
