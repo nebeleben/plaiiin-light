@@ -47,6 +47,31 @@ esp_err_t config_store_set_str(const char *key, const char *value)
     return err;
 }
 
+esp_err_t config_store_get_blob(const char *key, void *out, size_t *len)
+{
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
+    if (err != ESP_OK) return err;
+
+    err = nvs_get_blob(handle, key, out, len);
+    nvs_close(handle);
+    return err;
+}
+
+esp_err_t config_store_set_blob(const char *key, const void *value, size_t len)
+{
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) return err;
+
+    err = nvs_set_blob(handle, key, value, len);
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+    return err;
+}
+
 esp_err_t config_store_get_i32(const char *key, int32_t *out)
 {
     nvs_handle_t handle;

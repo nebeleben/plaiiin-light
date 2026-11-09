@@ -12,9 +12,13 @@
 
 static const char *TAG = "keys";
 
-// Cap so the serialized JSON array stays well under the NVS 4000-byte string
-// limit (~140 bytes/entry).
-#define MAX_SHARE_KEYS 24
+// Entry cap. A regular entry with a 32-byte label serializes to ~166 bytes,
+// an AI entry to ~190, so 20 entries (4 of them AI) stay near 3.4 KB — under
+// the NVS 4000-byte string limit. Labels full of escaped characters can
+// still push past it; save_array's size check catches that case.
+#define MAX_SHARE_KEYS 20
+// Largest serialized key list we write (NVS string limit is 4000 incl. NUL).
+#define KEYS_NVS_MAX   3900
 // AI keys are capped separately (revoked ones count until deleted) — they
 // carry three extra fields (~25 bytes) on top of a regular entry.
 #define MAX_AI_KEYS    4
@@ -43,7 +47,15 @@ static cJSON *load_array(void)
         return cJSON_CreateArray();
     }
     cJSON *arr = NULL;
-    esp_err_t err = config_store_get_str(CONFIG_KEY_SHARE_KEYS, buf, KEYS_BUF_SZ);
+    // Blob first (fw 2.8.0+); fall back to the legacy string, which the next
+    // save migrates. The blob is stored without a NUL.
+    size_t blen = KEYS_BUF_SZ - 1;
+    esp_err_t err = config_store_get_blob(CONFIG_KEY_SHARE_KEYS_B, buf, &blen);
+    if (err == ESP_OK) {
+        buf[blen] = '\0';
+    } else if (err == ESP_ERR_NVS_NOT_FOUND) {
+        err = config_store_get_str(CONFIG_KEY_SHARE_KEYS, buf, KEYS_BUF_SZ);
+    }
     if (err == ESP_OK && buf[0]) {
         arr = cJSON_Parse(buf);
         if (!arr) {
@@ -69,10 +81,23 @@ static esp_err_t save_array(cJSON *arr)
         log_heap("save: no memory to serialize the key list");
         return ESP_ERR_NO_MEM;
     }
-    esp_err_t err = config_store_set_str(CONFIG_KEY_SHARE_KEYS, json);
-    if (err != ESP_OK) {
+    size_t len = strlen(json);
+    if (len > KEYS_NVS_MAX) {
+        ESP_LOGW(TAG, "save: key list would be %u bytes (max %u), refused",
+                 (unsigned)len, (unsigned)KEYS_NVS_MAX);
+        free(json);
+        return ESP_ERR_INVALID_SIZE;
+    }
+    esp_err_t err = config_store_set_blob(CONFIG_KEY_SHARE_KEYS_B, json, len);
+    if (err == ESP_OK) {
+        // Drop the pre-2.8.0 string copy once the blob holds the list.
+        const char *legacy[] = { CONFIG_KEY_SHARE_KEYS };
+        config_store_erase_keys(legacy, 1);
+    } else {
         ESP_LOGE(TAG, "save: NVS write of %u bytes failed: %s",
-                 (unsigned)strlen(json), esp_err_to_name(err));
+                 (unsigned)len, esp_err_to_name(err));
+        // Out of NVS space is a full list from the caller's point of view.
+        if (err == ESP_ERR_NVS_NOT_ENOUGH_SPACE) err = ESP_ERR_INVALID_SIZE;
     }
     free(json);
     return err;
@@ -143,11 +168,23 @@ bool keys_lookup(const char *token, pl_access_t *out)
 
 void keys_clear_all(void)
 {
-    const char *k[] = { CONFIG_KEY_SHARE_KEYS };
-    config_store_erase_keys(k, 1);
+    const char *k[] = { CONFIG_KEY_SHARE_KEYS, CONFIG_KEY_SHARE_KEYS_B };
+    config_store_erase_keys(k, 2);
 }
 
 // --- HTTP handlers ----------------------------------------------------------
+
+// A failed save of a grown/edited list: too big for NVS is the caller's
+// problem (400), anything else is ours (500).
+static esp_err_t send_save_error(httpd_req_t *req, esp_err_t err)
+{
+    if (err == ESP_ERR_INVALID_SIZE) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "share-key list full");
+    } else {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "save failed");
+    }
+    return ESP_FAIL;
+}
 
 // Read the request body into a heap buffer (NUL-terminated). NULL on failure
 // or empty body. Caller frees.
@@ -426,8 +463,7 @@ static esp_err_t keys_post_handler(httpd_req_t *req)
     esp_err_t serr = save_array(arr);
     if (serr != ESP_OK) {
         cJSON_Delete(arr);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "save failed");
-        return ESP_FAIL;
+        return send_save_error(req, serr);
     }
     ESP_LOGI(TAG, "share key created: id=%s role=%s", id, role);
     esp_err_t ret = send_entry(req, e);
@@ -502,8 +538,7 @@ static esp_err_t keys_patch_handler(httpd_req_t *req)
     esp_err_t serr = save_array(arr);
     if (serr != ESP_OK) {
         cJSON_Delete(arr);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "save failed");
-        return ESP_FAIL;
+        return send_save_error(req, serr);
     }
     ESP_LOGI(TAG, "ai key edited: id=%s", id);
     esp_err_t ret = send_entry(req, e);

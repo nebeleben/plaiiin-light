@@ -97,6 +97,11 @@
 // the additional limited-role keys an admin hands out. Wiped by factory
 // reset alongside the pair token. See keys.{h,c}.
 #define CONFIG_KEY_SHARE_KEYS    "share_keys"
+// Since fw 2.8.0 the same JSON is stored as a blob under this key instead:
+// an NVS string must fit inside one flash page, which a full key list on a
+// busy namespace doesn't; blobs span pages. keys.c migrates the old string
+// on the first save and erases it.
+#define CONFIG_KEY_SHARE_KEYS_B  "share_keys_b"
 // Recovery-key hash — 64-char lowercase hex SHA-256 of the owner-minted
 // factory-reset recovery key. NEVER stores the plaintext. Non-empty ⇒ a
 // recovery key is armed. DURABLE: deliberately NOT wiped by unpair or by
@@ -186,6 +191,9 @@
 esp_err_t config_store_init(void);
 esp_err_t config_store_get_str(const char *key, char *out, size_t max_len);
 esp_err_t config_store_set_str(const char *key, const char *value);
+/** Read a blob into `out` (capacity *len); *len is set to its size. */
+esp_err_t config_store_get_blob(const char *key, void *out, size_t *len);
+esp_err_t config_store_set_blob(const char *key, const void *value, size_t len);
 esp_err_t config_store_get_i32(const char *key, int32_t *out);
 esp_err_t config_store_set_i32(const char *key, int32_t value);
 

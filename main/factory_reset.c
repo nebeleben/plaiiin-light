@@ -56,6 +56,7 @@ esp_err_t factory_reset_wifi(bool reboot)
         CONFIG_KEY_PAIR_TOKEN,
         CONFIG_KEY_PAIR_MODE,
         CONFIG_KEY_SHARE_KEYS,
+        CONFIG_KEY_SHARE_KEYS_B,
         // Clear the sticky "provisioned" flag — a factory reset is the explicit,
         // physical way to return a previously-owned lamp to fresh AP/BLE
         // onboarding (the open provisioning AP comes back on the next boot).
@@ -102,6 +103,7 @@ esp_err_t factory_reset_full(bool reboot)
         CONFIG_KEY_PAIR_TOKEN,
         CONFIG_KEY_PAIR_MODE,
         CONFIG_KEY_SHARE_KEYS,
+        CONFIG_KEY_SHARE_KEYS_B,
         // Sticky provisioning marker — see factory_reset_wifi(). A full reset
         // also returns the lamp to fresh AP/BLE onboarding.
         CONFIG_KEY_PROVISIONED,
