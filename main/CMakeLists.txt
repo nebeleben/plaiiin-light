@@ -117,6 +117,7 @@ idf_component_register(
         "pairing.c"
         "form_prompt.c"
         "keys.c"
+        "ai_access.c"
         "wormhole.c"
         "hardcoded_runtime.c"
         "swarm_radio.c"
