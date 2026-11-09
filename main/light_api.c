@@ -901,6 +901,17 @@ static void name_reboot_task(void *arg)
     esp_restart();
 }
 
+// Names go unescaped into JSON (GET /api, mDNS): no quotes, backslashes or
+// control characters.
+static bool name_chars_ok(const char *s)
+{
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c < 0x20 || c == 0x7F || c == '"' || c == '\\') return false;
+    }
+    return true;
+}
+
 static esp_err_t name_post_handler(httpd_req_t *req)
 {
     if (pairing_http_check(req, PL_ROLE_ADMIN) != ESP_OK) return ESP_FAIL;
@@ -913,9 +924,11 @@ static esp_err_t name_post_handler(httpd_req_t *req)
     cJSON *root = cJSON_Parse(buf);
     const cJSON *n = root ? cJSON_GetObjectItemCaseSensitive(root, "name") : NULL;
     if (!cJSON_IsString(n) || !n->valuestring ||
-        n->valuestring[0] == 0 || strlen(n->valuestring) > 32) {
+        n->valuestring[0] == 0 || strlen(n->valuestring) > 32 ||
+        !name_chars_ok(n->valuestring)) {
         cJSON_Delete(root);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "name must be 1..32 characters");
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                            "name must be 1..32 characters without quotes, backslashes or control characters");
         return ESP_FAIL;
     }
     esp_err_t err = config_store_set_str(CONFIG_KEY_NODE_NAME, n->valuestring);

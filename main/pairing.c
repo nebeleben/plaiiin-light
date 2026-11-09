@@ -278,9 +278,11 @@ static bool is_power_post(ai_method_t m, const char *uri)
 static esp_err_t ai_check(httpd_req_t *req, const pl_access_t *acc, pl_role_t min_role)
 {
     ai_method_t m = method_of(req);
+    // Log the path only: /ws carries ?token=<secret> in the query.
+    int pl = (int)strcspn(req->uri, "?");
     uint32_t p = ai_route_perm(m, req->uri);
     if (p == AI_ROUTE_DENIED) {
-        ESP_LOGI(TAG, "403 %s (ai: denied route)", req->uri);
+        ESP_LOGI(TAG, "403 %.*s (ai: denied route)", pl, req->uri);
         return send_403(req);
     }
     bool is_read = (p == AI_ROUTE_READ);
@@ -288,17 +290,17 @@ static esp_err_t ai_check(httpd_req_t *req, const pl_access_t *acc, pl_role_t mi
         // A plain read is fine only where any user may read; admin/creator
         // reads (key list, Wi-Fi, ...) stay closed.
         if (min_role > PL_ROLE_USER) {
-            ESP_LOGI(TAG, "403 %s (ai: read needs %s)", req->uri, pl_role_name(min_role));
+            ESP_LOGI(TAG, "403 %.*s (ai: read needs %s)", pl, req->uri, pl_role_name(min_role));
             return send_403(req);
         }
     } else if ((acc->perms & p) == 0) {
-        ESP_LOGI(TAG, "403 %s (ai: missing %s)", req->uri, ai_perm_name(p) ? ai_perm_name(p) : "?");
+        ESP_LOGI(TAG, "403 %.*s (ai: missing %s)", pl, req->uri, ai_perm_name(p) ? ai_perm_name(p) : "?");
         return send_403_msg(req, "not permitted for this AI key");
     }
     // Only-while-on: a switched-off lamp accepts reads and power-on only.
     if (acc->only_when_on && !is_read && !is_power_post(m, req->uri)
         && !led_control_is_on()) {
-        ESP_LOGI(TAG, "403 %s (ai: lamp is off)", req->uri);
+        ESP_LOGI(TAG, "403 %.*s (ai: lamp is off)", pl, req->uri);
         return send_403_msg(req, "lamp is off");
     }
     if (acc->max_brightness >= 0) {
@@ -313,12 +315,12 @@ esp_err_t pairing_http_check(httpd_req_t *req, pl_role_t min_role)
     cap_clear();
     pl_access_t acc = pairing_resolve_access(req);
     if (acc.role == PL_ROLE_NONE) {
-        ESP_LOGI(TAG, "401 %s", req->uri);
+        ESP_LOGI(TAG, "401 %.*s", (int)strcspn(req->uri, "?"), req->uri);
         return send_401(req);
     }
     if (acc.role == PL_ROLE_AI) return ai_check(req, &acc, min_role);
     if (acc.role < min_role) {
-        ESP_LOGI(TAG, "403 %s (role=%s)", req->uri, pl_role_name(acc.role));
+        ESP_LOGI(TAG, "403 %.*s (role=%s)", (int)strcspn(req->uri, "?"), req->uri, pl_role_name(acc.role));
         return send_403(req);
     }
     return ESP_OK;

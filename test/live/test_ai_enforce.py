@@ -197,6 +197,16 @@ def test_rename_validates(lamp):
         assert r.status_code == 400, (body, r.status_code, r.text)
 
 
+def test_rename_rejects_quote(lamp):
+    # A quote/backslash/control char would break the unescaped nodeName in GET /api.
+    before = lamp.get("/api").json()["nodeName"]
+    for bad in ('a"b', "a\\b", "a\nb", "a\u007fb"):
+        r = lamp.post("/api/name", json={"name": bad})
+        assert r.status_code == 400, (bad, r.status_code, r.text)
+    time.sleep(3)  # a (wrong) accepted rename would reboot ~800 ms later
+    assert lamp.get("/api").json()["nodeName"] == before
+
+
 def _wait_node_name(lamp, expect, timeout=40):
     """Poll GET /api until the lamp is back and reports nodeName == expect."""
     deadline = time.time() + timeout

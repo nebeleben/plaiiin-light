@@ -849,6 +849,10 @@ static int access_device_name(uint16_t conn, uint16_t attr,
     char name[64] = {0};
     if (copy_mbuf_str(ctxt->om, name, sizeof(name)) != 0) return BLE_ATT_ERR_UNLIKELY;
     if (name[0] == 0) return BLE_ATT_ERR_INVALID_PDU;
+    for (const char *c = name; *c; c++) {
+        unsigned char u = (unsigned char)*c;
+        if (u < 0x20 || u == 0x7F || u == '"' || u == '\\') return BLE_ATT_ERR_INVALID_PDU;
+    }
     if (config_store_set_str(CONFIG_KEY_NODE_NAME, name) != ESP_OK)
         return BLE_ATT_ERR_UNLIKELY;
     ESP_LOGI(TAG, "BLE rename -> '%s' — scheduling reboot", name);

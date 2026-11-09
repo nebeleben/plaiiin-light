@@ -211,8 +211,9 @@ static ws_result_t handle_ws_binary(uint8_t *data, size_t len, uint32_t stream_g
 static esp_err_t ws_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
-        // WebSocket handshake — auth happens here (only chance to set HTTP
-        // status before the upgrade), token comes via ?token= query.
+        // WebSocket handshake — token comes via ?token= query. Under IDF 5.3.2
+        // the 101 upgrade reply is already sent before this handler runs, so a
+        // refusal closes the socket instead of returning 403.
         if (pairing_ws_check(req, PL_ROLE_USER) != ESP_OK) return ESP_FAIL;
         ESP_LOGI(TAG, "WebSocket client connected");
         return ESP_OK;
