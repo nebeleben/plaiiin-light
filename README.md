@@ -92,7 +92,9 @@ know you did:
   credentials over an encrypted Bluetooth link, no captive-portal hopping.
 - **Ownership & sharing** — lamps are open until claimed; claiming mints
   a bearer token, and owners can share role-scoped keys (`user` /
-  `creator` / `admin`) — revocable any time.
+  `creator` / `admin`) — revocable any time — and permission-scoped AI keys
+  for agents (control, effects, images, scenes, stream, OTA, rename, with an
+  optional brightness cap).
 - **OTA updates** — dual-slot, form-checked (a `tower` binary can't brick
   a `display`), with config and scripts preserved.
 - **Guardrails** — hard caps on brightness and estimated current draw

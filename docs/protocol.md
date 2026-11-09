@@ -57,7 +57,7 @@ A lamp is in one of two pairing modes:
   `?token=<…>` query parameter on the upgrade request.
 
 [`sharing-api.md`](sharing-api.md) defines a finer-grained role model (`user`,
-`creator`, `admin`) layered on top, plus the multi-key store and
+`creator`, `admin`, plus the permission-scoped `ai` key) layered on top, plus the multi-key store and
 `/api/whoami`. New clients should target the role model; legacy "admin
 only" behavior is what a single `pair_token` gets you.
 
@@ -78,11 +78,12 @@ Stable endpoints. Newer endpoints are added in the companion specs.
 |---|---|---|
 | GET  | `/api`              | Device info — `vendor`, `apiVersion`, `firmwareVersion`, `nodeName`, `deviceId`, `ledPin`, `ledClkPin`, `ledCount`, `ledType`, `lampType`, `lampForm`, `modelName`, `modelVersion`, `physicalW/H`, `logicalW/H`, `pixelGroupW/H`, `rotation`, `origin`, `serpentine`, `serpentineAxis`, button pins. |
 | GET  | `/api/state`        | `{on, color:[r,g,b], mode, brightness, currentScript?, scene?}` — `scene` (2.7.0): the scene last activated, while the lamp still shows it, else `null` (see [Scenes](#scenes-apiscenes)) |
-| GET  | `/api/whoami`       | `{role, paired}` — see sharing-api. |
+| GET  | `/api/whoami`       | `{role, paired}` — see sharing-api; an `ai` key also gets `{perms, maxBrightness, onlyWhenOn}`. |
 | GET  | `/api/openapi.json` | The whole HTTP contract as **OpenAPI 3** (source: [`openapi.json`](openapi.json)), served `Content-Encoding: gzip`. No auth — so an AI agent or tool-binding client can bind every operation from the lamp itself, before pairing. |
 | GET  | `/api/pair`         | `{paired:bool, hasToken:bool}` (no auth). |
 | POST | `/api/pair`         | Mint or rotate the admin token. Body empty when unpaired (bootstrap), or `Authorization: Bearer <current>` when paired (rotate). Returns `{token}`. |
 | DELETE | `/api/pair`       | Unpair the lamp. Requires the current admin token. |
+| PATCH | `/api/keys/<id>`   | Admin. Edit an AI share key: any of `{perms, maxBrightness, onlyWhenOn, label}`; returns the entry. Other key routes (`/api/keys*`) are in [`sharing-api.md`](sharing-api.md). |
 
 ### Control
 
@@ -90,7 +91,8 @@ Stable endpoints. Newer endpoints are added in the companion specs.
 |---|---|---|
 | POST | `/api/power`       | `{on: bool}` |
 | POST | `/api/color`       | `{colors: [[r,g,b], …]}` — one entry per logical LED, **or** the fill form `{color: [r,g,b]}` — paints every LED that colour (clamped 0–255). Either form also sets the base colour JS scripts tint from; in `js`/`frame` mode only the base colour changes (the framebuffer belongs to the content). |
-| POST | `/api/brightness`  | `{brightness: 0..255}` (persisted to NVS). |
+| POST | `/api/brightness`  | `{brightness: 0..255}` (persisted to NVS). Returns the applied value — an AI key's brightness cap lowers it. |
+| POST | `/api/name`        | `{name}` — 1..32 bytes. Admin, or an AI key with `rename`. Stores the node name, replies `{status, rebooting:true}`, reboots ~800 ms later. |
 | GET  | `/api/brightness`  | `{brightness}` |
 | POST | `/api/mode`        | `{mode: "stream" \| "api" \| "js" \| "frame"}` |
 | GET  | `/api/limits`      | `{maxBrightness, maxCurrentMa}` |
@@ -253,7 +255,7 @@ The built-in `carousel` effect (see `/api/js`) cycles through them.
 | Method | Path | Body |
 |---|---|---|
 | POST | `/api/ota`          | `application/octet-stream` firmware image. |
-| GET  | `/api/ota/info`     | `{version, buildDate, partition, idfVersion}` |
+| GET  | `/api/ota/info`     | `{version, date, time, partition, idf, form, target}` |
 | POST | `/api/reset`        | `{scope: "wifi" \| "full"}` |
 
 ### Swarm provisioning (`/api/swarm*`)

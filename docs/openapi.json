@@ -331,7 +331,7 @@
       "get": {
         "operationId": "whoAmI",
         "summary": "My role",
-        "description": "Role the request's bearer key grants (none/user/creator/admin) and whether the lamp is paired.",
+        "description": "Role the request's bearer key grants (none/user/creator/admin/ai) and whether the lamp is paired. For an AI key the answer also lists its permissions, brightness cap and only-while-on flag.",
         "tags": [
           "auth"
         ],
@@ -341,21 +341,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "role": {
-                      "type": "string",
-                      "enum": [
-                        "none",
-                        "user",
-                        "creator",
-                        "admin"
-                      ]
-                    },
-                    "paired": {
-                      "type": "boolean"
-                    }
-                  }
+                  "$ref": "#/components/schemas/WhoAmI"
                 }
               }
             }
@@ -457,7 +443,7 @@
       "get": {
         "operationId": "listKeys",
         "summary": "List keys",
-        "description": "All issued keys including secrets, roles, labels and revoked flags. Role: admin.",
+        "description": "All issued keys including secrets, roles, labels and revoked flags. AI keys carry perms, maxBrightness and onlyWhenOn. Role: admin.",
         "tags": [
           "auth"
         ],
@@ -488,7 +474,7 @@
       "post": {
         "operationId": "createKey",
         "summary": "Create a scoped key",
-        "description": "Issue a user or creator key, e.g. one per agent; the secret is only returned here. Role: admin.",
+        "description": "Issue a user, creator or AI key, e.g. one per agent; the secret is only returned here. An AI key (role \"ai\") needs a non-empty perms list and may carry a brightness cap and an only-while-on flag; at most 4 AI keys exist (revoked ones count until deleted, 400 'ai-key limit reached'). Role: admin.",
         "tags": [
           "auth"
         ],
@@ -497,22 +483,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "properties": {
-                  "role": {
-                    "type": "string",
-                    "enum": [
-                      "user",
-                      "creator"
-                    ]
-                  },
-                  "label": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "role"
-                ]
+                "$ref": "#/components/schemas/KeyCreate"
               }
             }
           }
@@ -560,6 +531,50 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateKey",
+        "summary": "Edit an AI key",
+        "description": "Change an AI key's permissions, brightness cap, only-while-on flag or label without re-issuing it. 400 'not an ai key' for user/creator keys, 404 for an unknown id. Role: admin.",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Key id from GET /api/keys or POST /api/keys."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeyPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyEntry"
                 }
               }
             }
@@ -685,7 +700,7 @@
       "post": {
         "operationId": "setBrightness",
         "summary": "Set brightness",
-        "description": "Master brightness 0-255, persisted; capped by maxBrightness. Role: user.",
+        "description": "Master brightness 0-255, persisted; capped by maxBrightness. With an AI key that has a brightness cap the value is clamped to it and the response echoes the capped value. Role: user.",
         "tags": [
           "control"
         ],
@@ -706,6 +721,59 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Brightness"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/name": {
+      "post": {
+        "operationId": "setName",
+        "summary": "Rename the lamp",
+        "description": "Stores the node name (1..32 bytes), answers, then reboots the lamp about 800 ms later so mDNS, BLE and Home Assistant pick it up. Role: admin, or an AI key with the rename permission.",
+        "tags": [
+          "system"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored, rebooting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "rebooting": {
+                      "type": "boolean"
+                    }
+                  }
                 }
               }
             }
@@ -2379,7 +2447,7 @@
     },
     "responses": {
       "Error": {
-        "description": "Error (400 bad body, 401 no/invalid key, 403 role too low, 404 not found or not applicable to this form, 409 conflicts with current state, 5xx firmware error).",
+        "description": "Error (400 bad body, 401 no/invalid key, 403 role too low or, for an AI key, 'not permitted for this AI key' / 'lamp is off', 404 not found or not applicable to this form, 409 conflicts with current state, 5xx firmware error).",
         "content": {
           "application/json": {
             "schema": {
@@ -2705,7 +2773,8 @@
             "type": "string",
             "enum": [
               "user",
-              "creator"
+              "creator",
+              "ai"
             ]
           },
           "label": {
@@ -2717,6 +2786,33 @@
           },
           "revoked": {
             "type": "boolean"
+          },
+          "perms": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "control",
+                "effects",
+                "images",
+                "scenes",
+                "stream",
+                "ota",
+                "rename"
+              ]
+            },
+            "description": "role ai only."
+          },
+          "maxBrightness": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "role ai only; null = no cap."
+          },
+          "onlyWhenOn": {
+            "type": "boolean",
+            "description": "role ai only."
           }
         }
       },
@@ -2781,6 +2877,141 @@
             "nullable": true,
             "maxLength": 32,
             "description": "1–32 bytes UTF-8, no control characters. Empty or null clears it (rename only)."
+          }
+        }
+      },
+      "WhoAmI": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "none",
+              "user",
+              "creator",
+              "admin",
+              "ai"
+            ]
+          },
+          "paired": {
+            "type": "boolean"
+          },
+          "perms": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "control",
+                "effects",
+                "images",
+                "scenes",
+                "stream",
+                "ota",
+                "rename"
+              ]
+            },
+            "description": "AI keys only: granted permissions."
+          },
+          "maxBrightness": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 255,
+            "description": "AI keys only: brightness cap, null = none."
+          },
+          "onlyWhenOn": {
+            "type": "boolean",
+            "description": "AI keys only: true = anything but reads and power-on fails (403 'lamp is off') while the lamp is off."
+          }
+        }
+      },
+      "KeyCreate": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "creator",
+              "ai"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "perms": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "control",
+                "effects",
+                "images",
+                "scenes",
+                "stream",
+                "ota",
+                "rename"
+              ]
+            },
+            "description": "Required for role ai, ignored otherwise."
+          },
+          "maxBrightness": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 255,
+            "description": "role ai: clamp brightness set with this key; null/absent = no cap."
+          },
+          "onlyWhenOn": {
+            "type": "boolean",
+            "description": "role ai: refuse everything except reads and power-on while the lamp is off."
+          }
+        },
+        "required": [
+          "role"
+        ]
+      },
+      "KeyPatch": {
+        "type": "object",
+        "description": "Any subset; absent fields stay as they are.",
+        "properties": {
+          "perms": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "control",
+                "effects",
+                "images",
+                "scenes",
+                "stream",
+                "ota",
+                "rename"
+              ]
+            }
+          },
+          "maxBrightness": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 255,
+            "description": "null clears the cap."
+          },
+          "onlyWhenOn": {
+            "type": "boolean"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 32
           }
         }
       }
