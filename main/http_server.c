@@ -378,7 +378,9 @@ static void send_html_with_meta(httpd_req_t *req, const uint8_t *start, const ui
 
 // Build the per-page <meta> block. Always includes plk-paired so the page
 // JS knows whether to require Authorization on its fetches. Includes
-// plk-token only when the *request itself* was authenticated (so an
+// plk-token (the admin token) only when the request itself carried the
+// admin token — a user/creator/ai share key must never be upgraded to it
+// by loading a page (so an
 // un-paired browser visiting a paired device can't just load /compose to
 // scrape the token). compose.html (page_id="compose") additionally gets
 // plk-aikey when present in NVS — replaces the network-exposed /api/ai/key.
@@ -393,7 +395,7 @@ static void build_meta_block(httpd_req_t *req, const char *page_id,
         char hdr[128] = {0};
         if (httpd_req_get_hdr_value_str(req, "Authorization", hdr, sizeof(hdr) - 1) == ESP_OK
             && strncmp(hdr, "Bearer ", 7) == 0
-            && pairing_check(hdr + 7)) {
+            && pairing_role_for_token(hdr + 7) == PL_ROLE_ADMIN) {
             authed = true;
         }
     }
@@ -408,7 +410,9 @@ static void build_meta_block(httpd_req_t *req, const char *page_id,
                             "<meta name=\"plk-token\" content=\"%s\">", tok);
         }
     }
-    if (page_id && strcmp(page_id, "compose") == 0) {
+    // The AI provider key is a secret of the same weight as the admin token
+    // (GET /api/ai/key is admin-only), so it rides along under the same rule.
+    if (page_id && strcmp(page_id, "compose") == 0 && (!paired || authed)) {
         char key[256] = {0};
         if (config_store_get_str(CONFIG_KEY_AI_API_KEY, key, sizeof(key)) == ESP_OK && key[0]) {
             off += snprintf(out + off, out_len - off,

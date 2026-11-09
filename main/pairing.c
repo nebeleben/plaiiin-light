@@ -133,14 +133,6 @@ pl_role_t pairing_role_for_token(const char *token)
     return access_for_token(token).role;
 }
 
-bool pairing_check(const char *token)
-{
-    // AI keys are excluded: the one caller (http_server.c page meta) embeds
-    // the admin token for an authenticated page load.
-    pl_role_t role = pairing_role_for_token(token);
-    return role != PL_ROLE_NONE && role != PL_ROLE_AI;
-}
-
 pl_access_t pairing_resolve_access(httpd_req_t *req)
 {
     if (!s_paired_cached) return k_admin_access;

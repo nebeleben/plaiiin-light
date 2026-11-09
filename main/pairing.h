@@ -67,11 +67,6 @@ pl_access_t pairing_resolve_access(httpd_req_t *req);
  *  the result with `<`/`>`. */
 pl_role_t pairing_resolve_role(httpd_req_t *req);
 
-/** Legacy helper — true if `token` grants a user/creator/admin role. AI keys
- *  are deliberately false: callers use it to decide whether to hand out the
- *  admin token (http_server.c page meta). */
-bool pairing_check(const char *token);
-
 /** Clamp a brightness to the cap of the AI key that authorised the HTTP
  *  request currently running on this task. Identity on every other task
  *  (buttons, swarm, MQTT, scheduler, BLE) and for every non-capped caller. */
