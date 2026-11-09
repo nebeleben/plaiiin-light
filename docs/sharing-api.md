@@ -47,7 +47,7 @@ endpoint's permission decides (see [AI keys](#ai-keys)).
 - **creator**: `PUT|DELETE /api/js/<n>`, `/api/js/validate`,
   `/api/js/compile`, `/api/bench`, `PUT|DELETE /api/form-prompt`,
   `POST /api/fade`, `POST /api/ap_js`, `POST /api/wormhole/creative`.
-- **admin**: `POST /api/limits`, `POST /api/grid`, `POST /api/orientation`,
+- **admin**: `POST /api/name` (also an AI key with `rename`), `POST /api/limits`, `POST /api/grid`, `POST /api/orientation`,
   `POST /api/bt`, `POST /api/wormhole`, `/api/mqtt`, `POST /api/ota`,
   `POST /api/reset`, `/api/ai/key`, `POST|DELETE /api/pair`, `/api/keys*`,
   `POST /config`, `POST /network`.
@@ -83,7 +83,7 @@ carries a permission list chosen per key, plus two optional extras.
 | `rename` | `POST /api/name` |
 
 - **Reads**: a `GET` that a `user` may make (`/api`, `/api/state`, js, images,
-  scenes, grid, form-prompt, limits, storage, ota/info, swarm,
+  scenes, grid, form-prompt, limits, storage, ota/info,
   `/api/whoami`, …) always works, with no permission. Admin/creator-only
   reads (e.g. `GET /api/keys`) stay closed.
 - **Never grantable** (always 403 `insufficient role`): pair/unpair, keys,
@@ -93,6 +93,13 @@ carries a permission list chosen per key, plus two optional extras.
   `not permitted for this AI key`.
 - **`WS /ws`**: a refusal (any role, not just `ai`) completes the upgrade and
   the lamp then closes the socket immediately; there is no HTTP 403 on `/ws`.
+- **Checked at connect time**: for `/ws`, the permission and only-while-on
+  are checked when the connection opens. An open stream keeps running after
+  the key is revoked, deleted or edited, until it disconnects.
+- **`stream` can switch power**: a stream connection can also send the power
+  command, so granting `stream` lets the key turn the lamp on and off.
+- **`ota` is effectively full control**: custom firmware can read every secret
+  on the lamp. Apps should warn when this switch is turned on.
 - **`onlyWhenOn`**: while the lamp is off, everything except reads and
   `POST /api/power` is refused with 403 `lamp is off`.
 - **`maxBrightness`** (0..255): `POST /api/brightness` made with this key is
@@ -100,7 +107,7 @@ carries a permission list chosen per key, plus two optional extras.
   requests made with that key — not buttons, swarm, MQTT, BLE or other clients.
 - **Limit**: at most 4 AI keys (`400 ai-key limit reached`); revoked AI keys
   still count until deleted. The overall 24-key limit applies too.
-- `POST /api/name` `{"name":"…"}` (admin or `rename`): 1..32 **bytes**; stores
+- `POST /api/name` `{"name":"…"}` (admin or `rename`): 1..32 **bytes**, no quotes, backslashes or control characters (else 400); stores
   the name, replies `{"status":"ok","rebooting":true}`, and the lamp reboots
   ~800 ms later.
 

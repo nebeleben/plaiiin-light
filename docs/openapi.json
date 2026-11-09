@@ -2442,7 +2442,7 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Key from POST /api/pair (admin) or POST /api/keys (user/creator). Only required when GET /api/pair reports paired=true."
+        "description": "Key from POST /api/pair (admin) or POST /api/keys (user/creator/ai). Only required when GET /api/pair reports paired=true."
       }
     },
     "responses": {
