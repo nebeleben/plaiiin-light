@@ -237,3 +237,22 @@ def test_rename_with_perm(lamp):
         r = lamp.post("/api/name", json={"name": original})
         assert r.status_code == 200, r.text
         _wait_node_name(lamp, original)
+
+
+def test_refused_uploads_get_a_clean_answer(lamp):
+    # A refused request's body is drained before the 401/403, so clients read
+    # the answer instead of a connection reset (requests: ConnectionError).
+    frame = bytes(16 * 16 * 3)
+    script = b" " * 20000
+    with ai_key(lamp, ["control"]) as (tok, _):
+        for _ in range(10):
+            r = post_raw(lamp, "/api/frame", tok, frame)
+            assert r.status_code == 403, r.text
+            assert r.json()["message"] == "not permitted for this AI key"
+        r = requests.put(f"{lamp.base}/api/js/drain-test", data=script,
+                         headers={"Authorization": f"Bearer {tok}",
+                                  "Content-Type": "text/plain"}, timeout=10)
+        assert r.status_code == 403, r.text
+    for _ in range(5):
+        r = post_raw(lamp, "/api/frame", "not-a-key", frame)
+        assert r.status_code == 401, r.text

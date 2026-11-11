@@ -198,8 +198,30 @@ esp_err_t pairing_get_token(char *out, size_t out_len)
     return config_store_get_str(CONFIG_KEY_PAIR_TOKEN, out, out_len);
 }
 
+// A refused request's body is read and dropped before the answer goes out.
+// The handler then returns ESP_FAIL and httpd closes the socket; with body
+// bytes still unread the close becomes a TCP reset, and clients see
+// "connection reset" instead of the 401/403 (curl exit 56, Node ECONNRESET).
+// Bodies above REFUSED_BODY_DRAIN_MAX (firmware images) are left alone.
+#define REFUSED_BODY_DRAIN_MAX (64 * 1024)
+
+static void drain_refused_body(httpd_req_t *req)
+{
+    size_t left = req->content_len;
+    if (left == 0 || left > REFUSED_BODY_DRAIN_MAX) return;
+    char buf[256];
+    int timeouts = 0;
+    while (left > 0) {
+        int n = httpd_req_recv(req, buf, left < sizeof(buf) ? left : sizeof(buf));
+        if (n == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts < 2) continue;
+        if (n <= 0) return;
+        left -= (size_t)n;
+    }
+}
+
 static esp_err_t send_401(httpd_req_t *req)
 {
+    drain_refused_body(req);
     httpd_resp_set_status(req, "401 Unauthorized");
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "WWW-Authenticate", "Bearer realm=\"plaiiinlight\"");
@@ -209,6 +231,7 @@ static esp_err_t send_401(httpd_req_t *req)
 
 static esp_err_t send_403_msg(httpd_req_t *req, const char *msg)
 {
+    drain_refused_body(req);
     char body[96];
     snprintf(body, sizeof(body), "{\"status\":\"error\",\"message\":\"%s\"}", msg);
     httpd_resp_set_status(req, "403 Forbidden");
