@@ -211,7 +211,7 @@ an ESP Web Tools manifest for browser flashing, and `SHA256SUMS`.
 What's new in the 2.x line:
 
 - **v2.8.0** — AI access keys. An admin can create share keys with the new
-  role `ai` for agents such as the Claude plugin: instead of a role, each key
+  role `ai` for AI assistants: instead of a role, each key
   carries the permissions its owner picks (`control`, `effects`, `images`,
   `scenes`, `stream`, `ota`, `rename`, read-only `swarm`), plus an optional
   brightness cap and an "only while the lamp is on" switch. Pairing, keys,
