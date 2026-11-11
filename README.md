@@ -200,7 +200,7 @@ explicitly welcome.
 
 ## Latest release
 
-**Current firmware: v2.7.0** — grab it from the
+**Current firmware: v2.8.0** — grab it from the
 [releases page](https://github.com/nebeleben/plaiiin-light/releases/latest).
 Every release ships, per form and per chip (classic ESP32, ESP32-C3,
 ESP32-C6 and ESP32-C5, the RISC-V ones with an `-esp32c3` / `-esp32c6` /
@@ -210,6 +210,18 @@ an ESP Web Tools manifest for browser flashing, and `SHA256SUMS`.
 
 What's new in the 2.x line:
 
+- **v2.8.0** — AI access keys. An admin can create share keys with the new
+  role `ai` for agents such as the Claude plugin: instead of a role, each key
+  carries the permissions its owner picks (`control`, `effects`, `images`,
+  `scenes`, `stream`, `ota`, `rename`, read-only `swarm`), plus an optional
+  brightness cap and an "only while the lamp is on" switch. Pairing, keys,
+  Wi-Fi and the other owner settings can never be granted. Up to 4 AI keys
+  per lamp, changeable later with `PATCH /api/keys/<id>`; `GET /api/whoami`
+  reports a key's permissions. New `POST /api/name` renames the lamp. Share
+  keys now live in one NVS blob (migrated on first save, up to 20 keys).
+  Hardening: pages no longer embed the admin token or AI provider key for
+  share-key holders, request logs never show `?token=`, and a refused swarm
+  join no longer double-frees. API version 2.7.0 (additive).
 - **v2.7.0** — scenes across the swarm. The lamp now remembers which scene
   it is showing: `GET /api/state` reports `"scene"` until another effect,
   image or an explicit mode pick takes over, so every app (and Home
